@@ -164,10 +164,15 @@ fn markdown() -> String {
             names(world.imports.keys().collect())
         )
         .unwrap();
+        let exports = names(world.exports.keys().collect());
         writeln!(
             w,
             "- Exports (what the mod provides): {}",
-            names(world.exports.keys().collect())
+            if exports.is_empty() {
+                "(none)"
+            } else {
+                &exports
+            }
         )
         .unwrap();
         for item in world.exports.values() {

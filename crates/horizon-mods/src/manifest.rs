@@ -100,9 +100,15 @@ pub enum Capability {
     /// Read server players' main-hand item and selected custom-data strings.
     ItemsRead,
     ItemsEdit,
+    /// Blocks in the server's loaded chunks, and changes to them (server
+    /// mods; client mods later, where the game runs the world).
+    World,
+    /// The recipes and items the game knows, for recipe viewers
+    /// (interface `recipes`).
+    Recipes,
 }
 impl Capability {
-    pub const ALL: [Capability; 12] = [
+    pub const ALL: [Capability; 14] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -115,6 +121,8 @@ impl Capability {
         Capability::Players,
         Capability::ItemsRead,
         Capability::ItemsEdit,
+        Capability::World,
+        Capability::Recipes,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
@@ -122,6 +130,7 @@ impl Capability {
             self,
             Capability::Storage
                 | Capability::Players
+                | Capability::World
                 | Capability::ItemsRead
                 | Capability::ItemsEdit
         )
@@ -141,6 +150,8 @@ impl Capability {
             Capability::Players => "players",
             Capability::ItemsRead => "items-read",
             Capability::ItemsEdit => "items-edit",
+            Capability::World => "world",
+            Capability::Recipes => "recipes",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -151,6 +162,7 @@ impl Capability {
             Capability::Ui
                 | Capability::Render
                 | Capability::Input
+                | Capability::Recipes
                 | Capability::ItemsRead
                 | Capability::ItemsEdit
         )
@@ -174,6 +186,10 @@ impl Capability {
             Capability::ItemsEdit => {
                 "read and replace custom-data strings in players' main-hand items on the server"
             }
+            Capability::World => "read and change the world's blocks",
+            Capability::Recipes => {
+                "read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items"
+            }
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -187,6 +203,10 @@ impl Capability {
         }
         if interface == "log" {
             return Ok(None);
+        }
+        // A recipe viewer's panel is part of capability `ui`.
+        if interface == "browser" {
+            return Ok(Some(Capability::Ui));
         }
         Capability::ALL
             .into_iter()
@@ -211,6 +231,8 @@ impl fmt::Display for Capability {
             Capability::Players => "players",
             Capability::ItemsRead => "items-read",
             Capability::ItemsEdit => "items-edit",
+            Capability::World => "world",
+            Capability::Recipes => "recipes",
         };
         f.write_str(name)
     }

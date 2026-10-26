@@ -18,10 +18,10 @@ the player before the mod is turned on, and checked against the component's real
 
 | | Count |
 | --- | --- |
-| Interfaces the game offers | 12: `log`, `game`, `chat`, `hud`, `storage`, `command`, `ui`, `render`, `input`, `players`, `items-read`, `items-edit` |
-| Functions in them | 36 |
+| Interfaces the game offers | 15: `log`, `game`, `chat`, `hud`, `storage`, `command`, `ui`, `render`, `input`, `players`, `world`, `recipes`, `browser`, `items-read`, `items-edit` |
+| Functions in them | 47 |
 | Hooks a mod exports | 5: `init`, `tick`, `frame`, `command`, `chat`; a server mod 8: `init`, `tick`, `player-joined`, `player-left`, `chat`, `command`, `block-broken`, `block-placed` |
-| Capabilities | 12: `game-read`, `chat`, `hud`, `storage`, `command`, `registries`, `ui`, `render`, `input`, `players`, `items-read`, `items-edit` |
+| Capabilities | 14: `game-read`, `chat`, `hud`, `storage`, `command`, `registries`, `ui`, `render`, `input`, `players`, `world`, `recipes`, `items-read`, `items-edit` |
 | Manifest `api` lines served | 3: `0.1` (code), `0.2` (content), `0.3` (server mods, experimental) |
 | SDK | the `Mod` trait (5 methods), `Registration` (4 builders), `export_mod!`, log helpers; `server::ServerMod` (8 methods), `server::Registration` (5 builders), `export_server_mod!` |
 | `cargo horizon-mod` | `new` (templates `code` and `content`), `build`, `run`, `test`, `check` |
@@ -45,7 +45,7 @@ The step-by-step guide, from installing the tools to publishing on the registry,
 
 ## Reference
 
-Fork preview: server capability `items-read` (API level 4 in this fork) requires
+Fork preview: server capability `items-read` (API level 7 in this fork) requires
 `experimental = ["items-read"]`. `server::items_read::main_hand(player_id, path)`
 reads an immutable view taken at the start of the hook. An empty path requests
 only the item id, count and vanilla damage; a nonempty path selects a string
@@ -62,7 +62,7 @@ view on their command; no per-tick stack copy is made for them. The
 `/hand budget` demonstrates the per-call limit. Existing compiled server mods
 remain compatible. This preview is not an upstream API-level guarantee.
 
-Fork preview `items-edit` (level 5) is a separate experimental server permission.
+Fork preview `items-edit` (level 8) is a separate experimental server permission.
 `replace-main-hand-text(player, path, expected, replacement)` queues one existing
 string replacement. The path must be nonempty, both texts at most 4096 UTF-8
 bytes; 8 attempts per hook and one queued edit per player. It also consumes a
@@ -122,11 +122,11 @@ release.
 What real mods need next, in the order modpacks and servers need it:
 
 - **More for server mods** (`api = "0.3"`, [Server mods](../mods.md#server-mods-api-03-experimental)): they run
-  on the server thread, a LAN host and the dedicated server today, with joins, chat, commands and players' block
-  breaking and placing; next entity events, game rules, server commands with typed arguments sent to clients'
-  command trees.
-- **World and blocks**: read blocks, block states and biomes in loaded chunks; change them through the server's block
-  log, so clients and the parity harnesses see vanilla's updates.
+  on the server thread, a LAN host and the dedicated server today, with joins, chat, commands, players' block
+  breaking and placing, and `world` (read blocks and biomes, set blocks as `/setblock` does); next entity events, game rules,
+  server commands with typed arguments sent to clients' command trees.
+- **World and blocks**: blocks, block states and biomes are there for server mods (`world`); next block entities,
+  and `world` for client mods (raycasts, single player and LAN hosts).
 - **Items and inventories**: the player's inventory, held item and open container; item stacks with components.
 - **Entities**: query and change entities near a position; spawn from a mod's own entity types (data first).
 - **Block entities and menus**: ticking machines with slots and their screens.
@@ -140,6 +140,8 @@ What real mods need next, in the order modpacks and servers need it:
 
 ## Changelog
 
+- API 0.3: capability `world` (`get-block`, `get-biome`, `set-blocks`); example `beacons`; test scripts' `blocks` and
+  `expect.blocks`.
 - Server mods run in the game: single player (server thread and in-frame), LAN hosts, the dedicated server.
 - API 0.3 (server mods, experimental): world `horizon-server-mod`, capability `players`, the `server-events`
   hooks; SDK `server::ServerMod`; example `welcome`.

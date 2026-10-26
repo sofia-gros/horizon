@@ -24,11 +24,24 @@ use horizon_protocol::{
 };
 use std::{
     collections::HashMap,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex},
 };
 
 /// The registries and tags are the same for every world: load them once.
-static SYNC: OnceLock<std::result::Result<Arc<SyncData>, String>> = OnceLock::new();
+static SYNC: Mutex<Option<std::result::Result<Arc<SyncData>, String>>> = Mutex::new(None);
+
+/// The registries and tags a server sends, loaded from `root` the first time.
+pub(super) fn sync_data(root: &std::path::Path) -> std::result::Result<Arc<SyncData>, String> {
+    let mut sync = SYNC.lock().unwrap_or_else(|e| e.into_inner());
+    sync.get_or_insert_with(|| SyncData::load(root).map(Arc::new))
+        .clone()
+}
+
+/// Let go of what `sync_data` loaded: for a preload no world used
+/// (game/world_loading.rs).
+pub(super) fn forget_sync_data() {
+    *SYNC.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
 
 /// The settings of the open world (WorldOptionsScreen's multiplayer section).
 #[derive(Clone, Copy, Debug)]
@@ -562,10 +575,7 @@ impl Game<'_> {
         config: HubConfig,
         host: Option<u128>,
     ) -> Result<()> {
-        let root = self.options.resources.clone();
-        let sync = SYNC
-            .get_or_init(|| SyncData::load(&root).map(Arc::new))
-            .clone()?;
+        let sync = sync_data(&self.options.resources)?;
         let biome_names: Vec<String> = self
             .res
             .biomes()
@@ -944,6 +954,13 @@ impl Game<'_> {
             for m in &mut self.mobs {
                 m.needs_sync = false;
             }
+            // `runBlockEvents`' broadcast precedes the tick's block changes
+            // (`ChunkHolder.broadcastChanges` in `tick_level` below): the
+            // guest re-runs a piston's `triggerEvent` while its level still
+            // has the blocks as they were before the move.
+            for (pos, b0, b1, state) in std::mem::take(&mut self.lan_block_events) {
+                host.hub.block_event(pos, b0, b1, state);
+            }
             let entities = states.as_slice();
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
             let events = {
@@ -1121,8 +1138,17 @@ impl Game<'_> {
             g.game_mode = default_mode;
         }
         if !known {
-            g.position = spawn;
-            g.previous_position = spawn;
+            // ServerPlayer.adjustSpawnLocation: a player new to the world
+            // stands where PlayerSpawnFinder puts them, not all on one spot
+            // (it reads the loaded level, which holds the spawn when it is
+            // the overworld).
+            let feet = if self.dim == super::Dim::Overworld {
+                self.server_player_spawn(spawn)
+            } else {
+                spawn
+            };
+            g.position = feet;
+            g.previous_position = feet;
             g.health = 20.0;
             g.food = 20;
             g.dimension = super::Dim::Overworld.id().to_owned();
@@ -1177,17 +1203,29 @@ impl Game<'_> {
             return;
         }
         for e in events {
-            if let horizon_world::level::LevelEvent::LevelEvent { id, pos, data } = e {
-                // The acting guest does not predict the egg's teleport
-                // particles, bone meal's growth, or anvil result sounds
-                // (these levelEvent calls name no excluded player).
-                let except = if matches!(*id, 2015 | 1505 | 1029 | 1030) {
-                    None
-                } else {
-                    self.lan_acting
-                };
-                self.lan_events
-                    .push((*id, [pos.x, pos.y, pos.z], *data, except));
+            match e {
+                horizon_world::level::LevelEvent::LevelEvent { id, pos, data } => {
+                    // The acting guest does not predict the egg's teleport
+                    // particles, bone meal's growth, or anvil result sounds
+                    // (these levelEvent calls name no excluded player).
+                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030) {
+                        None
+                    } else {
+                        self.lan_acting
+                    };
+                    self.lan_events
+                        .push((*id, [pos.x, pos.y, pos.z], *data, except));
+                }
+                // `ServerLevel.runBlockEvents` broadcasts a handled block
+                // event (`ClientboundBlockEventPacket`): the guest re-runs
+                // the block's `triggerEvent` — a piston's `moveBlocks` is
+                // what animates the move there. `state` is the block the
+                // event named, read before it ran (the packet's `block`).
+                horizon_world::level::LevelEvent::BlockEntityEvent { pos, state, a, b } => {
+                    self.lan_block_events
+                        .push(([pos.x, pos.y, pos.z], *a, *b, state.0));
+                }
+                _ => {}
             }
         }
     }

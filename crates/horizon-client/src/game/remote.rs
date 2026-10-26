@@ -1283,6 +1283,8 @@ impl Game<'_> {
                 value: 1,
                 age: 0,
                 on_ground: false,
+                count: 1,
+                ticks: 0,
             });
         }
         if let Some(t) = mob_type {
@@ -1697,19 +1699,30 @@ impl Game<'_> {
                 }
             }
             C::BlockChangedAck(p) => self.end_predictions(p.sequence),
-            // ClientLevel.blockEvent: BlockEntity.triggerEvent (chest lids,
-            // shulker boxes, bells) when the block is still the one it names.
+            // Level.blockEvent on the client level: the block's triggerEvent
+            // runs on the client's copy of whatever is at pos (a piston's
+            // moveBlocks builds the moving block entities it animates, a note
+            // block plays); what it doesn't handle reaches the client copy of
+            // the block entity (chest lids, shulker boxes).
             C::BlockEvent(p) => {
-                let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
-                let block = &self.res.facts().get(state).name;
-                let named = self.remote.as_ref().and_then(|r| {
-                    r.builtin
-                        .get("minecraft:block")?
-                        .name(p.block)
-                        .map(str::to_owned)
+                let pos = horizon_core::position::BlockPos::new(p.pos[0], p.pos[1], p.pos[2]);
+                let triggered = self.with_level(|b, level, ticks| {
+                    b.client_block_event(level, ticks, pos, i32::from(p.b0), i32::from(p.b1))
                 });
-                if named.as_deref() == Some(&**block) {
-                    self.block_entity_event(p.pos, i32::from(p.b0), i32::from(p.b1));
+                self.sync_moving_pistons();
+                self.process_level_events()?;
+                if !triggered {
+                    let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
+                    let block = &self.res.facts().get(state).name;
+                    let named = self.remote.as_ref().and_then(|r| {
+                        r.builtin
+                            .get("minecraft:block")?
+                            .name(p.block)
+                            .map(str::to_owned)
+                    });
+                    if named.as_deref() == Some(&**block) {
+                        self.block_entity_event(p.pos, i32::from(p.b0), i32::from(p.b1));
+                    }
                 }
             }
             // ClientLevel.levelEvent: LevelEventHandler, as this client's own
@@ -2053,7 +2066,10 @@ impl Game<'_> {
                 {
                     self.add_pickup(super::pickups::Taken::Orb(Box::new(orb)), collector);
                 }
-                self.remove_entity(p.item);
+                // An orb stays: the server may still hold merged ones in it.
+                if !orb {
+                    self.remove_entity(p.item);
+                }
             }
             // ClientPacketListener.handleSetEntityMotion: knockback on this player.
             C::SetEntityMotion(p) if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) => {
@@ -3162,8 +3178,14 @@ impl Game<'_> {
         self.border.tick();
         self.player_border();
         self.tick_remote_entities(running);
-        // ClientLevel.tickBlockEntities: chest lids, shulker boxes, bells.
+        // ClientLevel.tickBlockEntities: chest lids, shulker boxes, bells,
+        // and the moving pistons a block event's client-side moveBlocks made
+        // (their progress advances between the server's block updates).
         self.tick_block_entity_anims();
+        self.with_level(|b, level, ticks| {
+            b.client_tick_block_entities(level, ticks);
+        });
+        self.sync_moving_pistons();
         self.tick_hand();
         self.tick_particles();
         self.tick_client_ambient();
@@ -4034,15 +4056,11 @@ impl Game<'_> {
                 world_border: false,
                 sequence: seq,
             }));
-            let target = [
-                hit.pos[0] + hit.face[0],
-                hit.pos[1] + hit.face[1],
-                hit.pos[2] + hit.face[2],
-            ];
-            let ticks = self.ticks;
+            // Only a predicted placement (predict_place) marks a cell whose
+            // resend plays a place sound: an empty hand or a non-block item
+            // places nothing (BlockItem.place is where the sound comes from).
             if let Some(r) = self.remote.as_mut() {
                 r.use_target = Some(hit.pos);
-                r.placing = Some((target, ticks));
             }
             if reacts {
                 self.predict_use(&changes, seq);
