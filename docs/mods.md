@@ -251,7 +251,8 @@ key> --signature <file>.minisig`.
 `cargo horizon-mod test` builds the mod, then runs each `tests/<name>.toml` in
 the sandbox the game uses, with no game and no window: the test plays the
 game's part (the player and the clock the mod reads, ticks, frames, chat lines,
-commands) and checks what the mod showed. A script fails at its first wrong
+commands; for a server mod, players joining, chatting, typing commands,
+breaking and placing blocks and leaving) and checks what the mod showed. A script fails at its first wrong
 step, with what it expected and what it got; the command fails if any script
 does. `--debug` builds without optimizing, `--hmod <file>` tests a `.hmod`
 already built, and a name runs only the scripts whose path holds it. Each
@@ -288,6 +289,16 @@ A step's parts happen in this order:
 | `ticks = n`, `frames = n` | that many ticks (the game's tick counter and the clock move on), then frames 1/60 s apart |
 | `chat = "<Steve> hi"` | a chat line the player receives |
 | `command = "where north"` | the player types `/where north`; a command the mod doesn't own fails the step |
+| `break = { x = 1, y = 63, z = 0, state = "minecraft:stone" }`, `place = { ... }` | server mods: the player breaks or places that block |
+| `leave = "Alex"` | server mods: that player leaves |
+
+A server mod starts with nobody on: `join = "Alex"` (after `reload` and `title-screen`) brings a
+player in at the defaults, in survival, with the id
+`00000000-0000-4000-8000-000000000001` for the first name that joined, `...2`
+for the second, the same id when a name joins again. `player`, `chat`,
+`command`, `break` and `place` are then that player's doing: the one named by
+`as = "Steve"`, or the first one on. `player` takes `game-mode` there, and the
+script's own `[player]` and `[clock]` are a client mod's.
 
 Then `expect` checks what the mod did during the step; a key left out is not
 checked:
@@ -298,6 +309,7 @@ checked:
 | `chat = ["..."]` | every chat line it showed, in order (`[]`: none) |
 | `feedback = "..."`, `error = "..."` | the command's answer, shown plain or in red |
 | `panel = ["..."]`, `corner = "top-left"` | its HUD panel's lines (`[]`: no panel) and corner |
+| `told = ["Alex: Welcome!"]`, `broadcast = ["..."]` | server mods: every `players.tell` (as `name: text`) and `players.broadcast`, in order |
 | `stopped = "panic"` | the mod was turned off, for a reason holding this text; without it, a mod that traps, panics or overruns fails the test |
 
 Unknown keys are errors, so a typo never passes silently. The same runner is
@@ -479,10 +491,40 @@ its component targets the WIT world `horizon-server-mod` instead of
 Capabilities that act on a local player (`game-read`, `chat`, `hud`) are for
 client mods; `players` is for server mods. In Rust: `impl
 horizon_mod_sdk::server::ServerMod` and `export_server_mod!`; the example is
-[`welcome`](../crates/horizon-mod-sdk/examples/welcome/src/lib.rs). The
-runtime, the registry's `check` and the SDK run them today; the game starts
-them once its server code calls these hooks (the next step), and until then a
-server mod that is turned on shows as run elsewhere.
+[`welcome`](../crates/horizon-mod-sdk/examples/welcome/src/lib.rs).
+
+**Where they run.** The game that simulates the world starts the server mods
+that are on, and only that one:
+
+| Mode | Runs server mods | Players they see |
+|---|---|---|
+| Single player (default) | the server thread | the window's player, a connection like any other |
+| Single player `--in-frame` | the window's own game, beside its client mods | the window's player |
+| Open to LAN, Play with Friends | the host's server thread (or its window, in-frame) | the host and every guest |
+| Dedicated server (`--dedicated`, `horizon-server`) | the server | every connected player |
+
+A window that is a client of a server (single player's window, a LAN guest,
+any multiplayer server) never runs them; its Mods page lists a server mod with
+the others, and its switch takes effect the next time a world opens. The mods
+live in `horizon-mods/` of the game folder, or of the server's folder on a
+dedicated server, and are turned on as client mods are: Options > Mods, or
+`mod.<id>:true` in `horizon-mods.txt`. `--dev-mod <file>` runs one always
+on and reloads it when its file changes, on a server too.
+
+**When hooks run.** At the end of each server tick the game tells the server
+mods who joined and who left since the last one, then what players said,
+broke and placed, in order, then calls `tick`. A command a player types
+reaches its mod at once, whatever the player's permission level, and its
+answer goes to that player. `tell` reaches one player, the window's own
+chat for the in-frame player and a system message for a connection;
+`broadcast` reaches every player and the server's log. With no server mod
+on, each of these points costs one branch (measured in the PR that added
+them).
+
+**Not yet.** Clients aren't sent server mods' commands with vanilla's
+command tree, so a player's chat box doesn't complete or colour them; typing
+them works. Block events are a player's own breaking and placing, not
+explosions, pistons or other mods.
 
 ## Publish your mod
 
@@ -549,10 +591,10 @@ so the same rustc and `Cargo.lock` give the same file.
   in single player and on any server, vanilla or Horizon. They see only what
   the client already knows (the snapshot), like F3 does, and act only on the
   local screen and chat. A server cannot see them.
-- **Server mods** (`side = "server"`) will run where the world is simulated:
-  Horizon's integrated server in single player and LAN, and the dedicated
-  server. Vanilla clients can join if the mod only uses vanilla content
-  (rules, commands, events).
+- **Server mods** (`side = "server"`, API 0.3) run where the world is
+  simulated: single player's server thread (or the window, in-frame), a LAN
+  host and the dedicated server ([Server mods](#server-mods-api-03-experimental)).
+  They use only vanilla messages, so any client, vanilla or Horizon, can join.
 - **Both** (`side = "both"`): a server mod with a client half (new blocks,
   their textures, a custom screen). On join the Horizon server announces its
   mods (id, version, SHA-256) on a `horizon:mods` custom payload channel; a
