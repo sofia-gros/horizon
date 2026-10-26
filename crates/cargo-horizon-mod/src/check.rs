@@ -255,6 +255,7 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
     mods.player_left(&steve);
     for out in mods.drain() {
         report.output.push(match out {
+            Output::ItemEdit(_) => "item edit queued (application requires a game)".into(),
             Output::Chat { text, .. } => format!("chat: {text}"),
             Output::Tell { text, .. } => format!("tell: {text}"),
             Output::Broadcast { text, .. } => format!("broadcast: {text}"),

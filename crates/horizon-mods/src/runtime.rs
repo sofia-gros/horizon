@@ -15,7 +15,7 @@ use wasmtime::{
 };
 
 mod items;
-pub use items::{ITEM_TEXT_MAX, ItemReader};
+pub use items::{ITEM_TEXT_MAX, ItemEdit, ItemReader};
 pub use server_bindings::horizon::mods::items_read::HeldStack as ServerHeldStack;
 
 mod bindings {
@@ -162,18 +162,33 @@ impl Runs {
 /// What mods asked the game to show since the last [`Mods::drain`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum Output {
+    ItemEdit(ItemEdit),
     /// `chat.show`: a line after the mod's name.
-    Chat { name: String, text: String },
+    Chat {
+        name: String,
+        text: String,
+    },
     /// A mod command's feedback, red when `error`.
-    Feedback { text: String, error: bool },
+    Feedback {
+        text: String,
+        error: bool,
+    },
     /// `command.run`: a vanilla command line, without its slash, to run as
     /// the player.
-    Command { line: String },
+    Command {
+        line: String,
+    },
     /// `command.run-quiet`: vanilla command lines to run as the player with
     /// nothing in the chat (`horizon_protocol::quiet` on a server).
-    QuietCommands { mod_id: String, lines: Vec<String> },
+    QuietCommands {
+        mod_id: String,
+        lines: Vec<String>,
+    },
     /// The mod was turned off: it trapped, overran or failed to start.
-    Stopped { name: String, reason: String },
+    Stopped {
+        name: String,
+        reason: String,
+    },
     /// `players.tell`: a line after the mod's name, to the player with this id.
     Tell {
         name: String,
@@ -181,7 +196,10 @@ pub enum Output {
         text: String,
     },
     /// `players.broadcast`: a line after the mod's name, to every player.
-    Broadcast { name: String, text: String },
+    Broadcast {
+        name: String,
+        text: String,
+    },
     /// A server mod command's feedback, to the player who typed it.
     Reply {
         player: String,
@@ -190,11 +208,18 @@ pub enum Output {
     },
     /// `ui.open-screen`: the mod's entry in `entries()`; what it shows is
     /// [`Mods::screen`].
-    OpenScreen { owner: usize },
+    OpenScreen {
+        owner: usize,
+    },
     /// `ui.close-screen`: the mod closed its own screen (no `closed` back).
-    CloseScreen { owner: usize },
+    CloseScreen {
+        owner: usize,
+    },
     /// `render.shake`: strength 0 to 1, fading out over `seconds` (≤ 10).
-    Shake { strength: f32, seconds: f32 },
+    Shake {
+        strength: f32,
+        seconds: f32,
+    },
 }
 
 /// A mod's text panel, drawn every frame until it changes.
@@ -313,6 +338,8 @@ struct State {
     /// needs its own budget.
     storage_budget: u64,
     item_reads_left: usize,
+    item_edits: std::collections::HashSet<String>,
+    item_edits_left: usize,
     limits: StoreLimits,
 }
 
@@ -401,6 +428,11 @@ impl Mods {
                 |s| s,
             )
             .map_err(|e| e.to_string())?;
+            server_bindings::horizon::mods::items_edit::add_to_linker::<State, HasSelf<State>>(
+                &mut linker,
+                |s| s,
+            )
+            .map_err(|e| e.to_string())?;
             UiHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
             RenderHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
@@ -477,6 +509,8 @@ impl Mods {
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
             item_reads_left: items::READS_PER_CALL,
+            item_edits: Default::default(),
+            item_edits_left: 8,
             limits: StoreLimitsBuilder::new()
                 .memory_size(MEMORY)
                 .instances(16)
@@ -523,7 +557,9 @@ impl Mods {
             ui,
             hooks,
             raycasts: functions.iter().any(|f| f == "game.raycast"),
-            item_reads: functions.iter().any(|f| f == "items-read.main-hand"),
+            item_reads: functions
+                .iter()
+                .any(|f| f == "items-read.main-hand" || f.starts_with("items-edit.")),
         }))
     }
 
@@ -607,11 +643,17 @@ impl Mods {
         run.store.data_mut().snapshot = self.snapshot.clone();
         run.store.data_mut().storage_budget = STORAGE_WRITE_BUDGET;
         run.store.data_mut().item_reads_left = items::READS_PER_CALL;
+        run.store.data_mut().item_edits.clear();
+        run.store.data_mut().item_edits_left = 8;
         let started = Instant::now();
         let result = run.store.set_fuel(fuel).and_then(|()| f(run));
         // An average over about the last 64 calls.
         entry.cost = (entry.cost * 63 + started.elapsed()) / 64;
         let data = run.store.data_mut();
+        if result.is_err() {
+            data.out
+                .retain(|output| !matches!(output, Output::ItemEdit(_)));
+        }
         let (open, close) = (
             std::mem::take(&mut data.ui.open),
             std::mem::take(&mut data.ui.close),
@@ -749,8 +791,16 @@ impl Mods {
         };
         let result = self.call(i, FUEL_EVENT, |run| match &run.hooks {
             Hooks::Server(m, _) => {
-                m.horizon_mods_server_events()
-                    .call_command(&mut run.store, player, name, args)
+                let result =
+                    m.horizon_mods_server_events()
+                        .call_command(&mut run.store, player, name, args);
+                if matches!(&result, Ok(Err(_))) {
+                    run.store
+                        .data_mut()
+                        .out
+                        .retain(|output| !matches!(output, Output::ItemEdit(_)));
+                }
+                result
             }
             Hooks::Client(..) => Ok(Ok(None)),
         });
@@ -790,6 +840,18 @@ impl Mods {
         self.entries
             .iter()
             .any(|e| e.run.as_ref().is_some_and(|r| r.item_reads))
+    }
+    /// Commands take a fresh snapshot separately; don't clone stack data on
+    /// every tick for mods that only register commands.
+    pub fn wants_item_event_reads(&self) -> bool {
+        self.entries.iter().any(|entry| {
+            entry.run.as_ref().is_some_and(|run| {
+                run.item_reads
+                    && run.hooks.server().is_some_and(|hooks| {
+                        hooks.tick || hooks.joins || hooks.chat || hooks.blocks
+                    })
+            })
+        })
     }
     /// Some running mod has a `frame` hook: the game refreshes the snapshot
     /// every frame for it.

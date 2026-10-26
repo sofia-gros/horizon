@@ -18,6 +18,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `input` | [`input`](#input) | see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys |
 | `players` | [`players`](#players) | see who is on the server and message them |
 | `items-read` | [`items-read`](#items-read) | read players' main-hand items and custom data on the server |
+| `items-edit` | [`items-edit`](#items-edit) | read and replace custom-data strings in players' main-hand items on the server |
 
 ## World `horizon-mod`
 
@@ -30,7 +31,7 @@ A client mod: runs in the player's game.
 
 A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
 
-- Imports (what the game offers): `log`, `storage`, `players`, `items-read`
+- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`
 - Exports (what the mod provides): `server-events`
 
 ## World `horizon-ui-mod`
@@ -514,6 +515,16 @@ Experimental server-only capability `items-read`. Immutable views of the authori
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `main-hand` | `func(player: string, custom-path: list<string>) -> result<option<held-stack>, string>` | None if offline or empty-handed. Path: at most 8 nonempty compound keys, each at most 128 UTF-8 bytes. At most 16 reads per hook call. No arbitrary NBT parsing or command execution is exposed. |
+
+## `items-edit`
+
+Access: capability `items-edit`.
+
+Experimental server-only capability `items-edit`: compare and replace one existing custom-data string. Never creates items or changes count/damage.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `replace-main-hand-text` | `func(player: string, custom-path: list<string>, expected: string, replacement: string) -> result<_, string>` | Queues a replacement after this hook succeeds. At apply time the player must still hold the same slot and complete stack as in this hook's view. A trap or command error discards queued edits. Applied/rejected feedback goes to that player; ok here only means queued, not applied. Nonempty compound path, limits as items-read; both texts <=4096 UTF-8 bytes. 8 attempts per hook, one queued edit per player per hook. This also consumes a read. An open container or carried cursor can reject apply. |
 
 ## `server-events`
 

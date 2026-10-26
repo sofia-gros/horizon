@@ -3,7 +3,7 @@
 //! seen are kept in `storage`), `/online` lists who is on and where, and
 //! `/mined` counts the blocks the player broke since the server started.
 use horizon_mod_sdk::{
-    server::{BlockPos, Player, Registration, ServerMod, items_read, players},
+    server::{BlockPos, Player, Registration, ServerMod, items_edit, items_read, players},
     storage,
 };
 use std::collections::HashMap;
@@ -28,6 +28,7 @@ impl ServerMod for Welcome {
             .command("online")
             .command("mined")
             .command("hand")
+            .command("edit")
             .on_joins()
             .on_blocks();
         Ok((
@@ -59,6 +60,28 @@ impl ServerMod for Welcome {
         args: &str,
     ) -> Result<Option<String>, String> {
         Ok(Some(match name {
+            "edit" => {
+                let path = ["example".into(), "state".into()];
+                let view = items_read::main_hand(&player.id, &path)?.ok_or("empty main hand")?;
+                let expected = view.custom_text.ok_or("missing state")?;
+                let replacement = if args == "big" {
+                    "x".repeat(4097)
+                } else {
+                    "changed".into()
+                };
+                let expected = if args == "stale" { "wrong" } else { &expected };
+                items_edit::replace_main_hand_text(&player.id, &path, expected, &replacement)?;
+                if args == "trap" {
+                    panic!("edit trap");
+                }
+                if args == "error" {
+                    return Err("edit error".into());
+                }
+                if args == "twice" {
+                    items_edit::replace_main_hand_text(&player.id, &path, expected, "again")?;
+                }
+                "queued".into()
+            }
             "hand" => {
                 let path: Vec<String> = args.split_whitespace().map(str::to_owned).collect();
                 let reads = if args == "budget" { 17 } else { 1 };

@@ -99,9 +99,10 @@ pub enum Capability {
     Players,
     /// Read server players' main-hand item and selected custom-data strings.
     ItemsRead,
+    ItemsEdit,
 }
 impl Capability {
-    pub const ALL: [Capability; 11] = [
+    pub const ALL: [Capability; 12] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -113,12 +114,16 @@ impl Capability {
         Capability::Input,
         Capability::Players,
         Capability::ItemsRead,
+        Capability::ItemsEdit,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
         matches!(
             self,
-            Capability::Storage | Capability::Players | Capability::ItemsRead
+            Capability::Storage
+                | Capability::Players
+                | Capability::ItemsRead
+                | Capability::ItemsEdit
         )
     }
     /// The WIT interface it grants, in `horizon:mods`.
@@ -135,6 +140,7 @@ impl Capability {
             Capability::Input => "input",
             Capability::Players => "players",
             Capability::ItemsRead => "items-read",
+            Capability::ItemsEdit => "items-edit",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -142,7 +148,11 @@ impl Capability {
     pub fn is_experimental(self) -> bool {
         matches!(
             self,
-            Capability::Ui | Capability::Render | Capability::Input | Capability::ItemsRead
+            Capability::Ui
+                | Capability::Render
+                | Capability::Input
+                | Capability::ItemsRead
+                | Capability::ItemsEdit
         )
     }
     /// What the player reads before turning the mod on: "May <this>".
@@ -161,6 +171,9 @@ impl Capability {
             }
             Capability::Players => "see who is on the server and message them",
             Capability::ItemsRead => "read players' main-hand items and custom data on the server",
+            Capability::ItemsEdit => {
+                "read and replace custom-data strings in players' main-hand items on the server"
+            }
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -197,6 +210,7 @@ impl fmt::Display for Capability {
             Capability::Input => "input",
             Capability::Players => "players",
             Capability::ItemsRead => "items-read",
+            Capability::ItemsEdit => "items-edit",
         };
         f.write_str(name)
     }
@@ -519,6 +533,33 @@ capabilities = ["game-read", "hud"]
             Manifest::parse(
                 &declared
                     .replace("api = \"0.3\"", "api = \"0.1\"")
+                    .replace("side = \"server\"", "side = \"client\"")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn item_edits_need_their_own_experimental_server_permission() {
+        let base = "id = \"editor\"\nname = \"Editor\"\nversion = \"1\"\napi = \"0.3\"\nside = \"server\"\n";
+        assert!(
+            Manifest::parse(base)
+                .unwrap()
+                .check_imports(["horizon:mods/items-edit@0.1.0"])
+                .is_err()
+        );
+        let m = format!("{base}capabilities = [\"items-edit\"]\n");
+        assert!(Manifest::parse(&m).unwrap_err().contains("experimental"));
+        let m = format!("{m}experimental = [\"items-edit\"]\n");
+        assert!(
+            Manifest::parse(&m)
+                .unwrap()
+                .check_imports(["horizon:mods/items-edit@0.1.0"])
+                .is_ok()
+        );
+        assert!(
+            Manifest::parse(
+                &m.replace("api = \"0.3\"", "api = \"0.1\"")
                     .replace("side = \"server\"", "side = \"client\"")
             )
             .is_err()

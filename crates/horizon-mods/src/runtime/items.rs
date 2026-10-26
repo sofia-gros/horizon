@@ -5,8 +5,71 @@ pub(super) const READS_PER_CALL: usize = 16;
 
 /// The game lends immutable, owned stack snapshots. Implementations must bound
 /// string conversion before allocating; the runtime checks the result as well.
-pub trait ItemReader: std::fmt::Debug + Send + Sync {
+pub trait ItemReader: std::any::Any + std::fmt::Debug + Send + Sync {
     fn main_hand(&self, player: &str, path: &[String]) -> Result<Option<ServerHeldStack>, String>;
+}
+
+#[derive(Clone, Debug)]
+pub struct ItemEdit {
+    pub owner: String,
+    pub player: String,
+    pub path: Vec<String>,
+    pub text: String,
+    pub snapshot: std::sync::Arc<dyn ItemReader>,
+}
+
+impl PartialEq for ItemEdit {
+    fn eq(&self, other: &Self) -> bool {
+        self.owner == other.owner
+            && self.player == other.player
+            && self.path == other.path
+            && self.text == other.text
+            && std::sync::Arc::ptr_eq(&self.snapshot, &other.snapshot)
+    }
+}
+
+impl super::server_bindings::horizon::mods::items_edit::Host for State {
+    fn replace_main_hand_text(
+        &mut self,
+        player: String,
+        custom_path: Vec<String>,
+        expected: String,
+        replacement: String,
+    ) -> Result<(), String> {
+        if self.item_edits_left == 0 {
+            return Err("items-edit budget exhausted".into());
+        }
+        self.item_edits_left -= 1;
+        if custom_path.is_empty()
+            || expected.len() > ITEM_TEXT_MAX
+            || replacement.len() > ITEM_TEXT_MAX
+        {
+            return Err("invalid items-edit path or text size".into());
+        }
+        if self.item_edits.contains(&player) {
+            return Err("one item edit per player per hook".into());
+        }
+        let view = read(
+            self.snapshot.items.as_deref(),
+            &mut self.item_reads_left,
+            &player,
+            &custom_path,
+        )?
+        .ok_or("empty main hand")?;
+        if view.custom_text.as_deref() != Some(expected.as_str()) {
+            return Err("main-hand text does not match expected value".into());
+        }
+        let snapshot = self.snapshot.items.clone().ok_or("no server item view")?;
+        self.item_edits.insert(player.clone());
+        self.out.push(super::Output::ItemEdit(ItemEdit {
+            owner: self.id.clone(),
+            player,
+            path: custom_path,
+            text: replacement,
+            snapshot,
+        }));
+        Ok(())
+    }
 }
 
 fn read(

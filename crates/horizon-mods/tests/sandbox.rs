@@ -1004,6 +1004,24 @@ fn server_item_reads_are_frozen_capability_checked_and_budgeted_per_call() {
     assert!(
         matches!(&command(&mut mods, "hand example state")[0], Output::Reply { text, error: false, .. } if text.ends_with("text=original"))
     );
+    assert!(command(&mut mods, "edit").iter().any(|out| matches!(out, Output::ItemEdit(edit) if edit.text == "changed" && edit.player == alex.id)));
+    for case in ["edit error", "edit twice", "edit stale", "edit big"] {
+        let output = command(&mut mods, case);
+        assert!(
+            !output.iter().any(|out| matches!(out, Output::ItemEdit(_))),
+            "{case}"
+        );
+        assert!(
+            output
+                .iter()
+                .any(|out| matches!(out, Output::Reply { error: true, .. })),
+            "{case}"
+        );
+    }
+    let output = command(&mut mods, "edit trap");
+    assert!(!output.iter().any(|out| matches!(out, Output::ItemEdit(_))));
+    assert!(matches!(mods.entries()[0].status, Status::Failed(_)));
+    let mut mods = load("welcome.hmod");
     mods.set_snapshot(Snapshot::default());
     assert!(
         matches!(&command(&mut mods, "hand")[0], Output::Reply { text, error: false, .. } if text == "empty hand")
@@ -1045,7 +1063,7 @@ fn a_server_mod_runs_only_where_the_world_does() {
     assert!(mods.runs_server());
     assert_eq!(
         mods.server_commands().collect::<Vec<_>>(),
-        ["online", "mined", "hand"]
+        ["online", "mined", "hand", "edit"]
     );
     assert_eq!(mods.commands().count(), 0, "not the window's chat commands");
     let alex = alex();

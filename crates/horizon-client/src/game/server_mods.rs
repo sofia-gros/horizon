@@ -85,19 +85,70 @@ mod run {
     }
 
     impl Game<'_> {
+        fn apply_item_edit(
+            &mut self,
+            host: Option<&mut LanHost>,
+            edit: &horizon_mods::ItemEdit,
+        ) -> Result<(), String> {
+            let any: &dyn std::any::Any = edit.snapshot.as_ref();
+            let snapshot = any
+                .downcast_ref::<horizon_client::mod_items::ServerItems>()
+                .ok_or("invalid item view")?;
+            if self.remote.is_some() {
+                return Err("not the authoritative server".into());
+            }
+            if self.options.execution_role.is_client()
+                && self.player.is_some()
+                && self.player_uuid_string() == edit.player
+            {
+                if self.screen != super::super::Screen::Playing || self.carried.is_some() {
+                    return Err("close the container before editing".into());
+                }
+                let cell = self
+                    .inventory
+                    .get_mut(self.selected)
+                    .ok_or("invalid selected slot")?;
+                return snapshot.replace(&edit.player, self.selected, cell, &edit.path, &edit.text);
+            }
+            let host = host.or(self.lan.as_mut()).ok_or("player is offline")?;
+            let index = host
+                .hub
+                .guests
+                .iter()
+                .position(|guest| guest.placed && uuid_string(guest.uuid) == edit.player)
+                .ok_or("player is offline")?;
+            let guest = &mut host.hub.guests[index];
+            if guest.menu.is_some() || guest.carried.is_some() {
+                return Err("close the container before editing".into());
+            }
+            let cell = guest
+                .inventory
+                .get_mut(guest.selected)
+                .ok_or("invalid selected slot")?;
+            snapshot.replace(&edit.player, guest.selected, cell, &edit.path, &edit.text)?;
+            host.hub.send_inventory(index);
+            Ok(())
+        }
+
         fn server_mod_snapshot(
             &mut self,
             players: Vec<ServerPlayer>,
             host: Option<&LanHost>,
+            command: bool,
         ) -> horizon_mods::Snapshot {
-            let items = self.mods.mods.wants_item_reads().then(|| {
+            let wants = if command {
+                self.mods.mods.wants_item_reads()
+            } else {
+                self.mods.mods.wants_item_event_reads()
+            };
+            let items = wants.then(|| {
                 let mut held = Vec::new();
                 if self.options.execution_role.is_client()
                     && self.remote.is_none()
                     && self.player.is_some()
                     && let Some(stack) = self.held()
                 {
-                    held.push((self.player_uuid_string(), stack.clone()));
+                    held.push((self.player_uuid_string(), self.selected, stack.clone()));
                 }
                 for guest in host
                     .or(self.lan.as_ref())
@@ -106,7 +157,7 @@ mod run {
                     .filter(|guest| guest.placed)
                 {
                     if let Some(Some(stack)) = guest.inventory.get(guest.selected) {
-                        held.push((uuid_string(guest.uuid), stack.clone()));
+                        held.push((uuid_string(guest.uuid), guest.selected, stack.clone()));
                     }
                 }
                 std::sync::Arc::new(horizon_client::mod_items::ServerItems(held))
@@ -175,7 +226,7 @@ mod run {
                 return;
             }
             let players = self.server_players(None);
-            let snapshot = self.server_mod_snapshot(players.clone(), None);
+            let snapshot = self.server_mod_snapshot(players.clone(), None, false);
             self.mods.mods.set_snapshot(snapshot);
             let before = std::mem::take(&mut self.mods.players);
             for p in before
@@ -274,7 +325,7 @@ mod run {
             let Some(me) = players.first().cloned() else {
                 return false;
             };
-            let snapshot = self.server_mod_snapshot(players, None);
+            let snapshot = self.server_mod_snapshot(players, None, true);
             self.mods.mods.set_snapshot(snapshot);
             let owned = self.mods.mods.server_command(&me, line);
             self.show_mod_output();
@@ -300,7 +351,7 @@ mod run {
             let Some(me) = players.iter().find(|p| p.id == id).cloned() else {
                 return false;
             };
-            let snapshot = self.server_mod_snapshot(players, Some(host));
+            let snapshot = self.server_mod_snapshot(players, Some(host), true);
             self.mods.mods.set_snapshot(snapshot);
             if !self.mods.mods.server_command(&me, line) {
                 return false;
@@ -357,6 +408,16 @@ mod run {
                 line
             };
             match output {
+                Output::ItemEdit(edit) => {
+                    let result = self.apply_item_edit(host.as_deref_mut(), &edit);
+                    let line = match result {
+                        Ok(()) => Text::literal(format!("[{}] item state updated", edit.owner)),
+                        Err(error) => {
+                            Text::literal(format!("[{}] {error}", edit.owner)).with_color(text::RED)
+                        }
+                    };
+                    self.tell_server_player(host, &edit.player, line);
+                }
                 Output::Tell { name, player, text } => {
                     self.tell_server_player(host, &player, named(&name, text));
                 }

@@ -490,6 +490,19 @@ interface items-read {
     main-hand: func(player: string, custom-path: list<string>) -> result<option<held-stack>, string>;
 }
 
+/// Experimental server-only capability `items-edit`: compare and replace one
+/// existing custom-data string. Never creates items or changes count/damage.
+interface items-edit {
+    /// Queues a replacement after this hook succeeds. At apply time the player
+    /// must still hold the same slot and complete stack as in this hook's view.
+    /// A trap or command error discards queued edits. Applied/rejected feedback
+    /// goes to that player; ok here only means queued, not applied.
+    /// Nonempty compound path, limits as items-read; both texts <=4096 UTF-8
+    /// bytes. 8 attempts per hook, one queued edit per player per hook. This also
+    /// consumes a read. An open container or carried cursor can reject apply.
+    replace-main-hand-text: func(player: string, custom-path: list<string>, expected: string, replacement: string) -> result<_, string>;
+}
+
 /// What the server calls in a server mod (manifest `api = "0.3"`,
 /// experimental). Only the hooks `init` asks for are ever called. The player
 /// in each event is as the server saw them when it happened.
@@ -553,6 +566,7 @@ world horizon-server-mod {
     import storage;
     import players;
     import items-read;
+    import items-edit;
     export server-events;
 }
 

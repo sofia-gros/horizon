@@ -674,8 +674,10 @@ impl Game<'_> {
                     }
                     Text::literal(line).with_color(text::RED)
                 }
-                server
-                @ (Output::Tell { .. } | Output::Broadcast { .. } | Output::Reply { .. }) => {
+                server @ (Output::Tell { .. }
+                | Output::Broadcast { .. }
+                | Output::Reply { .. }
+                | Output::ItemEdit(_)) => {
                     self.route_server_output(host.as_deref_mut(), server);
                     continue;
                 }

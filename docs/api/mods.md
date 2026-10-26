@@ -13,10 +13,10 @@ the player before the mod is turned on, and checked against the component's real
 
 | | Count |
 | --- | --- |
-| Interfaces the game offers | 11: `log`, `game`, `chat`, `hud`, `storage`, `command`, `ui`, `render`, `input`, `players`, `items-read` |
-| Functions in them | 35 |
+| Interfaces the game offers | 12: `log`, `game`, `chat`, `hud`, `storage`, `command`, `ui`, `render`, `input`, `players`, `items-read`, `items-edit` |
+| Functions in them | 36 |
 | Hooks a mod exports | 5: `init`, `tick`, `frame`, `command`, `chat`; a server mod 8: `init`, `tick`, `player-joined`, `player-left`, `chat`, `command`, `block-broken`, `block-placed` |
-| Capabilities | 11: `game-read`, `chat`, `hud`, `storage`, `command`, `registries`, `ui`, `render`, `input`, `players`, `items-read` |
+| Capabilities | 12: `game-read`, `chat`, `hud`, `storage`, `command`, `registries`, `ui`, `render`, `input`, `players`, `items-read`, `items-edit` |
 | Manifest `api` lines served | 3: `0.1` (code), `0.2` (content), `0.3` (server mods, experimental) |
 | SDK | the `Mod` trait (5 methods), `Registration` (4 builders), `export_mod!`, log helpers; `server::ServerMod` (8 methods), `server::Registration` (5 builders), `export_server_mod!` |
 | `cargo horizon-mod` | `new` (templates `code` and `content`), `build`, `run`, `test`, `check` |
@@ -50,11 +50,24 @@ UTF-8 bytes, 4096 bytes of returned text and 16 reads per hook. Oversized or
 invalid Unicode values are errors, never truncated states. No writes, arbitrary
 NBT decoding, commands, mining changes or durability changes are provided.
 
-The game builds cheap, owned stack views only while a mod imports this function;
-stack data is shared immutably, not serialized for every player each tick. The
+The game copies owned stack views while a mod needs them. StackData is boxed,
+so this is a copy, not shared copy-on-write data. Command-only mods get a fresh
+view on their command; no per-tick stack copy is made for them. The
 `welcome` example's `/hand example state` reads a string at that path;
 `/hand budget` demonstrates the per-call limit. Existing compiled server mods
 remain compatible. This preview is not an upstream API-level guarantee.
+
+Fork preview `items-edit` (level 5) is a separate experimental server permission.
+`replace-main-hand-text(player, path, expected, replacement)` queues one existing
+string replacement. The path must be nonempty, both texts at most 4096 UTF-8
+bytes; 8 attempts per hook and one queued edit per player. It also consumes a
+read. At application the player must be online, the selected slot and complete
+stack (all components/count/damage) must still match the captured view, and no
+container or cursor stack may be open. Only that string leaf changes, no item is
+created or consumed. The player gets applied/rejected feedback; a successful
+import means queued. A trap or a command returning an error discards its edits.
+This is value comparison within a synchronous hook, not a persistent item ID or
+a general inventory revision/transaction API. Gameplay hooks remain future work.
 
 [mods-reference.md](mods-reference.md), generated from `crates/horizon-mod-sdk/wit/horizon.wit`: every capability,
 interface, type, function and hook, with the limits the guide lists (16 HUD lines of 256 characters, 8 chat lines per
