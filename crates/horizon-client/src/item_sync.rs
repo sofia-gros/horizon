@@ -239,11 +239,13 @@ mod tests {
     use horizon_protocol::registry::Ids;
 
     /// What a creative client sends (`stack_to_network`) comes back whole on
-    /// the server: damage, both enchantment lists, repair cost, name, trim.
+    /// the server: damage, both enchantment lists, repair cost, name, trim,
+    /// and nested custom data (also preserved by the saved component codec).
     #[test]
     fn a_creative_stack_keeps_its_components_across_the_wire() {
         let mut components = vec![String::new(); 60];
         for (id, name) in [
+            (component::CUSTOM_DATA, "minecraft:custom_data"),
             (component::DAMAGE, "minecraft:damage"),
             (component::CUSTOM_NAME, "minecraft:custom_name"),
             (component::ENCHANTMENTS, "minecraft:enchantments"),
@@ -306,6 +308,29 @@ mod tests {
         d.repair_cost = 9;
         d.custom_name = Some("Keeper".to_owned());
         d.trim = Some((Arc::from("minecraft:gold"), Arc::from("minecraft:sentry")));
+        let custom = Tag::compound([(
+            "example:state",
+            Tag::compound([
+                ("schema", Tag::Int(1)),
+                (
+                    "parts",
+                    Tag::List(vec![
+                        Tag::String("head".into()),
+                        Tag::String("handle".into()),
+                    ]),
+                ),
+                ("broken", Tag::Byte(0)),
+            ]),
+        )]);
+        d.set_other("minecraft:custom_data", Some(custom.clone()));
+        let saved = crate::item_data::encode_components(&stack).expect("saved components");
+        let (_, extra) = crate::item_data::decode_components(Some(&saved));
+        assert_eq!(
+            extra
+                .as_ref()
+                .and_then(|d| d.other("minecraft:custom_data")),
+            Some(&custom)
+        );
         let id = |registry: &str, name: &str| {
             builtin
                 .get(registry)
@@ -323,10 +348,20 @@ mod tests {
             &Some(stack.clone()),
         )
         .unwrap();
+        // Exercise the actual wire codec as well as the application adapters.
+        use horizon_protocol::{
+            buf::{Codec, Reader, Writer},
+            item::Slot,
+        };
+        let mut bytes = Writer::new();
+        Slot::write(&Some(wire), &mut bytes);
+        let mut reader = Reader::new(&bytes.data);
+        let wire = Slot::read(&mut reader).unwrap().unwrap();
         let back = from_network(&wire, &builtin, &dynamic);
         assert_eq!(back.item, stack.item);
         assert_eq!(back.damage, 5);
         let d = back.data().expect("components");
+        assert_eq!(d.other("minecraft:custom_data"), Some(&custom));
         assert_eq!(d.enchantments, vec![(Arc::from("minecraft:protection"), 4)]);
         assert_eq!(
             d.stored_enchantments,

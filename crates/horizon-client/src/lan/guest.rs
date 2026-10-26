@@ -529,6 +529,12 @@ fn network_stack(
         ));
     }
     if let Some(d) = s.data() {
+        if let Some(data) = d.other("minecraft:custom_data") {
+            stack.added.push((
+                horizon_protocol::item::component::CUSTOM_DATA,
+                horizon_protocol::item::Component::Nbt(data.clone()),
+            ));
+        }
         if let Some(rgb) = d.dyed_color {
             stack.added.push((
                 horizon_protocol::item::component::DYED_COLOR,
