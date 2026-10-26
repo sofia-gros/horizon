@@ -27,6 +27,7 @@ pub mod component {
     pub const REPAIR_COST: i32 = 19;
     pub const CREATIVE_SLOT_LOCK: i32 = 20;
     pub const ENCHANTMENT_GLINT_OVERRIDE: i32 = 21;
+    pub const TOOL: i32 = 28;
     /// `AttackRange`: six floats, in the record's field order.
     pub const ATTACK_RANGE: i32 = 30;
     pub const STORED_ENCHANTMENTS: i32 = 45;
@@ -69,6 +70,7 @@ pub enum Component {
     Lore(Vec<Tag>),
     Enchantments(Vec<(i32, i32)>),
     AttackRange([f32; 6]),
+    Tool(Tool),
     /// `PotionContents`: the potion's `minecraft:potion` id and the custom
     /// colour; the custom effects and name stay their encoded bytes.
     Potion {
@@ -108,6 +110,21 @@ pub enum Component {
     /// A component Horizon reads past without interpreting it: its encoded
     /// bytes, written back as they came.
     Raw(Vec<u8>),
+}
+
+/// `Tool.STREAM_CODEC`; rule blocks use the block registry's holder ids.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tool {
+    pub rules: Vec<ToolRule>,
+    pub default_speed: f32,
+    pub damage_per_block: i32,
+    pub can_destroy_in_creative: bool,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolRule {
+    pub blocks: crate::packets::recipes::HolderSet,
+    pub speed: Option<f32>,
+    pub correct: Option<bool>,
 }
 
 /// `FireworkExplosion.STREAM_CODEC`: shape id, colors, fade colors, trail
@@ -230,6 +247,23 @@ impl Component {
                     color,
                     rest,
                 }
+            }
+            TOOL => {
+                let n = r.count(1024)?;
+                let mut rules = Vec::with_capacity(n);
+                for _ in 0..n {
+                    rules.push(ToolRule {
+                        blocks: crate::packets::recipes::HolderSet::read(r)?,
+                        speed: if r.bool()? { Some(r.f32()?) } else { None },
+                        correct: if r.bool()? { Some(r.bool()?) } else { None },
+                    });
+                }
+                Self::Tool(Tool {
+                    rules,
+                    default_speed: r.f32()?,
+                    damage_per_block: r.varint()?,
+                    can_destroy_in_creative: r.bool()?,
+                })
             }
             ATTACK_RANGE => {
                 let mut values = [0.0f32; 6];
@@ -363,6 +397,23 @@ impl Component {
                 }
             }
             Self::AttackRange(values) => values.iter().for_each(|v| w.f32(*v)),
+            Self::Tool(tool) => {
+                w.varint(tool.rules.len() as i32);
+                for rule in &tool.rules {
+                    rule.blocks.write(w);
+                    w.bool(rule.speed.is_some());
+                    if let Some(speed) = rule.speed {
+                        w.f32(speed);
+                    }
+                    w.bool(rule.correct.is_some());
+                    if let Some(correct) = rule.correct {
+                        w.bool(correct);
+                    }
+                }
+                w.f32(tool.default_speed);
+                w.varint(tool.damage_per_block);
+                w.bool(tool.can_destroy_in_creative);
+            }
             Self::Potion {
                 potion,
                 color,
@@ -629,6 +680,16 @@ impl Codec<Option<Hashed>> for HashedSlot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_rejects_negative_or_truncated_holder_sets() {
+        for length in [i32::MIN, -1, i32::MAX, 2] {
+            let mut w = Writer::new();
+            w.varint(1); // One rule, then a malformed holder set and no entries.
+            w.varint(length);
+            assert!(Component::read(component::TOOL, &mut Reader::new(&w.data)).is_err());
+        }
+    }
     use crate::text::literal;
 
     fn round<T: PartialEq + std::fmt::Debug, C: Codec<T>>(v: T) {

@@ -487,7 +487,8 @@ pub fn firework_components(
 
 /// The off hand slot is conventionally 40 in saves and 45 in the menu.
 /// `synced_id` names an entry of a synced registry (enchantments, trim
-/// materials and patterns) by its id on this connection.
+/// materials and patterns), or a built-in registry (blocks for Tool rules),
+/// by its id on this connection.
 pub fn stack_to_network(
     item_id: impl Fn(&str) -> i32,
     synced_id: impl Fn(&str, &str) -> Option<i32>,
@@ -532,6 +533,15 @@ fn network_stack(
         ));
     }
     if let Some(d) = s.data() {
+        if let Some(tool) = d
+            .other("minecraft:tool")
+            .and_then(|t| crate::item_tool::to_network(t, |b| synced_id("minecraft:block", b)))
+        {
+            stack.added.push((
+                horizon_protocol::item::component::TOOL,
+                horizon_protocol::item::Component::Tool(tool),
+            ));
+        }
         if let Some(data) = d.other("minecraft:custom_data") {
             stack.added.push((
                 horizon_protocol::item::component::CUSTOM_DATA,

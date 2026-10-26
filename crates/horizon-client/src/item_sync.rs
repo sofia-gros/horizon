@@ -113,6 +113,14 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                 ("hitbox_margin", Tag::Float(v[4].to_bits())),
                 ("mob_factor", Tag::Float(v[5].to_bits())),
             ]),
+            Component::Tool(tool) => {
+                let Some(tag) = crate::item_tool::from_network(tool, |id| {
+                    Some(builtin.get("minecraft:block")?.name(id)?.to_owned())
+                }) else {
+                    continue;
+                };
+                tag
+            }
             Component::Profile(p) => profile_tag(p),
             // PotionContents' NBT: the potion by name and the custom colour.
             Component::Potion { potion, color, .. } => {
@@ -365,6 +373,7 @@ mod tests {
         let mut components = vec![String::new(); 60];
         for (id, name) in [
             (component::CUSTOM_DATA, "minecraft:custom_data"),
+            (component::TOOL, "minecraft:tool"),
             (component::DAMAGE, "minecraft:damage"),
             (component::CUSTOM_NAME, "minecraft:custom_name"),
             (component::ITEM_NAME, "minecraft:item_name"),
@@ -447,6 +456,20 @@ mod tests {
             ]),
         )]);
         d.set_other("minecraft:custom_data", Some(custom.clone()));
+        let tool = Tag::compound([
+            (
+                "rules",
+                Tag::List(vec![Tag::compound([
+                    ("blocks", Tag::String("#minecraft:mineable/pickaxe".into())),
+                    ("speed", Tag::Float(3.5f32.to_bits())),
+                    ("correct_for_drops", Tag::Byte(1)),
+                ])]),
+            ),
+            ("default_mining_speed", Tag::Float(0.5f32.to_bits())),
+            ("damage_per_block", Tag::Int(0)),
+            ("can_destroy_blocks_in_creative", Tag::Byte(0)),
+        ]);
+        d.set_other("minecraft:tool", Some(tool.clone()));
         let saved = crate::item_data::encode_components(&stack).expect("saved components");
         let (_, extra) = crate::item_data::decode_components(Some(&saved));
         assert_eq!(
@@ -486,6 +509,7 @@ mod tests {
         assert_eq!(back.damage, 5);
         let d = back.data().expect("components");
         assert_eq!(d.other("minecraft:custom_data"), Some(&custom));
+        assert_eq!(d.other("minecraft:tool"), Some(&tool));
         assert_eq!(d.enchantments, vec![(Arc::from("minecraft:protection"), 4)]);
         assert_eq!(
             d.stored_enchantments,

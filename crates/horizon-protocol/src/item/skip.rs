@@ -62,7 +62,6 @@ pub(super) fn component(kind: i32, r: &mut Reader) -> Result<()> {
         }
         // DamageResistant, Repairable, provides_banner_patterns: a holder set.
         27 | 33 | 67 => holder_set(r),
-        28 => tool(r),
         // Weapon: itemDamagePerAttack, disableBlockingForSeconds.
         29 => {
             varint(r)?;
@@ -354,16 +353,6 @@ fn attribute_modifier(r: &mut Reader) -> Result<()> {
 }
 /// Tool: rules (blocks, speed, correctForDrops), defaultMiningSpeed, damagePerBlock,
 /// canDestroyBlocksInCreative.
-fn tool(r: &mut Reader) -> Result<()> {
-    list(r, |r| {
-        holder_set(r)?;
-        optional(r, f32)?;
-        optional(r, boolean)
-    })?;
-    f32(r)?;
-    varint(r)?;
-    boolean(r)
-}
 /// Equippable: slot, equipSound, assetId, cameraOverlay, allowedEntities, dispensable,
 /// swappable, damageOnHurt, equipOnInteract, canBeSheared, shearingSound.
 fn equippable(r: &mut Reader) -> Result<()> {

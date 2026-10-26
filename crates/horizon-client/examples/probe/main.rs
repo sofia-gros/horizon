@@ -91,6 +91,7 @@ mod tab_list_fixture;
 mod team_rules_fixture;
 mod text_display_fixture;
 mod toggle_keys_probe;
+mod tool_component_probe;
 mod tooltip_display_fixture;
 mod trading_fixture;
 mod translucency_fixture;
@@ -112,6 +113,7 @@ probes! {
     camera_probe,
     squid_client_probe,
     creative_mining_probe,
+    tool_component_probe,
     cushion_placement_probe,
     cauldron_fixture,
     chat_screen_fixture,

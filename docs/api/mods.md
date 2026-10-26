@@ -5,6 +5,11 @@ Mods are Rust crates compiled to sandboxed WebAssembly components. Client mods r
 
 ## Overview
 
+Per-stack vanilla `minecraft:tool` overrides keep their rules through save and
+network transfer. Mining prediction and server mining both use the stack's
+speed and harvest rules before prototype defaults. This does not connect a
+mod's custom JSON to gameplay or change durability consumption by itself.
+
 A mod today can read the local player and the world clock, show chat lines only that player sees, draw a text panel
 on the HUD, keep small files of its own, register chat commands, and run on every tick, frame or chat line it asks
 for. A content mod adds blocks and items from JSON in its `.hmod`, copying vanilla templates, plus tags, recipes,

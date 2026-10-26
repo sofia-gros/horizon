@@ -8,7 +8,7 @@ use crate::{
 };
 use horizon_world::nbt::Tag;
 
-/// `HolderSet<Item>` on the network: a tag by name, or item ids.
+/// A registry holder set on the network: a tag by name, or entry ids.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HolderSet {
     Tag(String),
@@ -16,11 +16,14 @@ pub enum HolderSet {
 }
 impl HolderSet {
     pub fn read(r: &mut Reader) -> Result<Self> {
-        let n = r.varint()? - 1;
-        if n == -1 {
+        let n = r.varint()?;
+        if n == 0 {
             return Ok(Self::Tag(r.string(32767)?));
         }
-        let n = usize::try_from(n).map_err(|_| crate::Error::new("negative holder set size"))?;
+        let n = usize::try_from(n)
+            .ok()
+            .and_then(|n| n.checked_sub(1))
+            .ok_or_else(|| crate::Error::new("negative holder set size"))?;
         if n > r.remaining() {
             return Err(crate::Error::new("holder set larger than the packet"));
         }

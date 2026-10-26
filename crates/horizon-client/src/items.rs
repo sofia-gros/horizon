@@ -786,6 +786,12 @@ impl Items {
     }
     /// `Tool.getMiningSpeed` for the held item (1.0 without a tool component).
     pub fn mining_speed(&self, held: Option<&ItemStack>, block: &str) -> f32 {
+        if let Some(tool) = held
+            .and_then(|s| s.data())
+            .and_then(|d| d.other("minecraft:tool"))
+        {
+            return crate::item_tool::mining_speed(tool, |b| self.block_matches(b, block));
+        }
         let Some(info) = held.and_then(|s| self.get(&s.item)) else {
             return 1.0;
         };
@@ -796,7 +802,7 @@ impl Items {
                 return speed;
             }
         }
-        if info.tool.is_empty() {
+        if info.tool_damage_per_block.is_none() {
             1.0
         } else {
             info.tool_default_speed
@@ -804,6 +810,12 @@ impl Items {
     }
     /// `Tool.isCorrectForDrops`.
     pub fn correct_for_drops(&self, held: Option<&ItemStack>, block: &str) -> bool {
+        if let Some(tool) = held
+            .and_then(|s| s.data())
+            .and_then(|d| d.other("minecraft:tool"))
+        {
+            return crate::item_tool::correct_for_drops(tool, |b| self.block_matches(b, block));
+        }
         let Some(info) = held.and_then(|s| self.get(&s.item)) else {
             return false;
         };

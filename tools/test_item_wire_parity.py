@@ -123,6 +123,8 @@ def compare(vanilla, rust):
             failures.append(f"{v['label']}: {r['left']} bytes left, ids {r['added']}/{r['removed']}, vanilla {v['added']}/{v['removed']}")
         elif not r['same_bytes'] and not r['typed']:
             failures.append(f"{v['label']}: read past, but encoded back differently")
+        elif not r['same_bytes'] and r['typed'] == [28]:
+            failures.append(f"{v['label']}: Tool codec changed the encoded bytes")
     missing = sorted(set(range(COMPONENT_TYPES)) - covered)
     if missing:
         failures.append(f'component ids no stack covers: {missing}')
