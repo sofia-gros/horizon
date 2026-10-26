@@ -325,6 +325,11 @@ impl Game<'_> {
         }
         self.level_pass = Pass::default();
         result?;
+        // One callback after every dimension has applied its player actions,
+        // rather than during the first level's tick. Paused worlds do not tick.
+        if !paused {
+            self.tick_server_mods();
+        }
         self.close_idle_levels()
     }
 

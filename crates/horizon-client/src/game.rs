@@ -4248,7 +4248,9 @@ impl Game<'_> {
         self.update_totem_ready();
         self.tick_command_extras();
         self.tick_mods();
-        self.tick_server_mods();
+        if self.options.execution_role.is_client() {
+            self.tick_server_mods();
+        }
         let camera_eye = self.camera_eye_height();
         let stick = self.pad_move();
         if self.riding.is_some() && self.player.is_some() {

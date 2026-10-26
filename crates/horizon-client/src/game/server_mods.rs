@@ -25,6 +25,7 @@ pub(super) enum ModEvent {
     Chat(Who, String),
     Block {
         who: Who,
+        dimension: String,
         pos: [i32; 3],
         state: String,
         placed: bool,
@@ -178,11 +179,13 @@ mod run {
                     }
                     ModEvent::Block {
                         who: w,
+                        dimension,
                         pos,
                         state,
                         placed,
                     } => {
-                        let Some(p) = who(&w) else { continue };
+                        let Some(mut p) = who(&w) else { continue };
+                        p.dimension = dimension;
                         let pos = BlockPos {
                             x: pos[0],
                             y: pos[1],
@@ -215,6 +218,7 @@ mod run {
             let state = self.state_string(state);
             self.mods.events.push(ModEvent::Block {
                 who,
+                dimension: self.dim.id().to_owned(),
                 pos,
                 state,
                 placed,
