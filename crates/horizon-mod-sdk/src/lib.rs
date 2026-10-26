@@ -197,6 +197,7 @@ pub mod server {
     pub use exports::horizon::mods::server_events::{BlockPos, Guest as __Guest, Registration};
     pub use horizon::mods::items_edit;
     pub use horizon::mods::items_read::{self, HeldStack};
+    pub use horizon::mods::items_tools;
     pub use horizon::mods::players::{self, GameMode, Player};
     pub use horizon::mods::world::{self, BlockChange};
 

@@ -1,9 +1,27 @@
 //! Vanilla `minecraft:tool` stack overrides, shared by prediction and server mining.
+use crate::items::ItemStack;
 use horizon_protocol::{
     item::{Tool, ToolRule},
     packets::recipes::HolderSet,
 };
 use horizon_world::nbt::Tag;
+
+/// Host-owned control accompanies a Mod's Tool profile through custom_data.
+pub fn mining_enabled(stack: &ItemStack) -> bool {
+    let control = stack
+        .data()
+        .and_then(|d| d.other("minecraft:custom_data"))
+        .and_then(|d| d.get("horizon:tool_control"));
+    !control.is_some_and(|c| {
+        matches!(c.get("schema"), Some(Tag::Int(1)))
+            && matches!(c.get("mining_enabled"), Some(Tag::Byte(0)))
+    })
+}
+pub fn unbreakable(stack: &ItemStack) -> bool {
+    stack
+        .data()
+        .is_some_and(|d| d.other("minecraft:unbreakable").is_some())
+}
 
 fn number(tag: &Tag) -> Option<f32> {
     match tag {

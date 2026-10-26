@@ -1000,7 +1000,9 @@ fn server_item_reads_are_frozen_capability_checked_and_budgeted_per_call() {
                     item: "example:tool".into(),
                     count: 1,
                     damage: 7,
-                    custom_text: (path == ["example", "state"]).then(|| "original".into()),
+                    custom_text: (path == ["example", "state"]
+                        || path == ["horizon:tool_control", "owner"])
+                    .then(|| "original".into()),
                 }),
             )
         }
@@ -1027,7 +1029,18 @@ fn server_item_reads_are_frozen_capability_checked_and_budgeted_per_call() {
         matches!(&command(&mut mods, "hand example state")[0], Output::Reply { text, error: false, .. } if text.ends_with("text=original"))
     );
     assert!(command(&mut mods, "edit").iter().any(|out| matches!(out, Output::ItemEdit(edit) if edit.text == "changed" && edit.player == alex.id)));
-    for case in ["edit error", "edit twice", "edit stale", "edit big"] {
+    assert!(command(&mut mods, "edit profile").iter().any(|out| matches!(out, Output::ItemEdit(edit) if edit.text == "changed" && edit.profile.as_ref().is_some_and(|p| !p.mining_enabled && p.unbreakable))));
+    for case in [
+        "edit error",
+        "edit twice",
+        "edit stale",
+        "edit big",
+        "edit profile-error",
+        "edit profile-twice",
+        "edit profile-invalid",
+        "edit profile-stale",
+        "edit profile-reserved",
+    ] {
         let output = command(&mut mods, case);
         assert!(
             !output.iter().any(|out| matches!(out, Output::ItemEdit(_))),
@@ -1041,6 +1054,15 @@ fn server_item_reads_are_frozen_capability_checked_and_budgeted_per_call() {
         );
     }
     let output = command(&mut mods, "edit trap");
+    assert!(!output.iter().any(|out| matches!(out, Output::ItemEdit(_))));
+    assert!(matches!(mods.entries()[0].status, Status::Failed(_)));
+    let mut mods = load("welcome.hmod");
+    mods.set_snapshot(Snapshot {
+        items: Some(std::sync::Arc::new(Items)),
+        players: vec![alex.clone()],
+        ..Snapshot::default()
+    });
+    let output = command(&mut mods, "edit profile-trap");
     assert!(!output.iter().any(|out| matches!(out, Output::ItemEdit(_))));
     assert!(matches!(mods.entries()[0].status, Status::Failed(_)));
     let mut mods = load("welcome.hmod");

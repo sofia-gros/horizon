@@ -3466,12 +3466,12 @@ impl Game<'_> {
         let Some(stack) = self.inventory[self.selected].clone() else {
             return;
         };
-        let Some((per_block, max)) = self
-            .res
-            .items()
-            .get(&stack.item)
-            .and_then(|i| Some((i.tool_damage_per_block?, i.max_damage)))
-        else {
+        let Some((per_block, max)) = self.res.items().get(&stack.item).and_then(|i| {
+            Some((
+                self.res.items().tool_damage_per_block(&stack)?,
+                i.max_damage,
+            ))
+        }) else {
             return;
         };
         let wears = if &*stack.item == "minecraft:shears" {
@@ -3479,7 +3479,7 @@ impl Game<'_> {
         } else {
             hardness != 0.0
         };
-        if wears && per_block > 0 && max > 0 {
+        if wears && per_block > 0 && max > 0 && !horizon_client::item_tool::unbreakable(&stack) {
             let loss = self.durability_loss(&stack, per_block);
             if let Some(held) = self.inventory[self.selected].as_mut() {
                 held.damage += loss;
@@ -9006,7 +9006,11 @@ impl Game<'_> {
         }
     }
     fn damage_held(&mut self, amount: u32) {
-        if self.creative {
+        if self.creative
+            || self
+                .held()
+                .is_some_and(horizon_client::item_tool::unbreakable)
+        {
             return;
         }
         let amount = match self.held().cloned() {

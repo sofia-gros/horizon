@@ -374,6 +374,7 @@ mod tests {
         for (id, name) in [
             (component::CUSTOM_DATA, "minecraft:custom_data"),
             (component::TOOL, "minecraft:tool"),
+            (component::UNBREAKABLE, "minecraft:unbreakable"),
             (component::DAMAGE, "minecraft:damage"),
             (component::CUSTOM_NAME, "minecraft:custom_name"),
             (component::ITEM_NAME, "minecraft:item_name"),
@@ -470,6 +471,10 @@ mod tests {
             ("can_destroy_blocks_in_creative", Tag::Byte(0)),
         ]);
         d.set_other("minecraft:tool", Some(tool.clone()));
+        d.set_other(
+            "minecraft:unbreakable",
+            Some(Tag::compound([] as [(&str, Tag); 0])),
+        );
         let saved = crate::item_data::encode_components(&stack).expect("saved components");
         let (_, extra) = crate::item_data::decode_components(Some(&saved));
         assert_eq!(
@@ -510,6 +515,7 @@ mod tests {
         let d = back.data().expect("components");
         assert_eq!(d.other("minecraft:custom_data"), Some(&custom));
         assert_eq!(d.other("minecraft:tool"), Some(&tool));
+        assert!(crate::item_tool::unbreakable(&back));
         assert_eq!(d.enchantments, vec![(Arc::from("minecraft:protection"), 4)]);
         assert_eq!(
             d.stored_enchantments,

@@ -21,6 +21,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `items-edit` | [`items-edit`](#items-edit) | read and replace custom-data strings in players' main-hand items on the server |
 | `world` | [`world`](#world) | read and change the world's blocks |
 | `recipes` | [`recipes`](#recipes) | read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items |
+| `items-tools` | [`items-tools`](#items-tools) | change held items' mining settings, unbreakable setting and associated custom-data strings on the server |
 
 ## World `horizon-mod`
 
@@ -33,7 +34,7 @@ A client mod: runs in the player's game.
 
 A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
 
-- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`
+- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`
 - Exports (what the mod provides): `server-events`
 
 ## World `horizon-ui-mod`
@@ -687,7 +688,7 @@ Experimental server-only capability `items-edit`: compare and replace one existi
 
 | Function | Signature | What it does |
 | --- | --- | --- |
-| `replace-main-hand-text` | `func(player: string, custom-path: list<string>, expected: string, replacement: string) -> result<_, string>` | Queues a replacement after this hook succeeds. At apply time the player must still hold the same slot and complete stack as in this hook's view. A trap or command error discards queued edits. Applied/rejected feedback goes to that player; ok here only means queued, not applied. Nonempty compound path, limits as items-read; both texts <=4096 UTF-8 bytes. 8 attempts per hook, one queued edit per player per hook. This also consumes a read. An open container or carried cursor can reject apply. |
+| `replace-main-hand-text` | `func(player: string, custom-path: list<string>, expected: string, replacement: string) -> result<_, string>` | Queues a replacement after this hook succeeds. At apply time the player must still hold the same slot and complete stack as in this hook's view. A trap or command error discards queued edits. Applied/rejected feedback goes to that player; ok here only means queued, not applied. Nonempty compound path, limits as items-read; both texts <=4096 UTF-8 bytes. 8 attempts per hook, one queued edit per player per hook. This also consumes a read. An open container or carried cursor can reject apply. The reserved custom_data root horizon:tool_control is not a text target. |
 
 ## `world`
 
@@ -709,6 +710,35 @@ Capability `world`, server mods only (manifest `api = "0.3"`, experimental): the
 | `get-block` | `func(dimension: string, x: s32, y: s32, z: s32) -> option<string>` | The block state at a position in a dimension (`minecraft:overworld`, ...), as `minecraft:oak_log[axis=y]`, as of this call: none where the server has no chunk loaded there. |
 | `get-biome` | `func(dimension: string, x: s32, y: s32, z: s32) -> option<string>` | The biome at a position (`minecraft:plains`, ...), as the server stores it (one per 4 x 4 x 4 cell): none where no chunk is loaded. |
 | `set-blocks` | `func(dimension: string, blocks: list<block-change>) -> result<_, string>` | Sets blocks as `/setblock` does: the old block entity removed, neighbours and shapes updated, light, and every player told. Every state is checked now (an error queues nothing); the changes are made in order after this call returns, before that dimension's next tick; one in a chunk not loaded then is skipped. At most 4096 per call. |
+
+## `items-tools`
+
+Access: capability `items-tools`.
+
+Fork preview: checked mining settings and their associated state (server only).
+
+### record `rule`
+
+| Field | Type | |
+| --- | --- | --- |
+| `blocks` | `list<string>` | Direct block ids, or exactly one #tag selector. At most 64 entries. |
+| `speed` | `option<f32>` |  |
+| `correct-for-drops` | `option<bool>` |  |
+
+### record `profile`
+
+| Field | Type | |
+| --- | --- | --- |
+| `rules` | `list<rule>` | At most 16 rules, in vanilla Tool order; speeds must be finite and positive. |
+| `default-speed` | `f32` |  |
+| `damage-per-block` | `u32` |  |
+| `can-destroy-in-creative` | `bool` |  |
+| `mining-enabled` | `bool` | False prevents mining in prediction and on the server, including Creative. |
+| `unbreakable` | `bool` | Sets the vanilla unbreakable component; does not implement custom wear. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `replace-main-hand-profile` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile) -> result<_, string>` | Same comparison, text limits and shared attempt budget as items-edit. On success the existing custom string, Tool component, unbreakable setting and host-owned mining control data are applied together. Other data stays. Selectors must exist in the server's block/tag catalog at application time. The reserved custom_data root horizon:tool_control cannot be a text target. |
 
 ## `server-events`
 

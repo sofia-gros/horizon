@@ -18,10 +18,10 @@ the player before the mod is turned on, and checked against the component's real
 
 | | Count |
 | --- | --- |
-| Interfaces the game offers | 15: `log`, `game`, `chat`, `hud`, `storage`, `command`, `ui`, `render`, `input`, `players`, `world`, `recipes`, `browser`, `items-read`, `items-edit` |
-| Functions in them | 47 |
+| Interfaces the game offers | 16: `log`, `game`, `chat`, `hud`, `storage`, `command`, `ui`, `render`, `input`, `players`, `world`, `recipes`, `browser`, `items-read`, `items-edit`, `items-tools` |
+| Functions in them | 48 |
 | Hooks a mod exports | 5: `init`, `tick`, `frame`, `command`, `chat`; a server mod 8: `init`, `tick`, `player-joined`, `player-left`, `chat`, `command`, `block-broken`, `block-placed` |
-| Capabilities | 14: `game-read`, `chat`, `hud`, `storage`, `command`, `registries`, `ui`, `render`, `input`, `players`, `world`, `recipes`, `items-read`, `items-edit` |
+| Capabilities | 15: `game-read`, `chat`, `hud`, `storage`, `command`, `registries`, `ui`, `render`, `input`, `players`, `world`, `recipes`, `items-read`, `items-edit`, `items-tools` |
 | Manifest `api` lines served | 3: `0.1` (code), `0.2` (content), `0.3` (server mods, experimental) |
 | SDK | the `Mod` trait (5 methods), `Registration` (4 builders), `export_mod!`, log helpers; `server::ServerMod` (8 methods), `server::Registration` (5 builders), `export_server_mod!` |
 | `cargo horizon-mod` | `new` (templates `code` and `content`), `build`, `run`, `test`, `check` |
@@ -72,7 +72,20 @@ container or cursor stack may be open. Only that string leaf changes, no item is
 created or consumed. The player gets applied/rejected feedback; a successful
 import means queued. A trap or a command returning an error discards its edits.
 This is value comparison within a synchronous hook, not a persistent item ID or
-a general inventory revision/transaction API. Gameplay hooks remain future work.
+a general inventory revision/transaction API.
+
+Fork preview `items-tools` (level 9, `experimental = ["items-tools"]`) queues a
+checked replacement of an existing custom string together with vanilla Tool rules,
+the unbreakable component, and the host-owned `horizon:tool_control` data. The
+same complete-stack comparison, shared attempt and read budgets, and trap/error
+rollback as `items-edit` apply; only the host's applied/rejected feedback confirms
+success. The reserved control data cannot be selected as an edited text path.
+The profile is limited to 16 rules, 64 block selectors per rule, 128 UTF-8 bytes
+per selector, positive finite speeds, and damage-per-block at most 1024. Block ids
+and tags must exist when the edit applies. A disabled profile prevents mining in
+both prediction and authoritative gameplay, including Creative. Held-item mining
+and weapon use honor unbreakable; other vanilla durability paths have not been
+fully audited. This API does not itself calculate custom damage or recipes.
 
 [mods-reference.md](mods-reference.md), generated from `crates/horizon-mod-sdk/wit/horizon.wit`: every capability,
 interface, type, function and hook, with the limits the guide lists (16 HUD lines of 256 characters, 8 chat lines per

@@ -794,6 +794,18 @@ impl Items {
     pub fn block_in_tag(&self, tag: &str, block: &str) -> bool {
         self.block_tags.get(tag).is_some_and(|s| s.contains(block))
     }
+    pub fn has_block_tag(&self, tag: &str) -> bool {
+        self.block_tags.contains_key(tag)
+    }
+    pub fn tool_damage_per_block(&self, stack: &ItemStack) -> Option<u32> {
+        if let Some(tool) = stack.data().and_then(|d| d.other("minecraft:tool")) {
+            return Some(match tool.get("damage_per_block") {
+                Some(horizon_world::nbt::Tag::Int(n)) => (*n).max(0) as u32,
+                _ => 1,
+            });
+        }
+        self.get(&stack.item)?.tool_damage_per_block
+    }
     fn block_matches(&self, spec: &str, block: &str) -> bool {
         match spec.strip_prefix('#') {
             Some(tag) => self.block_tags.get(tag).is_some_and(|s| s.contains(block)),
@@ -802,6 +814,9 @@ impl Items {
     }
     /// `Item.canDestroyBlock`: a tool may forbid block destruction with instabuild.
     pub fn can_destroy_block(&self, held: Option<&ItemStack>, creative: bool) -> bool {
+        if held.is_some_and(|s| !crate::item_tool::mining_enabled(s)) {
+            return false;
+        }
         if !creative {
             return true;
         }
@@ -822,6 +837,9 @@ impl Items {
     }
     /// `Tool.getMiningSpeed` for the held item (1.0 without a tool component).
     pub fn mining_speed(&self, held: Option<&ItemStack>, block: &str) -> f32 {
+        if held.is_some_and(|s| !crate::item_tool::mining_enabled(s)) {
+            return 0.0;
+        }
         if let Some(tool) = held
             .and_then(|s| s.data())
             .and_then(|d| d.other("minecraft:tool"))

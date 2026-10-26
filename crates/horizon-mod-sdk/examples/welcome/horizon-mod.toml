@@ -5,5 +5,5 @@ description = "Greets each player who joins, announces a newcomer to everyone, /
 authors = ["Horizon"]
 api = "0.3"
 side = "server"
-capabilities = ["players", "storage", "items-read", "items-edit"]
-experimental = ["items-read", "items-edit"]
+capabilities = ["players", "storage", "items-read", "items-edit", "items-tools"]
+experimental = ["items-read", "items-edit", "items-tools"]

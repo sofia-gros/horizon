@@ -16,8 +16,11 @@ use wasmtime::{
 };
 
 mod items;
-pub use items::{ITEM_TEXT_MAX, ItemEdit, ItemReader};
+pub use items::{ITEM_TEXT_MAX, ItemEdit, ItemReader, validate_tool_profile};
 pub use server_bindings::horizon::mods::items_read::HeldStack as ServerHeldStack;
+pub use server_bindings::horizon::mods::items_tools::{
+    Profile as ServerToolProfile, Rule as ServerToolRule,
+};
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -579,6 +582,11 @@ impl Mods {
             .map_err(|e| e.to_string())?;
             mod_world::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            server_bindings::horizon::mods::items_tools::add_to_linker::<State, HasSelf<State>>(
+                &mut linker,
+                |s| s,
+            )
+            .map_err(|e| e.to_string())?;
             UiHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
             RenderHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
@@ -708,9 +716,11 @@ impl Mods {
             ui,
             hooks,
             raycasts: functions.iter().any(|f| f == "game.raycast"),
-            item_reads: functions
-                .iter()
-                .any(|f| f == "items-read.main-hand" || f.starts_with("items-edit.")),
+            item_reads: functions.iter().any(|f| {
+                f == "items-read.main-hand"
+                    || f.starts_with("items-edit.")
+                    || f.starts_with("items-tools.")
+            }),
             reads_recipes: functions.iter().any(|f| f.starts_with("recipes.")),
         }))
     }

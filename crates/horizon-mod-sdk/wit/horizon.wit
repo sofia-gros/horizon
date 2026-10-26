@@ -675,6 +675,7 @@ interface items-edit {
     /// Nonempty compound path, limits as items-read; both texts <=4096 UTF-8
     /// bytes. 8 attempts per hook, one queued edit per player per hook. This also
     /// consumes a read. An open container or carried cursor can reject apply.
+    /// The reserved custom_data root horizon:tool_control is not a text target.
     replace-main-hand-text: func(player: string, custom-path: list<string>, expected: string, replacement: string) -> result<_, string>;
 }
 
@@ -703,6 +704,33 @@ interface %world {
     /// in order after this call returns, before that dimension's next tick;
     /// one in a chunk not loaded then is skipped. At most 4096 per call.
     set-blocks: func(dimension: string, blocks: list<block-change>) -> result<_, string>;
+}
+
+/// Fork preview: checked mining settings and their associated state (server only).
+interface items-tools {
+    record rule {
+        /// Direct block ids, or exactly one #tag selector. At most 64 entries.
+        blocks: list<string>,
+        speed: option<f32>,
+        correct-for-drops: option<bool>,
+    }
+    record profile {
+        /// At most 16 rules, in vanilla Tool order; speeds must be finite and positive.
+        rules: list<rule>,
+        default-speed: f32,
+        damage-per-block: u32,
+        can-destroy-in-creative: bool,
+        /// False prevents mining in prediction and on the server, including Creative.
+        mining-enabled: bool,
+        /// Sets the vanilla unbreakable component; does not implement custom wear.
+        unbreakable: bool,
+    }
+    /// Same comparison, text limits and shared attempt budget as items-edit.
+    /// On success the existing custom string, Tool component, unbreakable setting
+    /// and host-owned mining control data are applied together. Other data stays.
+    /// Selectors must exist in the server's block/tag catalog at application time.
+    /// The reserved custom_data root horizon:tool_control cannot be a text target.
+    replace-main-hand-profile: func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile) -> result<_, string>;
 }
 
 /// What the server calls in a server mod (manifest `api = "0.3"`,
@@ -770,6 +798,7 @@ world horizon-server-mod {
     import items-read;
     import items-edit;
     import %world;
+    import items-tools;
     export server-events;
 }
 

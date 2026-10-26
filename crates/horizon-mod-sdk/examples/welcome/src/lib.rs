@@ -3,7 +3,9 @@
 //! seen are kept in `storage`), `/online` lists who is on and where, and
 //! `/mined` counts the blocks the player broke since the server started.
 use horizon_mod_sdk::{
-    server::{BlockPos, Player, Registration, ServerMod, items_edit, items_read, players},
+    server::{
+        BlockPos, Player, Registration, ServerMod, items_edit, items_read, items_tools, players,
+    },
     storage,
 };
 use std::collections::HashMap;
@@ -61,7 +63,11 @@ impl ServerMod for Welcome {
     ) -> Result<Option<String>, String> {
         Ok(Some(match name {
             "edit" => {
-                let path = ["example".into(), "state".into()];
+                let path = if args == "profile-reserved" {
+                    ["horizon:tool_control".into(), "owner".into()]
+                } else {
+                    ["example".into(), "state".into()]
+                };
                 let view = items_read::main_hand(&player.id, &path)?.ok_or("empty main hand")?;
                 let expected = view.custom_text.ok_or("missing state")?;
                 let replacement = if args == "big" {
@@ -69,7 +75,52 @@ impl ServerMod for Welcome {
                 } else {
                     "changed".into()
                 };
-                let expected = if args == "stale" { "wrong" } else { &expected };
+                let expected = if args.ends_with("stale") {
+                    "wrong"
+                } else {
+                    &expected
+                };
+                if args.starts_with("profile") {
+                    let profile = items_tools::Profile {
+                        rules: vec![items_tools::Rule {
+                            blocks: vec![
+                                if args == "profile-unknown" {
+                                    "example:missing"
+                                } else {
+                                    "minecraft:stone"
+                                }
+                                .into(),
+                            ],
+                            speed: Some(90.0),
+                            correct_for_drops: Some(true),
+                        }],
+                        default_speed: if args == "profile-invalid" { 0.0 } else { 1.0 },
+                        damage_per_block: if args == "profile-zero" { 0 } else { 1 },
+                        can_destroy_in_creative: true,
+                        mining_enabled: matches!(
+                            args,
+                            "profile-enabled" | "profile-zero" | "profile-wear"
+                        ),
+                        unbreakable: !matches!(args, "profile-zero" | "profile-wear"),
+                    };
+                    items_tools::replace_main_hand_profile(
+                        &player.id,
+                        &path,
+                        expected,
+                        &replacement,
+                        &profile,
+                    )?;
+                    if args == "profile-trap" {
+                        panic!("profile trap");
+                    }
+                    if args == "profile-error" {
+                        return Err("profile error".into());
+                    }
+                    if args == "profile-twice" {
+                        items_edit::replace_main_hand_text(&player.id, &path, expected, "again")?;
+                    }
+                    return Ok(Some("profile queued".into()));
+                }
                 items_edit::replace_main_hand_text(&player.id, &path, expected, &replacement)?;
                 if args == "trap" {
                     panic!("edit trap");

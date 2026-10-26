@@ -150,6 +150,19 @@ mod run {
             if self.remote.is_some() {
                 return Err("not the authoritative server".into());
             }
+            if let Some(profile) = &edit.profile {
+                horizon_mods::validate_tool_profile(profile)?;
+                for selector in profile.rules.iter().flat_map(|r| &r.blocks) {
+                    let known = if let Some(tag) = selector.strip_prefix('#') {
+                        self.res.items().has_block_tag(tag)
+                    } else {
+                        self.pack.assets.registry.default_state(selector).is_some()
+                    };
+                    if !known {
+                        return Err(format!("unknown tool block selector: {selector}"));
+                    }
+                }
+            }
             if self.options.execution_role.is_client()
                 && self.player.is_some()
                 && self.player_uuid_string() == edit.player
@@ -161,7 +174,7 @@ mod run {
                     .inventory
                     .get_mut(self.selected)
                     .ok_or("invalid selected slot")?;
-                return snapshot.replace(&edit.player, self.selected, cell, &edit.path, &edit.text);
+                return snapshot.apply(self.selected, cell, edit);
             }
             let host = host.or(self.lan.as_mut()).ok_or("player is offline")?;
             let index = host
@@ -178,7 +191,7 @@ mod run {
                 .inventory
                 .get_mut(guest.selected)
                 .ok_or("invalid selected slot")?;
-            snapshot.replace(&edit.player, guest.selected, cell, &edit.path, &edit.text)?;
+            snapshot.apply(guest.selected, cell, edit)?;
             host.hub.send_inventory(index);
             Ok(())
         }

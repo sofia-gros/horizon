@@ -482,6 +482,7 @@ its component targets the WIT world `horizon-server-mod` instead of
 | `players` | `players` | `online()`: id, name, position, dimension, game mode, health of each player on; `tell(id, text)`, `broadcast(text)`: system messages after the mod's name, 8 per call |
 | `items-read` (fork preview, experimental) | `items-read` | `main-hand(id, custom-path)`: frozen server main-hand item/count/damage and a selected string inside `minecraft:custom_data`; no writes |
 | `items-edit` (fork preview, experimental) | `items-edit` | Queue a checked replacement of an existing main-hand custom-data string; no item creation or consumption |
+| `items-tools` (fork preview, experimental) | `items-tools` | Atomically replace that string and configure the held item's bounded Tool profile; see the API reference for validation and gameplay limits |
 | `world` | `world` | `get-block(dimension, x, y, z)`: the state in a loaded chunk, `minecraft:oak_log[axis=y]`; `get-biome(dimension, x, y, z)`: `minecraft:plains`, ...; `set-blocks(dimension, changes)`: up to 4096 per call, checked at once, made as `/setblock` makes them (neighbours, light, block entities, every player told) after the call, before that dimension's next tick |
 
 | Hook (export `server-events`) | When |

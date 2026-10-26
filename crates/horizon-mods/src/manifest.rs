@@ -100,6 +100,8 @@ pub enum Capability {
     /// Read server players' main-hand item and selected custom-data strings.
     ItemsRead,
     ItemsEdit,
+    /// Change held-item mining settings together with an existing state string.
+    ItemsTools,
     /// Blocks in the server's loaded chunks, and changes to them (server
     /// mods; client mods later, where the game runs the world).
     World,
@@ -108,7 +110,7 @@ pub enum Capability {
     Recipes,
 }
 impl Capability {
-    pub const ALL: [Capability; 14] = [
+    pub const ALL: [Capability; 15] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -123,6 +125,7 @@ impl Capability {
         Capability::ItemsEdit,
         Capability::World,
         Capability::Recipes,
+        Capability::ItemsTools,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
@@ -133,6 +136,7 @@ impl Capability {
                 | Capability::World
                 | Capability::ItemsRead
                 | Capability::ItemsEdit
+                | Capability::ItemsTools
         )
     }
     /// The WIT interface it grants, in `horizon:mods`.
@@ -152,6 +156,7 @@ impl Capability {
             Capability::ItemsEdit => "items-edit",
             Capability::World => "world",
             Capability::Recipes => "recipes",
+            Capability::ItemsTools => "items-tools",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -165,6 +170,7 @@ impl Capability {
                 | Capability::Recipes
                 | Capability::ItemsRead
                 | Capability::ItemsEdit
+                | Capability::ItemsTools
         )
     }
     /// What the player reads before turning the mod on: "May <this>".
@@ -189,6 +195,9 @@ impl Capability {
             Capability::World => "read and change the world's blocks",
             Capability::Recipes => {
                 "read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items"
+            }
+            Capability::ItemsTools => {
+                "change held items' mining settings, unbreakable setting and associated custom-data strings on the server"
             }
         }
     }
@@ -233,6 +242,7 @@ impl fmt::Display for Capability {
             Capability::ItemsEdit => "items-edit",
             Capability::World => "world",
             Capability::Recipes => "recipes",
+            Capability::ItemsTools => "items-tools",
         };
         f.write_str(name)
     }
@@ -582,6 +592,38 @@ capabilities = ["game-read", "hud"]
         assert!(
             Manifest::parse(
                 &m.replace("api = \"0.3\"", "api = \"0.1\"")
+                    .replace("side = \"server\"", "side = \"client\"")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn tool_profiles_need_their_own_experimental_server_permission() {
+        let base = "id = \"profiler\"\nname = \"Profiler\"\nversion = \"1\"\napi = \"0.3\"\nside = \"server\"\n";
+        assert!(
+            Manifest::parse(base)
+                .unwrap()
+                .check_imports(["horizon:mods/items-tools@0.1.0"])
+                .is_err()
+        );
+        let declared = format!("{base}capabilities = [\"items-tools\"]\n");
+        assert!(
+            Manifest::parse(&declared)
+                .unwrap_err()
+                .contains("experimental")
+        );
+        let declared = format!("{declared}experimental = [\"items-tools\"]\n");
+        assert!(
+            Manifest::parse(&declared)
+                .unwrap()
+                .check_imports(["horizon:mods/items-tools@0.1.0"])
+                .is_ok()
+        );
+        assert!(
+            Manifest::parse(
+                &declared
+                    .replace("api = \"0.3\"", "api = \"0.1\"")
                     .replace("side = \"server\"", "side = \"client\"")
             )
             .is_err()

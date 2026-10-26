@@ -47,6 +47,91 @@ impl ItemReader for ServerItems {
 }
 
 impl ServerItems {
+    /// Apply associated text and mining settings as one checked stack replacement.
+    pub fn apply(
+        &self,
+        selected: usize,
+        cell: &mut Option<ItemStack>,
+        edit: &horizon_mods::ItemEdit,
+    ) -> Result<(), String> {
+        let Some(profile) = &edit.profile else {
+            return self.replace(&edit.player, selected, cell, &edit.path, &edit.text);
+        };
+        horizon_mods::validate_tool_profile(profile)?;
+        let mut changed = cell.clone();
+        self.replace(&edit.player, selected, &mut changed, &edit.path, &edit.text)?;
+        let stack = changed.as_mut().ok_or("empty main hand")?;
+        let mut custom = stack
+            .data()
+            .and_then(|d| d.other("minecraft:custom_data"))
+            .cloned()
+            .ok_or("missing custom data")?;
+        let Tag::Compound(data) = &mut custom else {
+            return Err("custom data is not a compound".into());
+        };
+        data.insert(
+            "horizon:tool_control".into(),
+            Tag::compound([
+                ("schema", Tag::Int(1)),
+                ("owner", Tag::String(edit.owner.as_str().into())),
+                (
+                    "mining_enabled",
+                    Tag::Byte(i8::from(profile.mining_enabled)),
+                ),
+            ]),
+        );
+        let rules = profile
+            .rules
+            .iter()
+            .map(|r| {
+                let blocks = if r.blocks.len() == 1 && r.blocks[0].starts_with('#') {
+                    Tag::String(r.blocks[0].as_str().into())
+                } else {
+                    Tag::List(
+                        r.blocks
+                            .iter()
+                            .map(|b| Tag::String(b.as_str().into()))
+                            .collect(),
+                    )
+                };
+                let mut fields = vec![("blocks", blocks)];
+                if let Some(speed) = r.speed {
+                    fields.push(("speed", Tag::Float(speed.to_bits())));
+                }
+                if let Some(correct) = r.correct_for_drops {
+                    fields.push(("correct_for_drops", Tag::Byte(i8::from(correct))));
+                }
+                Tag::compound(fields)
+            })
+            .collect();
+        let tool = Tag::compound([
+            ("rules", Tag::List(rules)),
+            (
+                "default_mining_speed",
+                Tag::Float(profile.default_speed.to_bits()),
+            ),
+            (
+                "damage_per_block",
+                Tag::Int(profile.damage_per_block as i32),
+            ),
+            (
+                "can_destroy_blocks_in_creative",
+                Tag::Byte(i8::from(profile.can_destroy_in_creative)),
+            ),
+        ]);
+        let data = stack.data_mut();
+        data.set_other("minecraft:custom_data", Some(custom));
+        data.set_other("minecraft:tool", Some(tool));
+        data.set_other(
+            "minecraft:unbreakable",
+            profile
+                .unbreakable
+                .then(|| Tag::compound([] as [(&str, Tag); 0])),
+        );
+        *cell = changed;
+        Ok(())
+    }
+
     /// Full stack comparison includes count, vanilla damage and every component.
     /// Only an existing string leaf is replaced; all other values stay intact.
     pub fn replace(
@@ -66,6 +151,9 @@ impl ServerItems {
             return Err("main hand changed; edit rejected".into());
         }
         if path.is_empty()
+            || path
+                .first()
+                .is_some_and(|key| key == "horizon:tool_control")
             || path.len() > 8
             || path.iter().any(|key| key.is_empty() || key.len() > 128)
             || text.len() > ITEM_TEXT_MAX
@@ -101,6 +189,72 @@ impl ServerItems {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profiles_update_text_and_controls_atomically_and_keep_foreign_data() {
+        let mut original = ItemStack::new("example:tool", 1);
+        original.damage = 58;
+        original.data_mut().set_other(
+            "minecraft:custom_data",
+            Some(Tag::compound([
+                ("state", Tag::String("old".into())),
+                ("foreign", Tag::Int(9)),
+            ])),
+        );
+        let snapshot =
+            std::sync::Arc::new(ServerItems(vec![("alice".into(), 0, original.clone())]));
+        let mut edit = horizon_mods::ItemEdit {
+            owner: "example_mod".into(),
+            player: "alice".into(),
+            path: vec!["state".into()],
+            text: "new".into(),
+            snapshot: snapshot.clone(),
+            profile: Some(horizon_mods::ServerToolProfile {
+                rules: vec![horizon_mods::ServerToolRule {
+                    blocks: vec!["#minecraft:mineable/pickaxe".into()],
+                    speed: Some(3.5),
+                    correct_for_drops: Some(true),
+                }],
+                default_speed: 1.0,
+                damage_per_block: 0,
+                can_destroy_in_creative: true,
+                mining_enabled: false,
+                unbreakable: true,
+            }),
+        };
+        let mut cell = Some(original.clone());
+        edit.profile.as_mut().unwrap().default_speed = f32::NAN;
+        assert!(snapshot.apply(0, &mut cell, &edit).is_err());
+        assert_eq!(cell.as_ref(), Some(&original));
+        edit.profile.as_mut().unwrap().default_speed = 1.0;
+        assert!(snapshot.apply(1, &mut cell, &edit).is_err());
+        assert_eq!(cell.as_ref(), Some(&original));
+        snapshot.apply(0, &mut cell, &edit).unwrap();
+        let changed = cell.as_ref().unwrap();
+        assert_eq!((changed.count, changed.damage), (1, 58));
+        assert!(crate::item_tool::unbreakable(changed));
+        assert!(!crate::item_tool::mining_enabled(changed));
+        assert_eq!(
+            changed
+                .data()
+                .unwrap()
+                .other("minecraft:custom_data")
+                .unwrap()
+                .get("foreign"),
+            Some(&Tag::Int(9))
+        );
+        let readback = ServerItems(vec![("alice".into(), 0, changed.clone())]);
+        assert_eq!(
+            readback
+                .main_hand("alice", &edit.path)
+                .unwrap()
+                .unwrap()
+                .custom_text
+                .as_deref(),
+            Some("new")
+        );
+        assert!(snapshot.apply(0, &mut cell, &edit).is_err());
+    }
 
     #[test]
     fn edits_compare_the_whole_stack_and_slot_and_preserve_unrelated_data() {

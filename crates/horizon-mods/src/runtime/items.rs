@@ -15,6 +15,7 @@ pub struct ItemEdit {
     pub player: String,
     pub path: Vec<String>,
     pub text: String,
+    pub profile: Option<super::ServerToolProfile>,
     pub snapshot: std::sync::Arc<dyn ItemReader>,
 }
 
@@ -24,6 +25,7 @@ impl PartialEq for ItemEdit {
             && self.player == other.player
             && self.path == other.path
             && self.text == other.text
+            && self.profile == other.profile
             && std::sync::Arc::ptr_eq(&self.snapshot, &other.snapshot)
     }
 }
@@ -36,11 +38,43 @@ impl super::server_bindings::horizon::mods::items_edit::Host for State {
         expected: String,
         replacement: String,
     ) -> Result<(), String> {
+        self.queue_item_edit(player, custom_path, expected, replacement, None)
+    }
+}
+
+impl super::server_bindings::horizon::mods::items_tools::Host for State {
+    fn replace_main_hand_profile(
+        &mut self,
+        player: String,
+        custom_path: Vec<String>,
+        expected: String,
+        replacement: String,
+        tool: super::ServerToolProfile,
+    ) -> Result<(), String> {
+        self.queue_item_edit(player, custom_path, expected, replacement, Some(tool))
+    }
+}
+
+impl State {
+    fn queue_item_edit(
+        &mut self,
+        player: String,
+        custom_path: Vec<String>,
+        expected: String,
+        replacement: String,
+        profile: Option<super::ServerToolProfile>,
+    ) -> Result<(), String> {
         if self.item_edits_left == 0 {
             return Err("items-edit budget exhausted".into());
         }
         self.item_edits_left -= 1;
+        if let Some(profile) = &profile {
+            validate_tool_profile(profile)?;
+        }
         if custom_path.is_empty()
+            || custom_path
+                .first()
+                .is_some_and(|key| key == "horizon:tool_control")
             || expected.len() > ITEM_TEXT_MAX
             || replacement.len() > ITEM_TEXT_MAX
         {
@@ -66,9 +100,94 @@ impl super::server_bindings::horizon::mods::items_edit::Host for State {
             player,
             path: custom_path,
             text: replacement,
+            profile,
             snapshot,
         }));
         Ok(())
+    }
+}
+
+/// Bounds checked again by native application adapters; no material-specific rules.
+pub fn validate_tool_profile(profile: &super::ServerToolProfile) -> Result<(), String> {
+    let speed = |v: f32| v.is_finite() && v > 0.0;
+    if !speed(profile.default_speed) || profile.rules.len() > 16 || profile.damage_per_block > 1024
+    {
+        return Err("invalid tool profile limits".into());
+    }
+    for rule in &profile.rules {
+        if rule.blocks.len() > 64
+            || rule.speed.is_some_and(|v| !speed(v))
+            || (rule.blocks.len() != 1 && rule.blocks.iter().any(|b| b.starts_with('#')))
+        {
+            return Err("invalid tool rule limits".into());
+        }
+        for block in &rule.blocks {
+            let id = block.strip_prefix('#').unwrap_or(block);
+            let valid = id.split_once(':').is_some_and(|(namespace, path)| {
+                !namespace.is_empty()
+                    && !path.is_empty()
+                    && namespace.bytes().all(|b| {
+                        b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b)
+                    })
+                    && path.bytes().all(|b| {
+                        b.is_ascii_lowercase() || b.is_ascii_digit() || b"_/.-".contains(&b)
+                    })
+            });
+            if block.len() > 128 || !valid {
+                return Err("invalid tool block selector".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    use crate::{ServerToolProfile, ServerToolRule};
+
+    #[test]
+    fn tool_profiles_bound_rules_selectors_and_numbers() {
+        let profile = ServerToolProfile {
+            rules: vec![ServerToolRule {
+                blocks: vec!["#minecraft:mineable/pickaxe".into()],
+                speed: Some(3.5),
+                correct_for_drops: Some(true),
+            }],
+            default_speed: 1.0,
+            damage_per_block: 0,
+            can_destroy_in_creative: true,
+            mining_enabled: true,
+            unbreakable: false,
+        };
+        assert!(validate_tool_profile(&profile).is_ok());
+        for speed in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let mut p = profile.clone();
+            p.default_speed = speed;
+            assert!(validate_tool_profile(&p).is_err());
+            p.default_speed = 1.0;
+            p.rules[0].speed = Some(speed);
+            assert!(validate_tool_profile(&p).is_err());
+        }
+        for blocks in [
+            vec!["minecraft:stone".into(); 65],
+            vec![
+                "#minecraft:mineable/pickaxe".into(),
+                "minecraft:stone".into(),
+            ],
+            vec!["invalid".into()],
+            vec!["minecraft:UPPERCASE".into()],
+        ] {
+            let mut p = profile.clone();
+            p.rules[0].blocks = blocks;
+            assert!(validate_tool_profile(&p).is_err());
+        }
+        let mut p = profile.clone();
+        p.rules = vec![p.rules[0].clone(); 17];
+        assert!(validate_tool_profile(&p).is_err());
+        p = profile;
+        p.damage_per_block = 1025;
+        assert!(validate_tool_profile(&p).is_err());
     }
 }
 

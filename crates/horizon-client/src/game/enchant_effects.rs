@@ -49,6 +49,9 @@ impl Game<'_> {
     }
     /// `EnchantmentHelper.processDurabilityChange` (unbreaking) for `amount` points.
     pub(super) fn durability_loss(&mut self, stack: &ItemStack, amount: u32) -> u32 {
+        if horizon_client::item_tool::unbreakable(stack) {
+            return 0;
+        }
         let e = &self.res.stations().enchantments;
         if !e.has_component(stack, "minecraft:item_damage") {
             return amount;

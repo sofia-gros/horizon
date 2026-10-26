@@ -533,6 +533,12 @@ fn network_stack(
         ));
     }
     if let Some(d) = s.data() {
+        if crate::item_tool::unbreakable(s) {
+            stack.added.push((
+                horizon_protocol::item::component::UNBREAKABLE,
+                horizon_protocol::item::Component::Unit,
+            ));
+        }
         if let Some(tool) = d
             .other("minecraft:tool")
             .and_then(|t| crate::item_tool::to_network(t, |b| synced_id("minecraft:block", b)))
