@@ -478,6 +478,7 @@ its component targets the WIT world `horizon-server-mod` instead of
 | `log` | always | as for client mods |
 | `storage` | `storage` | as for client mods, in the server's `horizon-mods/` |
 | `players` | `players` | `online()`: id, name, position, dimension, game mode, health of each player on; `tell(id, text)`, `broadcast(text)`: system messages after the mod's name, 8 per call |
+| `items-read` (fork preview, experimental) | `items-read` | `main-hand(id, custom-path)`: frozen server main-hand item/count/damage and a selected string inside `minecraft:custom_data`; no writes |
 
 | Hook (export `server-events`) | When |
 |---|---|

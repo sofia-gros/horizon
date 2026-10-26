@@ -3,7 +3,7 @@
 //! seen are kept in `storage`), `/online` lists who is on and where, and
 //! `/mined` counts the blocks the player broke since the server started.
 use horizon_mod_sdk::{
-    server::{BlockPos, Player, Registration, ServerMod, players},
+    server::{BlockPos, Player, Registration, ServerMod, items_read, players},
     storage,
 };
 use std::collections::HashMap;
@@ -27,6 +27,7 @@ impl ServerMod for Welcome {
         let hooks = Registration::new()
             .command("online")
             .command("mined")
+            .command("hand")
             .on_joins()
             .on_blocks();
         Ok((
@@ -55,9 +56,27 @@ impl ServerMod for Welcome {
         &mut self,
         player: &Player,
         name: &str,
-        _args: &str,
+        args: &str,
     ) -> Result<Option<String>, String> {
         Ok(Some(match name {
+            "hand" => {
+                let path: Vec<String> = args.split_whitespace().map(str::to_owned).collect();
+                let reads = if args == "budget" { 17 } else { 1 };
+                let mut item = None;
+                for _ in 0..reads {
+                    item = items_read::main_hand(&player.id, &path)?;
+                }
+                match item {
+                    Some(item) => format!(
+                        "{} x{} damage={} text={}",
+                        item.item,
+                        item.count,
+                        item.damage,
+                        item.custom_text.as_deref().unwrap_or("none")
+                    ),
+                    None => "empty hand".into(),
+                }
+            }
             "online" => players::online()
                 .iter()
                 .map(|p| {

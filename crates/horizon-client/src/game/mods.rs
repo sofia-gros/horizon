@@ -451,6 +451,7 @@ impl Game<'_> {
             font_widths: self.mods.font_widths.clone(),
             players,
             view_hit: self.mod_view_hit(),
+            items: None,
         }
     }
     /// The first block along the player's view within

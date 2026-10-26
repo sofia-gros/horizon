@@ -14,6 +14,10 @@ use wasmtime::{
     component::{Component, HasSelf, Linker},
 };
 
+mod items;
+pub use items::{ITEM_TEXT_MAX, ItemReader};
+pub use server_bindings::horizon::mods::items_read::HeldStack as ServerHeldStack;
+
 mod bindings {
     wasmtime::component::bindgen!({
         path: "../horizon-mod-sdk/wit",
@@ -133,6 +137,8 @@ pub struct Snapshot {
     /// its distance from the eye, for `game.raycast`; the game works it out
     /// only while a mod calls it ([`Mods::wants_raycast`]).
     pub view_hit: Option<(f32, Hit)>,
+    /// Frozen, cheap main-hand views, only when a server mod imports items-read.
+    pub items: Option<Arc<dyn ItemReader>>,
 }
 
 /// Which mods a game starts: the window's game the client mods, the game
@@ -241,6 +247,7 @@ struct Running {
     hooks: Hooks,
     /// It imports `game.raycast`.
     raycasts: bool,
+    item_reads: bool,
 }
 
 /// A running mod's exports and the hooks its `init` asked for.
@@ -305,6 +312,7 @@ struct State {
     /// not disk I/O time, so a loop of small-fuel, large-payload `set`s
     /// needs its own budget.
     storage_budget: u64,
+    item_reads_left: usize,
     limits: StoreLimits,
 }
 
@@ -388,6 +396,11 @@ impl Mods {
                 .map_err(|e| e.to_string())?;
             players::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            server_bindings::horizon::mods::items_read::add_to_linker::<State, HasSelf<State>>(
+                &mut linker,
+                |s| s,
+            )
+            .map_err(|e| e.to_string())?;
             UiHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
             RenderHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
@@ -463,6 +476,7 @@ impl Mods {
             input: InputState::default(),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
+            item_reads_left: items::READS_PER_CALL,
             limits: StoreLimitsBuilder::new()
                 .memory_size(MEMORY)
                 .instances(16)
@@ -509,6 +523,7 @@ impl Mods {
             ui,
             hooks,
             raycasts: functions.iter().any(|f| f == "game.raycast"),
+            item_reads: functions.iter().any(|f| f == "items-read.main-hand"),
         }))
     }
 
@@ -591,6 +606,7 @@ impl Mods {
         let run = entry.run.as_mut()?;
         run.store.data_mut().snapshot = self.snapshot.clone();
         run.store.data_mut().storage_budget = STORAGE_WRITE_BUDGET;
+        run.store.data_mut().item_reads_left = items::READS_PER_CALL;
         let started = Instant::now();
         let result = run.store.set_fuel(fuel).and_then(|()| f(run));
         // An average over about the last 64 calls.
@@ -768,6 +784,12 @@ impl Mods {
         self.entries
             .iter()
             .any(|e| e.run.as_ref().is_some_and(|r| r.raycasts))
+    }
+    /// Only server mods importing items-read need main-hand snapshots.
+    pub fn wants_item_reads(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.run.as_ref().is_some_and(|r| r.item_reads))
     }
     /// Some running mod has a `frame` hook: the game refreshes the snapshot
     /// every frame for it.

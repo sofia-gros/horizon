@@ -13,10 +13,10 @@ the player before the mod is turned on, and checked against the component's real
 
 | | Count |
 | --- | --- |
-| Interfaces the game offers | 6: `log`, `game`, `chat`, `hud`, `storage`; `players` for server mods |
-| Functions in them | 12 |
+| Interfaces the game offers | 11: `log`, `game`, `chat`, `hud`, `storage`, `command`, `ui`, `render`, `input`, `players`, `items-read` |
+| Functions in them | 35 |
 | Hooks a mod exports | 5: `init`, `tick`, `frame`, `command`, `chat`; a server mod 8: `init`, `tick`, `player-joined`, `player-left`, `chat`, `command`, `block-broken`, `block-placed` |
-| Capabilities | 6: `game-read`, `chat`, `hud`, `storage`, `registries`, `players` |
+| Capabilities | 11: `game-read`, `chat`, `hud`, `storage`, `command`, `registries`, `ui`, `render`, `input`, `players`, `items-read` |
 | Manifest `api` lines served | 3: `0.1` (code), `0.2` (content), `0.3` (server mods, experimental) |
 | SDK | the `Mod` trait (5 methods), `Registration` (4 builders), `export_mod!`, log helpers; `server::ServerMod` (8 methods), `server::Registration` (5 builders), `export_server_mod!` |
 | `cargo horizon-mod` | `new` (templates `code` and `content`), `build`, `run`, `test`, `check` |
@@ -39,6 +39,22 @@ The step-by-step guide, from installing the tools to publishing on the registry,
 5. Content mods: [Content mods (API 0.2)](../mods.md#content-mods-api-02).
 
 ## Reference
+
+Fork preview: server capability `items-read` (API level 4 in this fork) requires
+`experimental = ["items-read"]`. `server::items_read::main_hand(player_id, path)`
+reads an immutable view taken at the start of the hook. An empty path requests
+only the item id, count and vanilla damage; a nonempty path selects a string
+inside `minecraft:custom_data`. Offline or empty-handed players return none;
+missing/non-string tags return no custom text. At most 8 nonempty keys of 128
+UTF-8 bytes, 4096 bytes of returned text and 16 reads per hook. Oversized or
+invalid Unicode values are errors, never truncated states. No writes, arbitrary
+NBT decoding, commands, mining changes or durability changes are provided.
+
+The game builds cheap, owned stack views only while a mod imports this function;
+stack data is shared immutably, not serialized for every player each tick. The
+`welcome` example's `/hand example state` reads a string at that path;
+`/hand budget` demonstrates the per-call limit. Existing compiled server mods
+remain compatible. This preview is not an upstream API-level guarantee.
 
 [mods-reference.md](mods-reference.md), generated from `crates/horizon-mod-sdk/wit/horizon.wit`: every capability,
 interface, type, function and hook, with the limits the guide lists (16 HUD lines of 256 characters, 8 chat lines per

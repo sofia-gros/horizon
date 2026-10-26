@@ -2,7 +2,7 @@
 
 [[step]]
 join = "Alex"
-expect.commands = ["online", "mined"]
+expect.commands = ["online", "mined", "hand"]
 
 [[step]]
 join = "Steve"

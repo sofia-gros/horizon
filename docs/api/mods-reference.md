@@ -17,6 +17,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `render` | [`render`](#render) | draw on your screen, shake and zoom the camera |
 | `input` | [`input`](#input) | see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys |
 | `players` | [`players`](#players) | see who is on the server and message them |
+| `items-read` | [`items-read`](#items-read) | read players' main-hand items and custom data on the server |
 
 ## World `horizon-mod`
 
@@ -29,7 +30,7 @@ A client mod: runs in the player's game.
 
 A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
 
-- Imports (what the game offers): `log`, `storage`, `players`
+- Imports (what the game offers): `log`, `storage`, `players`, `items-read`
 - Exports (what the mod provides): `server-events`
 
 ## World `horizon-ui-mod`
@@ -494,6 +495,25 @@ Capability `players`, server mods only (manifest `api = "0.3"`, experimental): t
 | `online` | `func() -> list<player>` | The players online, in the order they joined. |
 | `tell` | `func(player: string, text: string) -> bool` | A system message to one player, after the mod's name; false when no player with that id is online. Up to 8 messages per call. |
 | `broadcast` | `func(text: string)` | A system message to every player and the server's log, after the mod's name. Counts toward the same 8 per call. |
+
+## `items-read`
+
+Access: capability `items-read`.
+
+Experimental server-only capability `items-read`. Immutable views of the authoritative main hand at this hook's start; no inventory writes.
+
+### record `held-stack`
+
+| Field | Type | |
+| --- | --- | --- |
+| `item` | `string` |  |
+| `count` | `u32` |  |
+| `damage` | `u32` |  |
+| `custom-text` | `option<string>` | A string inside minecraft:custom_data, selected by custom-path. None for a missing/non-string tag or an empty path. At most 4096 UTF-8 bytes; oversized or invalid Unicode strings are errors. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `main-hand` | `func(player: string, custom-path: list<string>) -> result<option<held-stack>, string>` | None if offline or empty-handed. Path: at most 8 nonempty compound keys, each at most 128 UTF-8 bytes. At most 16 reads per hook call. No arbitrary NBT parsing or command execution is exposed. |
 
 ## `server-events`
 

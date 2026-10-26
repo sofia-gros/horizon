@@ -193,6 +193,7 @@ pub mod server {
     });
 
     pub use exports::horizon::mods::server_events::{BlockPos, Guest as __Guest, Registration};
+    pub use horizon::mods::items_read::{self, HeldStack};
     pub use horizon::mods::players::{self, GameMode, Player};
 
     /// The server's calls into a mod. Only the hooks [`Registration`] asks

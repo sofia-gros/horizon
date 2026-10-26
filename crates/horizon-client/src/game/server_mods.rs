@@ -85,6 +85,38 @@ mod run {
     }
 
     impl Game<'_> {
+        fn server_mod_snapshot(
+            &mut self,
+            players: Vec<ServerPlayer>,
+            host: Option<&LanHost>,
+        ) -> horizon_mods::Snapshot {
+            let items = self.mods.mods.wants_item_reads().then(|| {
+                let mut held = Vec::new();
+                if self.options.execution_role.is_client()
+                    && self.remote.is_none()
+                    && self.player.is_some()
+                    && let Some(stack) = self.held()
+                {
+                    held.push((self.player_uuid_string(), stack.clone()));
+                }
+                for guest in host
+                    .or(self.lan.as_ref())
+                    .into_iter()
+                    .flat_map(|host| &host.hub.guests)
+                    .filter(|guest| guest.placed)
+                {
+                    if let Some(Some(stack)) = guest.inventory.get(guest.selected) {
+                        held.push((uuid_string(guest.uuid), stack.clone()));
+                    }
+                }
+                std::sync::Arc::new(horizon_client::mod_items::ServerItems(held))
+                    as std::sync::Arc<dyn horizon_mods::ItemReader>
+            });
+            let mut snapshot = self.mod_snapshot_with(players);
+            snapshot.items = items;
+            snapshot
+        }
+
         /// The players on this game's server: the window's own player
         /// in-frame, then every connection's. `host` is the hub when it is
         /// out of `self.lan`.
@@ -143,7 +175,7 @@ mod run {
                 return;
             }
             let players = self.server_players(None);
-            let snapshot = self.mod_snapshot_with(players.clone());
+            let snapshot = self.server_mod_snapshot(players.clone(), None);
             self.mods.mods.set_snapshot(snapshot);
             let before = std::mem::take(&mut self.mods.players);
             for p in before
@@ -242,7 +274,7 @@ mod run {
             let Some(me) = players.first().cloned() else {
                 return false;
             };
-            let snapshot = self.mod_snapshot_with(players);
+            let snapshot = self.server_mod_snapshot(players, None);
             self.mods.mods.set_snapshot(snapshot);
             let owned = self.mods.mods.server_command(&me, line);
             self.show_mod_output();
@@ -268,7 +300,7 @@ mod run {
             let Some(me) = players.iter().find(|p| p.id == id).cloned() else {
                 return false;
             };
-            let snapshot = self.mod_snapshot_with(players);
+            let snapshot = self.server_mod_snapshot(players, Some(host));
             self.mods.mods.set_snapshot(snapshot);
             if !self.mods.mods.server_command(&me, line) {
                 return false;

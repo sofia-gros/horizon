@@ -472,6 +472,24 @@ interface players {
     broadcast: func(text: string);
 }
 
+/// Experimental server-only capability `items-read`. Immutable views of the
+/// authoritative main hand at this hook's start; no inventory writes.
+interface items-read {
+    record held-stack {
+        item: string,
+        count: u32,
+        damage: u32,
+        /// A string inside minecraft:custom_data, selected by custom-path.
+        /// None for a missing/non-string tag or an empty path. At most 4096
+        /// UTF-8 bytes; oversized or invalid Unicode strings are errors.
+        custom-text: option<string>,
+    }
+    /// None if offline or empty-handed. Path: at most 8 nonempty compound
+    /// keys, each at most 128 UTF-8 bytes. At most 16 reads per hook call.
+    /// No arbitrary NBT parsing or command execution is exposed.
+    main-hand: func(player: string, custom-path: list<string>) -> result<option<held-stack>, string>;
+}
+
 /// What the server calls in a server mod (manifest `api = "0.3"`,
 /// experimental). Only the hooks `init` asks for are ever called. The player
 /// in each event is as the server saw them when it happened.
@@ -534,6 +552,7 @@ world horizon-server-mod {
     import log;
     import storage;
     import players;
+    import items-read;
     export server-events;
 }
 

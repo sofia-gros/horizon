@@ -252,8 +252,12 @@ experimental = ["ui", "render", "input"]
         needed(imports(&wasm).unwrap().iter().map(String::as_str)).0
     };
     assert_eq!(level("coords_hud.hmod"), 0);
-    // The UI guest shows a minimap (`render.set-minimap`).
-    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), LEVEL);
+    // Older UI imports keep their own level when a server API is added.
+    assert_eq!(
+        level("horizon_mods_test_ui_guest.hmod"),
+        horizon_mods::api_level::level_of("command.run-quiet").unwrap()
+    );
+    assert_eq!(level("welcome.hmod"), LEVEL);
 }
 
 #[test]
@@ -960,6 +964,71 @@ fn alex() -> ServerPlayer {
 }
 
 #[test]
+fn server_item_reads_are_frozen_capability_checked_and_budgeted_per_call() {
+    #[derive(Debug)]
+    struct Items;
+    impl horizon_mods::ItemReader for Items {
+        fn main_hand(
+            &self,
+            player: &str,
+            path: &[String],
+        ) -> Result<Option<horizon_mods::ServerHeldStack>, String> {
+            Ok(
+                (player == alex().id).then(|| horizon_mods::ServerHeldStack {
+                    item: "example:tool".into(),
+                    count: 1,
+                    damage: 7,
+                    custom_text: (path == ["example", "state"]).then(|| "original".into()),
+                }),
+            )
+        }
+    }
+    let mut mods = load("welcome.hmod");
+    assert!(mods.wants_item_reads());
+    let alex = alex();
+    mods.set_snapshot(Snapshot {
+        items: Some(std::sync::Arc::new(Items)),
+        players: vec![alex.clone()],
+        ..Snapshot::default()
+    });
+    let command = |mods: &mut Mods, line: &str| {
+        assert!(mods.server_command(&alex, line));
+        mods.drain()
+    };
+    assert!(
+        matches!(&command(&mut mods, "hand example state")[0], Output::Reply { text, error: false, .. } if text == "example:tool x1 damage=7 text=original")
+    );
+    assert!(
+        matches!(&command(&mut mods, "hand budget")[0], Output::Reply { text, error: true, .. } if text.contains("budget exhausted"))
+    );
+    assert!(
+        matches!(&command(&mut mods, "hand example state")[0], Output::Reply { text, error: false, .. } if text.ends_with("text=original"))
+    );
+    mods.set_snapshot(Snapshot::default());
+    assert!(
+        matches!(&command(&mut mods, "hand")[0], Output::Reply { text, error: false, .. } if text == "empty hand")
+    );
+
+    let package = Package::read(&mods_dir().join("welcome.hmod")).unwrap();
+    let manifest = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../horizon-mod-sdk/examples/welcome/horizon-mod.toml"),
+    )
+    .unwrap()
+    .replace(", \"items-read\"", "");
+    let path = mods_dir().join("without-items-read.hmod");
+    std::fs::write(
+        &path,
+        Package::write(&manifest, package.wasm.as_ref().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let denied = Mods::load(&[path], |_| true, |_| false);
+    assert!(
+        matches!(&denied.entries()[0].status, Status::Failed(reason) if reason.contains("items-read"))
+    );
+}
+
+#[test]
 fn a_server_mod_runs_only_where_the_world_does() {
     // A fresh folder: what the mod stored in an earlier run is beside it.
     let dir = mods_dir().join("server");
@@ -976,7 +1045,7 @@ fn a_server_mod_runs_only_where_the_world_does() {
     assert!(mods.runs_server());
     assert_eq!(
         mods.server_commands().collect::<Vec<_>>(),
-        ["online", "mined"]
+        ["online", "mined", "hand"]
     );
     assert_eq!(mods.commands().count(), 0, "not the window's chat commands");
     let alex = alex();

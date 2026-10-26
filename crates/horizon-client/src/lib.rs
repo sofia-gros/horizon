@@ -123,6 +123,8 @@ pub mod minimap;
 pub mod mipmap;
 pub mod mobs;
 pub mod mod_content;
+#[cfg(feature = "mods")]
+pub mod mod_items;
 pub mod mod_list;
 mod model_library;
 pub mod models;
