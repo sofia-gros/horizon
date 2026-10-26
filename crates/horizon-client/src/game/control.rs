@@ -591,11 +591,9 @@ impl Game<'_> {
             }
             "chat" => {
                 let text = line.trim_start().strip_prefix("chat").unwrap_or("").trim();
-                if self.remote.is_some() {
-                    self.send_chat(text);
-                    return ok();
-                }
                 self.require_world()?;
+                // Match typing in the chat box: a client Mod can own the
+                // command even while the world runs on a server thread.
                 self.handle_chat_input(text);
                 Ok(Some(
                     json!({ "ok": true, "chat": self.ui.chat.recent_lines(5) }),
