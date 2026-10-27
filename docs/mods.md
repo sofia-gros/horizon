@@ -479,8 +479,8 @@ profile, error or trap cancels the edit. Drops use the original held stack.
 This is API level 10; mods using it require a Horizon that supports it.
 
 Fork preview: the SDK and sandbox also expose opt-in `melee-events` at API
-level 13. The game does not dispatch it yet; it must not be relied on for
-gameplay until the server attack path is connected and verified.
+level 13. The game dispatches it for landed non-Creative direct mob hits. PvP and
+nonliving targets are not connected yet; game-level verification is pending.
 
 The fork and upstream independently assigned level 7 to different functions.
 On this merged fork `render.set-far-terrain` requires level 11, while the

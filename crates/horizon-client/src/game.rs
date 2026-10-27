@@ -8095,6 +8095,8 @@ impl Game<'_> {
     /// `Player.attack` on a mob: the damage, knockback, sweep, particles and
     /// sounds.
     pub(super) fn attack_mob(&mut self, index: usize) {
+        let attack_slot = self.selected;
+        let attack_stack = self.held().cloned();
         let target_kind = self.mobs[index].kind.id.clone();
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
         let (amount, scale, crit, magic) = self.melee_damage(&target_kind);
@@ -8120,6 +8122,15 @@ impl Game<'_> {
             None => horizon_client::mobs::Damage::of(horizon_client::mobs::DamageKind::Generic),
         };
         let landed = self.hurt_by_player(index, amount, source);
+        if landed && !self.creative {
+            self.mod_melee_hit(
+                self.mobs[index].id as u64,
+                &target_kind,
+                old_health - self.mobs[index].health,
+                attack_slot,
+                attack_stack.as_ref(),
+            );
+        }
         if let Some(p) = self.player.as_mut() {
             if p.attack_log.len() >= 64 {
                 p.attack_log.remove(0);

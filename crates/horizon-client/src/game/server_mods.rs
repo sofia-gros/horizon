@@ -45,6 +45,15 @@ impl Game<'_> {
         _held: Option<&horizon_client::items::ItemStack>,
     ) {
     }
+    pub(super) fn mod_melee_hit(
+        &mut self,
+        _target_id: u64,
+        _target_kind: &str,
+        _dealt: f32,
+        _slot: usize,
+        _held: Option<&horizon_client::items::ItemStack>,
+    ) {
+    }
     pub(super) fn mod_player_chat(&mut self, _who: Who, _text: &str) {}
     pub(super) fn local_server_mod_command(&mut self, _line: &str) -> bool {
         false
@@ -272,6 +281,78 @@ mod run {
                     && let Err(error) = view.apply(self.selected, cell, &edit)
                 {
                     log::warn!("Horizon: mining item edit rejected: {error}");
+                }
+            }
+        }
+        /// Run against the attacker stack captured before a landed hit.
+        pub(in crate::game) fn mod_melee_hit(
+            &mut self,
+            target_id: u64,
+            target_kind: &str,
+            dealt: f32,
+            slot: usize,
+            held: Option<&horizon_client::items::ItemStack>,
+        ) {
+            use horizon_mods::ItemReader;
+            if !self.hears_players() {
+                return;
+            }
+            if self.selected != slot || self.held() != held {
+                return;
+            }
+            let Some(stack) = self.held().cloned() else {
+                return;
+            };
+            let player = self
+                .lan_acting_uuid
+                .map(uuid_string)
+                .unwrap_or_else(|| self.player_uuid_string());
+            let view = std::sync::Arc::new(horizon_client::mod_items::ServerItems(vec![(
+                player.clone(),
+                self.selected,
+                stack,
+            )]));
+            let path = vec!["horizon:tool_control".into(), "owner".into()];
+            let Some(owner) = view
+                .main_hand(&player, &path)
+                .ok()
+                .flatten()
+                .and_then(|v| v.custom_text)
+            else {
+                return;
+            };
+            let mut snapshot = self.mod_snapshot_with(Vec::new());
+            snapshot.items = Some(view.clone());
+            self.mods.mods.set_snapshot(snapshot);
+            let edits = self.mods.mods.server_melee_hit(
+                &owner,
+                &player,
+                self.dim.id(),
+                target_id,
+                target_kind,
+                dealt,
+            );
+            for edit in edits {
+                if let Some(profile) = &edit.profile
+                    && (horizon_mods::validate_tool_profile(profile).is_err()
+                        || profile
+                            .rules
+                            .iter()
+                            .flat_map(|r| &r.blocks)
+                            .any(|selector| {
+                                if let Some(tag) = selector.strip_prefix('#') {
+                                    !self.res.items().has_block_tag(tag)
+                                } else {
+                                    self.pack.assets.registry.default_state(selector).is_none()
+                                }
+                            }))
+                {
+                    continue;
+                }
+                if let Some(cell) = self.inventory.get_mut(self.selected)
+                    && let Err(error) = view.apply(self.selected, cell, &edit)
+                {
+                    log::warn!("Horizon: melee item edit rejected: {error}");
                 }
             }
         }
