@@ -52,6 +52,8 @@ fn mods_dir() -> &'static Path {
                 "horizon-mods-test-guest",
                 "-p",
                 "horizon-mods-test-ui-guest",
+                "-p",
+                "horizon-mods-test-mining-guest",
                 "--target-dir",
             ])
             .arg(&target)
@@ -1468,4 +1470,95 @@ fn browser_lists_items_and_hears_the_player() {
         mods.browser_event(owner, BrowserEvent::Page(1));
     }
     assert_eq!(said(&mut mods, "browser_poll")[0], "256 events");
+}
+
+#[test]
+fn mining_callbacks_isolate_distinct_mods_and_failures() {
+    #[derive(Debug)]
+    struct Items;
+    impl horizon_mods::ItemReader for Items {
+        fn main_hand(
+            &self,
+            player: &str,
+            path: &[String],
+        ) -> Result<Option<horizon_mods::ServerHeldStack>, String> {
+            Ok(
+                (player == alex().id && path == ["example", "state"]).then(|| {
+                    horizon_mods::ServerHeldStack {
+                        item: "example:tool".into(),
+                        count: 1,
+                        damage: 0,
+                        custom_text: Some("original".into()),
+                    }
+                }),
+            )
+        }
+    }
+    let dir = mods_dir().join("mining-isolation");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let core = std::fs::read(root.join(
+        "target/mods-test/wasm32-unknown-unknown/release/horizon_mods_test_mining_guest.wasm",
+    ))
+    .unwrap();
+    let wasm = componentize(&core).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    let paths: Vec<_> = ["miner_a", "miner_b"].iter().map(|id| {
+        let manifest = format!("id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\"]\n");
+        let path = dir.join(format!("{id}.hmod"));
+        std::fs::write(&path, Package::write(&manifest, &wasm).unwrap()).unwrap();
+        path
+    }).collect();
+    let mut mods = Mods::load(&paths, |_| true, |_| false);
+    assert!(
+        mods.entries()
+            .iter()
+            .all(|entry| matches!(entry.status, Status::Running)),
+        "{:?}",
+        mods.entries()
+            .iter()
+            .map(|entry| &entry.status)
+            .collect::<Vec<_>>()
+    );
+    let player = alex();
+    mods.set_snapshot(Snapshot {
+        items: Some(std::sync::Arc::new(Items)),
+        players: vec![player.clone()],
+        ..Snapshot::default()
+    });
+    for owner in ["miner_a", "miner_b"] {
+        let edits = mods.server_mined(
+            owner,
+            &player.id,
+            "minecraft:overworld",
+            [1, 2, 3],
+            "example:stone",
+            1.0,
+        );
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].owner, owner);
+        assert_eq!(edits[0].player, player.id);
+    }
+    assert!(
+        mods.server_mined(
+            "miner_a",
+            &player.id,
+            "minecraft:overworld",
+            [1, 2, 3],
+            "example:trap",
+            1.0
+        )
+        .is_empty()
+    );
+    assert!(matches!(mods.entries()[0].status, Status::Failed(_)));
+    assert!(matches!(mods.entries()[1].status, Status::Running));
+    let edits = mods.server_mined(
+        "miner_b",
+        &player.id,
+        "minecraft:overworld",
+        [1, 2, 3],
+        "example:stone",
+        1.0,
+    );
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[0].owner, "miner_b");
 }

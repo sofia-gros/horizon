@@ -1502,6 +1502,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-mods-test-mining-guest"
+version = "0.1.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "horizon-mods-test-ui-guest"
 version = "0.1.0"
 dependencies = [

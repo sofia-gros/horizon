@@ -478,6 +478,14 @@ applied to that same slot before another break. A changed stack, invalid
 profile, error or trap cancels the edit. Drops use the original held stack.
 This is API level 10; mods using it require a Horizon that supports it.
 
+The fork and upstream independently assigned level 7 to different functions.
+On this merged fork `render.set-far-terrain` requires level 11, while the
+item APIs retain levels 7–10. Packages checked by older upstream or fork
+versions can still report a misleading level for the other branch; use a
+matching runtime and verify imports when moving packages between branches.
+Different profile owners can coexist; a trapped owner is stopped separately.
+A single profile has one owner: callbacks are not composed across mods.
+
 A server mod runs where the world is simulated: on the dedicated server, on a
 LAN host and on single player's own server, never in a player's window. Its
 manifest says `side = "server"` and `api = "0.3"` (and only a server mod may);
