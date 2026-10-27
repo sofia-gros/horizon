@@ -37,6 +37,18 @@ A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs whe
 - Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`
 - Exports (what the mod provides): `server-events`
 
+## World `horizon-server-mining-mod`
+
+New SDK server mods export this optional interface as well. Older server mods continue to load through horizon-server-mod without receiving it.
+
+- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`
+- Exports (what the mod provides): `mining-events`, `server-events`
+
+## World `mining-host`
+
+- Imports (what the game offers): (none)
+- Exports (what the mod provides): `mining-events`
+
 ## World `horizon-ui-mod`
 
 A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
@@ -738,6 +750,7 @@ Fork preview: checked mining settings and their associated state (server only).
 
 | Function | Signature | What it does |
 | --- | --- | --- |
+| `enable-mining-events` | `func()` | Opt in to the optional synchronous mining-events callback. |
 | `replace-main-hand-profile` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile) -> result<_, string>` | Same comparison, text limits and shared attempt budget as items-edit. On success the existing custom string, Tool component, unbreakable setting and host-owned mining control data are applied together. Other data stays. Selectors must exist in the server's block/tag catalog at application time. The reserved custom_data root horizon:tool_control cannot be a text target. |
 
 ## `server-events`
@@ -821,3 +834,13 @@ An argument's value, parsed as its kind says.
 | `command` | `func(player: player, name: string, args: string, values: list<tuple<string, argument-value>>) -> result<option<string>, string>` | `/name args` typed by `player`: ok(some(text)) is their feedback, err(text) their error in red. `values` holds each argument given, by name, in order (an optional one left out isn't there); a line that doesn't parse never reaches the mod: the player gets vanilla's error. |
 | `block-broken` | `func(player: player, pos: block-pos, state: string)` | A player broke the block at `pos` in their dimension: `state` is what was there, as `minecraft:oak_log[axis=y]`. |
 | `block-placed` | `func(player: player, pos: block-pos, state: string)` | A player placed `state` at `pos` in their dimension. |
+
+## `mining-events`
+
+Access: exported by the mod: the game calls it.
+
+Optional synchronous callback for the mod that owns a held mining profile. Runs after a successful survival break against the exact stack used by the actor. Item edits are applied before another break; a trap or error cancels the edit. It does not run for Creative or for an unowned stack.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `broken` | `func(player-id: string, dimension: string, x: s32, y: s32, z: s32, state: string, hardness: f32) -> result<_, string>` | The actor's owned profile just broke this block; queued edits commit synchronously. |

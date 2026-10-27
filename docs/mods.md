@@ -468,6 +468,16 @@ none.
 
 ### Server mods (API 0.3, experimental)
 
+Fork preview: a server mod with `items-tools` can call
+`items_tools::enable_mining_events()` during initialization and implement
+`ServerMod::mined`. After a successful non-Creative player break, the game
+calls only the mod that owns the held stack's mining profile. The callback
+receives the actor ID, dimension, block position, original state and hardness.
+Its item reads see the captured main hand; a checked text/profile edit is
+applied to that same slot before another break. A changed stack, invalid
+profile, error or trap cancels the edit. Drops use the original held stack.
+This is API level 10; mods using it require a Horizon that supports it.
+
 A server mod runs where the world is simulated: on the dedicated server, on a
 LAN host and on single player's own server, never in a player's window. Its
 manifest says `side = "server"` and `api = "0.3"` (and only a server mod may);

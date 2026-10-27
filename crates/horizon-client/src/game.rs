@@ -3625,6 +3625,8 @@ impl Game<'_> {
         {
             return Ok(());
         }
+        let mining_slot = self.selected;
+        let held = self.held().cloned();
         self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
@@ -3664,7 +3666,6 @@ impl Game<'_> {
             self.mod_block_event(pos, broken, false);
         }
         if removed && !creative {
-            let held = self.held().cloned();
             self.mine_block_with_held(&facts.name, facts.hardness);
             let harvest = !facts.requires_tool
                 || self
@@ -3709,6 +3710,7 @@ impl Game<'_> {
                     );
                 }
             }
+            self.mod_mined(pos, broken, facts.hardness, mining_slot, held.as_ref());
         }
         self.pending.clear(pos);
         self.process_level_events()?;

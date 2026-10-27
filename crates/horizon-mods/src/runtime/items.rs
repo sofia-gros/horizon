@@ -43,6 +43,9 @@ impl super::server_bindings::horizon::mods::items_edit::Host for State {
 }
 
 impl super::server_bindings::horizon::mods::items_tools::Host for State {
+    fn enable_mining_events(&mut self) {
+        self.mining_enabled = true;
+    }
     fn replace_main_hand_profile(
         &mut self,
         player: String,

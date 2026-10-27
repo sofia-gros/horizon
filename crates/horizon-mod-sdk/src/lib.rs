@@ -184,7 +184,7 @@ macro_rules! export_mod {
 pub mod server {
     wit_bindgen::generate!({
         path: "wit",
-        world: "horizon-server-mod",
+        world: "horizon-server-mining-mod",
         pub_export_macro: true,
         export_macro_name: "__export_horizon_server_mod",
         default_bindings_module: "horizon_mod_sdk::server",
@@ -194,6 +194,7 @@ pub mod server {
         },
     });
 
+    pub use exports::horizon::mods::mining_events::Guest as __MiningGuest;
     pub use exports::horizon::mods::server_events::{
         Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,
         ServerCommand,
@@ -231,6 +232,17 @@ pub mod server {
         /// When [`Registration::blocks`] is set: `state` is what was there.
         fn block_broken(&mut self, _player: &Player, _pos: BlockPos, _state: &str) {}
         fn block_placed(&mut self, _player: &Player, _pos: BlockPos, _state: &str) {}
+        /// The owner's exact held stack has just successfully broken a block.
+        fn mined(
+            &mut self,
+            _player_id: &str,
+            _dimension: &str,
+            _pos: [i32; 3],
+            _state: &str,
+            _hardness: f32,
+        ) -> Result<(), String> {
+            Ok(())
+        }
     }
 
     impl Registration {
@@ -439,6 +451,21 @@ macro_rules! export_server_mod {
                 }
                 fn block_placed(player: Player, pos: BlockPos, state: String) {
                     with(|m| m.block_placed(&player, pos, &state))
+                }
+            }
+            impl $crate::server::__MiningGuest for Export {
+                fn broken(
+                    player_id: String,
+                    dimension: String,
+                    x: i32,
+                    y: i32,
+                    z: i32,
+                    state: String,
+                    hardness: f32,
+                ) -> Result<(), String> {
+                    let mut result = Err("The mod is not running".to_string());
+                    with(|m| result = m.mined(&player_id, &dimension, [x, y, z], &state, hardness));
+                    result
                 }
             }
             #[cfg(target_arch = "wasm32")]

@@ -19,7 +19,34 @@ struct Welcome {
 }
 
 impl ServerMod for Welcome {
+    fn mined(
+        &mut self,
+        player: &str,
+        _dimension: &str,
+        _pos: [i32; 3],
+        state: &str,
+        _hardness: f32,
+    ) -> Result<(), String> {
+        // A non-game fixture state exercises the synchronous host transaction.
+        if !state.starts_with("example:mining_fixture") {
+            return Ok(());
+        }
+        items_edit::replace_main_hand_text(
+            player,
+            &["example".into(), "state".into()],
+            "original",
+            "mined",
+        )?;
+        if state.ends_with("error") {
+            return Err("fixture error".into());
+        }
+        if state.ends_with("trap") {
+            panic!("fixture trap");
+        }
+        Ok(())
+    }
     fn init() -> Result<(Self, Registration), String> {
+        items_tools::enable_mining_events();
         let seen = storage::get("seen")
             .map(|b| {
                 String::from_utf8_lossy(&b)

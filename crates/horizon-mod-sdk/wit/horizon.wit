@@ -708,6 +708,8 @@ interface %world {
 
 /// Fork preview: checked mining settings and their associated state (server only).
 interface items-tools {
+    /// Opt in to the optional synchronous mining-events callback.
+    enable-mining-events: func();
     record rule {
         /// Direct block ids, or exactly one #tag selector. At most 64 entries.
         blocks: list<string>,
@@ -825,6 +827,15 @@ interface server-events {
     block-placed: func(player: player, pos: block-pos, state: string);
 }
 
+/// Optional synchronous callback for the mod that owns a held mining profile.
+/// Runs after a successful survival break against the exact stack used by the
+/// actor. Item edits are applied before another break; a trap or error cancels
+/// the edit. It does not run for Creative or for an unowned stack.
+interface mining-events {
+    /// The actor's owned profile just broke this block; queued edits commit synchronously.
+    broken: func(player-id: string, dimension: string, x: s32, y: s32, z: s32, state: string, hardness: f32) -> result<_, string>;
+}
+
 /// A client mod: runs in the player's game.
 world horizon-mod {
     import log;
@@ -848,6 +859,17 @@ world horizon-server-mod {
     import %world;
     import items-tools;
     export server-events;
+}
+
+/// New SDK server mods export this optional interface as well. Older server
+/// mods continue to load through horizon-server-mod without receiving it.
+world horizon-server-mining-mod {
+    include horizon-server-mod;
+    export mining-events;
+}
+
+world mining-host {
+    export mining-events;
 }
 
 /// A mod with widgets (capability `ui`): the SDK builds every mod against

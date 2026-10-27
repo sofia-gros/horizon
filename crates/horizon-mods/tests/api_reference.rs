@@ -158,10 +158,15 @@ fn markdown() -> String {
         if world.docs.contents.is_some() {
             writeln!(w, "{}\n", cell(&world.docs)).unwrap();
         }
+        let imports = names(world.imports.keys().collect());
         writeln!(
             w,
             "- Imports (what the game offers): {}",
-            names(world.imports.keys().collect())
+            if imports.is_empty() {
+                "(none)"
+            } else {
+                &imports
+            }
         )
         .unwrap();
         let exports = names(world.exports.keys().collect());

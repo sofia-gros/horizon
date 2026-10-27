@@ -1053,6 +1053,68 @@ fn server_item_reads_are_frozen_capability_checked_and_budgeted_per_call() {
             "{case}"
         );
     }
+    let edits = mods.server_mined(
+        "welcome",
+        &alex.id,
+        "minecraft:overworld",
+        [0, 1, 2],
+        "example:mining_fixture",
+        1.0,
+    );
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[0].text, "mined");
+    assert_eq!(edits[0].player, alex.id);
+    assert!(
+        mods.server_mined(
+            "other",
+            &alex.id,
+            "minecraft:overworld",
+            [0, 1, 2],
+            "example:mining_fixture",
+            1.0
+        )
+        .is_empty()
+    );
+    assert!(
+        mods.server_mined(
+            "welcome",
+            "other-player",
+            "minecraft:overworld",
+            [0, 1, 2],
+            "example:mining_fixture",
+            1.0
+        )
+        .is_empty()
+    );
+    assert!(
+        mods.server_mined(
+            "welcome",
+            &alex.id,
+            "minecraft:overworld",
+            [0, 1, 2],
+            "example:mining_fixture_error",
+            1.0
+        )
+        .is_empty()
+    );
+    let mut trap = load("welcome.hmod");
+    trap.set_snapshot(Snapshot {
+        items: Some(std::sync::Arc::new(Items)),
+        players: vec![alex.clone()],
+        ..Snapshot::default()
+    });
+    assert!(
+        trap.server_mined(
+            "welcome",
+            &alex.id,
+            "minecraft:overworld",
+            [0, 1, 2],
+            "example:mining_fixture_trap",
+            1.0
+        )
+        .is_empty()
+    );
+    assert!(matches!(trap.entries()[0].status, Status::Failed(_)));
     let output = command(&mut mods, "edit trap");
     assert!(!output.iter().any(|out| matches!(out, Output::ItemEdit(_))));
     assert!(matches!(mods.entries()[0].status, Status::Failed(_)));
