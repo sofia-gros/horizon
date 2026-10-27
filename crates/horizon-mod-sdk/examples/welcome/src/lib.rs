@@ -1,10 +1,12 @@
 //! Example Horizon server mod (`docs/mods.md`, "Server mods"): greets each
 //! player who joins, announces a newcomer to everyone (the players it has
 //! seen are kept in `storage`), `/online` lists who is on and where, and
-//! `/mined` counts the blocks the player broke since the server started.
+//! `/mined [player]` counts the blocks a player broke since the server
+//! started (typed arguments: the chat box completes the player's name).
 use horizon_mod_sdk::{
     server::{
-        BlockPos, Player, Registration, ServerMod, items_edit, items_read, items_tools, players,
+        Args, Argument, BlockPos, Player, Registration, ServerMod, items_edit, items_read,
+        items_tools, players,
     },
     storage,
 };
@@ -27,8 +29,8 @@ impl ServerMod for Welcome {
             })
             .unwrap_or_default();
         let hooks = Registration::new()
-            .command("online")
-            .command("mined")
+            .command_with("online", [])
+            .command_with("mined", [Argument::player("player").optional()])
             .command("hand")
             .command("edit")
             .on_joins()
@@ -59,10 +61,11 @@ impl ServerMod for Welcome {
         &mut self,
         player: &Player,
         name: &str,
-        args: &str,
+        args: &Args,
     ) -> Result<Option<String>, String> {
         Ok(Some(match name {
             "edit" => {
+                let args = args.text();
                 let path = if args == "profile-reserved" {
                     ["horizon:tool_control".into(), "owner".into()]
                 } else {
@@ -134,6 +137,7 @@ impl ServerMod for Welcome {
                 "queued".into()
             }
             "hand" => {
+                let args = args.text();
                 let path: Vec<String> = args.split_whitespace().map(str::to_owned).collect();
                 let reads = if args == "budget" { 17 } else { 1 };
                 let mut item = None;
@@ -162,10 +166,16 @@ impl ServerMod for Welcome {
                 })
                 .collect::<Vec<_>>()
                 .join(", "),
-            _ => {
-                let n = self.mined.get(&player.id).copied().unwrap_or(0);
-                format!("You broke {n} block(s)")
-            }
+            _ => match args.player("player") {
+                Some(other) if other.id != player.id => {
+                    let n = self.mined.get(&other.id).copied().unwrap_or(0);
+                    format!("{} broke {n} block(s)", other.name)
+                }
+                _ => {
+                    let n = self.mined.get(&player.id).copied().unwrap_or(0);
+                    format!("You broke {n} block(s)")
+                }
+            },
         }))
     }
 

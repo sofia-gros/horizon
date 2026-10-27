@@ -901,7 +901,7 @@ fn a_server_mod_without_a_world_reads_nothing() {
     assert!(
         out.iter()
             .any(|o| matches!(o, Output::Reply { text, error: true, .. }
-            if text == "The ground under you isn't loaded")),
+            if text == "That block isn't loaded")),
         "{out:?}"
     );
 }
@@ -1105,10 +1105,11 @@ fn a_server_mod_runs_only_where_the_world_does() {
 
     let mut mods = Mods::load_for(Runs::Server, paths, |_| true, |c| c == "give");
     assert!(mods.runs_server());
-    assert_eq!(
-        mods.server_commands().collect::<Vec<_>>(),
-        ["online", "mined", "hand", "edit"]
-    );
+    let commands: Vec<_> = mods.server_commands().map(|c| c.name.as_str()).collect();
+    assert_eq!(commands, ["online", "mined", "hand", "edit"]);
+    let mined = mods.server_commands().nth(1).unwrap();
+    assert_eq!(mined.arguments[0].kind, horizon_mods::ArgumentKind::Player);
+    assert!(mined.arguments[0].optional);
     assert_eq!(mods.commands().count(), 0, "not the window's chat commands");
     let alex = alex();
     mods.set_snapshot(Snapshot {
