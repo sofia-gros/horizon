@@ -17,6 +17,12 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
     let baby = super::lan::baby_index(&m.kind.id);
     for (index, _, value) in values {
         match (*index, value) {
+            // Entity.DATA_POSE: a player's or mannequin's box follows it.
+            (6, Value::Id(pose))
+                if matches!(&*m.kind.id, "minecraft:player" | "minecraft:mannequin") =>
+            {
+                m.extra.avatar_pose = horizon_client::pose::Pose::from_id(*pose);
+            }
             // Entity.DATA_SHARED_FLAGS_ID's FLAG_ONFIRE: Entity.isOnFire on a
             // client, which draws the flames. A client doesn't count the
             // fire down: the flag goes off when the server's fire is out.
@@ -79,6 +85,8 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Mooshroom, 17, Value::Int(variant)) => {
                 m.extra.variant = (*variant == 1) as u8
             }
+            // Piglin.DATA_IS_DANCING: the dance pose.
+            (Species::Piglin, 19, Value::Bool(dancing)) => m.extra.scratch[0] = i32::from(*dancing),
             // TamableAnimal.DATA_FLAGS_ID: sitting 1, tame 4.
             (Species::Wolf | Species::Cat | Species::Parrot, 18, Value::Byte(flags)) => {
                 m.extra.sitting = flags & 1 != 0;

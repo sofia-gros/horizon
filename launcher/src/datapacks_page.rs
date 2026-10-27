@@ -16,6 +16,15 @@ pub(super) struct WorldPacks {
     note: Option<Result<String, String>>,
 }
 
+impl WorldPacks {
+    /// Reads the open world's packs again, after something else changed them.
+    pub(super) fn reread(&mut self) {
+        if let Some(world) = &self.open {
+            self.list = datapacks::list(world);
+        }
+    }
+}
+
 impl Launcher {
     /// Opens or closes the packs of `world` under its row.
     pub(super) fn toggle_world_packs(&mut self, world: &World) {
@@ -90,6 +99,8 @@ impl Launcher {
             .drag_over::<ExternalPaths>(move |s, _, _, _| s.border_color(t.accent))
             .on_drop(cx.listener(move |this, paths: &ExternalPaths, _, cx| {
                 this.add_world_packs(path.clone(), paths.paths().to_vec());
+                // Not the window's import as well.
+                cx.stop_propagation();
                 cx.notify();
             }))
             .child(row)
