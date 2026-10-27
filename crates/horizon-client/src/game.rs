@@ -8012,7 +8012,14 @@ impl Game<'_> {
     /// scaled by the attack strength, a mace's smash, the critical hit, then
     /// enchantments.
     pub(super) fn melee_damage(&mut self, target_kind: &str) -> (f32, f32, bool, bool) {
-        let hand_damage = 1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage);
+        let profile = self
+            .held()
+            .and_then(horizon_client::item_tool::melee_profile);
+        let hand_damage = 1.0
+            + profile.map_or_else(
+                || self.attack_item_info().map_or(0.0, |i| i.attack_damage),
+                |p| p.damage_bonus,
+            );
         // Riptide's spin replaces the attack damage attribute.
         let spin = self.player.as_ref().map_or(0.0, |p| p.auto_spin_attack_dmg);
         let damage = if spin > 0.0 {
@@ -8021,7 +8028,12 @@ impl Game<'_> {
             hand_damage + self.effect_attack_bonus()
         };
         let scale = self.attack_strength_scale();
-        let mut amount = damage * (0.2 + scale * scale * 0.8);
+        let multiplier = if spin > 0.0 {
+            1.0
+        } else {
+            profile.map_or(1.0, |p| p.damage_multiplier)
+        };
+        let mut amount = damage * multiplier * (0.2 + scale * scale * 0.8);
         // Item.getAttackDamageBonus (a mace's smash), before the critical hit.
         amount += self.smash_damage_bonus(target_kind);
         let player = self.player.as_ref();
@@ -8036,7 +8048,11 @@ impl Game<'_> {
         let restricted = self.potions.effects.get("blindness").is_some() || self.riding.is_some();
         let crit = scale > 0.9 && falling && !restricted;
         if crit {
-            amount *= 1.5;
+            if profile.is_some() && spin <= 0.0 {
+                amount += damage * 0.5 * (0.2 + scale * scale * 0.8);
+            } else {
+                amount *= 1.5;
+            }
         }
         // Enchantment damage (sharpness, smite, bane) scaled by the attack strength.
         let magic_boost = self.enchant_damage_bonus(target_kind) * scale;
@@ -8045,8 +8061,15 @@ impl Game<'_> {
     }
     /// `Player.getAttackStrengthScale(0.5)`.
     fn attack_strength_scale(&self) -> f32 {
-        let speed = self.attack_item_info().map_or(0.0, |i| i.attack_speed);
-        let delay = 20.0 / (4.0 + speed).max(0.1);
+        let delay = if let Some(profile) = self
+            .held()
+            .and_then(horizon_client::item_tool::melee_profile)
+        {
+            20.0 / profile.attack_speed.max(0.1)
+        } else {
+            let speed = self.attack_item_info().map_or(0.0, |i| i.attack_speed);
+            20.0 / (4.0 + speed).max(0.1)
+        };
         ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0)
     }
     /// `Player.isSweepAttack`: a charged, grounded sword hit below the movement limit.
@@ -8170,6 +8193,13 @@ impl Game<'_> {
     }
     /// Player.attack with the attack-strength charge, crits and knockback.
     fn attack(&mut self) -> bool {
+        if self
+            .held()
+            .and_then(horizon_client::item_tool::melee_profile)
+            .is_some_and(|p| !p.enabled)
+        {
+            return false;
+        }
         if self.spectator() {
             return false;
         }
@@ -8228,6 +8258,13 @@ impl Game<'_> {
     /// `Player.attack` on a mob: the damage, knockback, sweep, particles and
     /// sounds.
     pub(super) fn attack_mob(&mut self, index: usize) {
+        if self
+            .held()
+            .and_then(horizon_client::item_tool::melee_profile)
+            .is_some_and(|p| !p.enabled)
+        {
+            return;
+        }
         let attack_slot = self.selected;
         let attack_stack = self.held().cloned();
         let target_kind = self.mobs[index].kind.id.clone();

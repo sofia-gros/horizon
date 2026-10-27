@@ -756,6 +756,19 @@ interface items-tools {
     /// damage and max-damage components. Maximum is positive and damage must
     /// not exceed it. This does not itself prevent vanilla destruction.
     replace-main-hand-profile-durability: func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32) -> result<_, string>;
+    /// Generic main-hand combat settings resolved by the mod for this stack.
+    record melee-profile {
+        /// Additive attack damage above the player's base, before effects.
+        damage-bonus: f32,
+        /// Multiplier applied to base melee damage before critical bonus.
+        damage-multiplier: f32,
+        /// Total attacks per second, including the player's base speed.
+        attack-speed: f32,
+        /// False prevents direct attacks with this stack.
+        enabled: bool,
+    }
+    /// Atomically replace state, tool, vanilla durability and melee settings.
+    replace-main-hand-combat-profile: func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32, melee: melee-profile) -> result<_, string>;
 }
 
 /// What the server calls in a server mod (manifest `api = "0.3"`,

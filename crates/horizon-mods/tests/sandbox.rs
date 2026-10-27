@@ -259,7 +259,7 @@ experimental = ["ui", "render", "input", "recipes"]
     assert_eq!(level("coords_hud.hmod"), 0);
     // The UI guest uses the upstream far terrain API, level 11 on this fork.
     assert_eq!(level("horizon_mods_test_ui_guest.hmod"), 11);
-    assert_eq!(level("welcome.hmod"), 12);
+    assert_eq!(level("welcome.hmod"), 14);
 }
 
 #[test]
@@ -1052,7 +1052,9 @@ fn server_item_reads_are_frozen_capability_checked_and_budgeted_per_call() {
             .iter()
             .any(|out| matches!(out, Output::ItemEdit(edit) if edit.durability == Some((7, 85))))
     );
+    assert!(command(&mut mods, "edit profile-combat").iter().any(|out| matches!(out, Output::ItemEdit(edit) if edit.melee.as_ref().is_some_and(|m| m.damage_bonus == 2.25 && m.attack_speed == 1.2))));
     for case in [
+        "edit profile-bad-combat",
         "edit profile-bad-durability",
         "edit error",
         "edit twice",

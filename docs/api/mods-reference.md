@@ -766,12 +766,24 @@ Fork preview: checked mining settings and their associated state (server only).
 | `mining-enabled` | `bool` | False prevents mining in prediction and on the server, including Creative. |
 | `unbreakable` | `bool` | Sets the vanilla unbreakable component; does not implement custom wear. |
 
+### record `melee-profile`
+
+Generic main-hand combat settings resolved by the mod for this stack.
+
+| Field | Type | |
+| --- | --- | --- |
+| `damage-bonus` | `f32` | Additive attack damage above the player's base, before effects. |
+| `damage-multiplier` | `f32` | Multiplier applied to base melee damage before critical bonus. |
+| `attack-speed` | `f32` | Total attacks per second, including the player's base speed. |
+| `enabled` | `bool` | False prevents direct attacks with this stack. |
+
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `enable-mining-events` | `func()` | Opt in to the optional synchronous mining-events callback. |
 | `enable-melee-events` | `func()` | Opt in to synchronous successful melee-hit callbacks. |
 | `replace-main-hand-profile` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile) -> result<_, string>` | Same comparison, text limits and shared attempt budget as items-edit. On success the existing custom string, Tool component, unbreakable setting and host-owned mining control data are applied together. Other data stays. Selectors must exist in the server's block/tag catalog at application time. The reserved custom_data root horizon:tool_control cannot be a text target. |
 | `replace-main-hand-profile-durability` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32) -> result<_, string>` | Atomically update the same checked state and profile, plus vanilla damage and max-damage components. Maximum is positive and damage must not exceed it. This does not itself prevent vanilla destruction. |
+| `replace-main-hand-combat-profile` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32, melee: melee-profile) -> result<_, string>` | Atomically replace state, tool, vanilla durability and melee settings. |
 
 ## `server-events`
 

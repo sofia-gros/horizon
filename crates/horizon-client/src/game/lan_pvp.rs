@@ -121,6 +121,13 @@ impl Game<'_> {
     /// The attacker's side of `Player.attack` (the host, or a guest swapped
     /// in): the damage, the charge reset and the swing.
     pub(super) fn pvp_strike(&mut self) -> Option<Strike> {
+        if self
+            .held()
+            .and_then(horizon_client::item_tool::melee_profile)
+            .is_some_and(|p| !p.enabled)
+        {
+            return None;
+        }
         let p = self.player.as_ref()?;
         let from = [p.position.x, p.position.y, p.position.z];
         let (amount, scale, crit, magic) = self.melee_damage("minecraft:player");

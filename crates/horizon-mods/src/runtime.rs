@@ -16,10 +16,10 @@ use wasmtime::{
 };
 
 mod items;
-pub use items::{ITEM_TEXT_MAX, ItemEdit, ItemReader, validate_tool_profile};
+pub use items::{ITEM_TEXT_MAX, ItemEdit, ItemReader, valid_melee, validate_tool_profile};
 pub use server_bindings::horizon::mods::items_read::HeldStack as ServerHeldStack;
 pub use server_bindings::horizon::mods::items_tools::{
-    Profile as ServerToolProfile, Rule as ServerToolRule,
+    MeleeProfile as ServerMeleeProfile, Profile as ServerToolProfile, Rule as ServerToolRule,
 };
 
 mod bindings {

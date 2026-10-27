@@ -291,10 +291,17 @@ impl Game<'_> {
     }
     /// `Attributes.ATTACK_SPEED` with the main-hand item's modifier.
     pub(super) fn main_hand_attack_speed(&self) -> f64 {
-        horizon_client::attack_strength::BASE_ATTACK_SPEED
-            + self
-                .attack_item_info()
-                .map_or(0.0, |i| f64::from(i.attack_speed))
+        self.held()
+            .and_then(horizon_client::item_tool::melee_profile)
+            .map_or_else(
+                || {
+                    horizon_client::attack_strength::BASE_ATTACK_SPEED
+                        + self
+                            .attack_item_info()
+                            .map_or(0.0, |i| f64::from(i.attack_speed))
+                },
+                |profile| f64::from(profile.attack_speed),
+            )
     }
     /// The item whose attack damage and speed modifiers the player has (`attack_item`).
     pub(super) fn attack_item_info(&self) -> Option<&horizon_client::items::ItemInfo> {

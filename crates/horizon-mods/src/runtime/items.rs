@@ -18,6 +18,7 @@ pub struct ItemEdit {
     pub profile: Option<super::ServerToolProfile>,
     /// Optional checked vanilla damage and max-damage values.
     pub durability: Option<(u32, u32)>,
+    pub melee: Option<super::ServerMeleeProfile>,
     pub snapshot: std::sync::Arc<dyn ItemReader>,
 }
 
@@ -29,6 +30,7 @@ impl PartialEq for ItemEdit {
             && self.text == other.text
             && self.profile == other.profile
             && self.durability == other.durability
+            && self.melee == other.melee
             && std::sync::Arc::ptr_eq(&self.snapshot, &other.snapshot)
     }
 }
@@ -41,7 +43,7 @@ impl super::server_bindings::horizon::mods::items_edit::Host for State {
         expected: String,
         replacement: String,
     ) -> Result<(), String> {
-        self.queue_item_edit(player, custom_path, expected, replacement, None, None)
+        self.queue_item_edit(player, custom_path, expected, replacement, None, None, None)
     }
 }
 
@@ -60,7 +62,15 @@ impl super::server_bindings::horizon::mods::items_tools::Host for State {
         replacement: String,
         tool: super::ServerToolProfile,
     ) -> Result<(), String> {
-        self.queue_item_edit(player, custom_path, expected, replacement, Some(tool), None)
+        self.queue_item_edit(
+            player,
+            custom_path,
+            expected,
+            replacement,
+            Some(tool),
+            None,
+            None,
+        )
     }
     fn replace_main_hand_profile_durability(
         &mut self,
@@ -82,6 +92,35 @@ impl super::server_bindings::horizon::mods::items_tools::Host for State {
             replacement,
             Some(tool),
             Some((damage, max_damage)),
+            None,
+        )
+    }
+    fn replace_main_hand_combat_profile(
+        &mut self,
+        player: String,
+        path: Vec<String>,
+        expected: String,
+        replacement: String,
+        tool: super::ServerToolProfile,
+        damage: u32,
+        max_damage: u32,
+        melee: super::ServerMeleeProfile,
+    ) -> Result<(), String> {
+        if max_damage == 0
+            || max_damage > i32::MAX as u32
+            || damage > max_damage
+            || !valid_melee(&melee)
+        {
+            return Err("invalid item durability or melee profile".into());
+        }
+        self.queue_item_edit(
+            player,
+            path,
+            expected,
+            replacement,
+            Some(tool),
+            Some((damage, max_damage)),
+            Some(melee),
         )
     }
 }
@@ -95,6 +134,7 @@ impl State {
         replacement: String,
         profile: Option<super::ServerToolProfile>,
         durability: Option<(u32, u32)>,
+        melee: Option<super::ServerMeleeProfile>,
     ) -> Result<(), String> {
         if self.item_edits_left == 0 {
             return Err("items-edit budget exhausted".into());
@@ -134,10 +174,21 @@ impl State {
             text: replacement,
             profile,
             durability,
+            melee,
             snapshot,
         }));
         Ok(())
     }
+}
+
+/// Bounded values accepted from untrusted mods and checked again on application.
+pub fn valid_melee(m: &super::ServerMeleeProfile) -> bool {
+    m.damage_bonus.is_finite()
+        && (0.0..=2048.0).contains(&m.damage_bonus)
+        && m.damage_multiplier.is_finite()
+        && (0.0..=64.0).contains(&m.damage_multiplier)
+        && m.attack_speed.is_finite()
+        && (0.01..=1024.0).contains(&m.attack_speed)
 }
 
 /// Bounds checked again by native application adapters; no material-specific rules.

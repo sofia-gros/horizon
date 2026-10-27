@@ -82,17 +82,48 @@ impl ServerItems {
         let Tag::Compound(data) = &mut custom else {
             return Err("custom data is not a compound".into());
         };
-        data.insert(
-            "horizon:tool_control".into(),
-            Tag::compound([
-                ("schema", Tag::Int(1)),
-                ("owner", Tag::String(edit.owner.as_str().into())),
-                (
-                    "mining_enabled",
-                    Tag::Byte(i8::from(profile.mining_enabled)),
-                ),
-            ]),
-        );
+        if edit
+            .melee
+            .as_ref()
+            .is_some_and(|m| !horizon_mods::valid_melee(m))
+        {
+            return Err("invalid melee profile".into());
+        }
+        let prior =
+            data.get(&"horizon:tool_control".into())
+                .and_then(|old| match old.get("owner") {
+                    Some(Tag::String(owner)) if owner.to_string_lossy() == edit.owner => {
+                        old.get("melee").cloned()
+                    }
+                    _ => None,
+                });
+        let melee = edit
+            .melee
+            .as_ref()
+            .map(|m| {
+                Tag::compound([
+                    ("damage_bonus", Tag::Float(m.damage_bonus.to_bits())),
+                    (
+                        "damage_multiplier",
+                        Tag::Float(m.damage_multiplier.to_bits()),
+                    ),
+                    ("attack_speed", Tag::Float(m.attack_speed.to_bits())),
+                    ("enabled", Tag::Byte(i8::from(m.enabled))),
+                ])
+            })
+            .or(prior);
+        let mut control = vec![
+            ("schema", Tag::Int(1)),
+            ("owner", Tag::String(edit.owner.as_str().into())),
+            (
+                "mining_enabled",
+                Tag::Byte(i8::from(profile.mining_enabled)),
+            ),
+        ];
+        if let Some(melee) = melee {
+            control.push(("melee", melee));
+        }
+        data.insert("horizon:tool_control".into(), Tag::compound(control));
         let rules = profile
             .rules
             .iter()
@@ -223,6 +254,7 @@ mod tests {
             text: "new".into(),
             snapshot: snapshot.clone(),
             durability: None,
+            melee: None,
             profile: Some(horizon_mods::ServerToolProfile {
                 rules: vec![horizon_mods::ServerToolRule {
                     blocks: vec!["#minecraft:mineable/pickaxe".into()],
@@ -241,6 +273,16 @@ mod tests {
         assert!(snapshot.apply(0, &mut cell, &edit).is_err());
         assert_eq!(cell.as_ref(), Some(&original));
         edit.durability = Some((60, 85));
+        edit.melee = Some(horizon_mods::ServerMeleeProfile {
+            damage_bonus: 2.25,
+            damage_multiplier: 1.1,
+            attack_speed: 1.2,
+            enabled: true,
+        });
+        edit.melee.as_mut().unwrap().attack_speed = f32::NAN;
+        assert!(snapshot.apply(0, &mut cell, &edit).is_err());
+        assert_eq!(cell.as_ref(), Some(&original));
+        edit.melee.as_mut().unwrap().attack_speed = 1.2;
         edit.profile.as_mut().unwrap().default_speed = f32::NAN;
         assert!(snapshot.apply(0, &mut cell, &edit).is_err());
         assert_eq!(cell.as_ref(), Some(&original));
@@ -251,6 +293,17 @@ mod tests {
         let changed = cell.as_ref().unwrap();
         assert_eq!((changed.count, changed.damage), (1, 60));
         assert_eq!(crate::item_tool::max_damage(changed, 59), 85);
+        let melee = crate::item_tool::melee_profile(changed).unwrap();
+        assert_eq!(
+            (
+                melee.damage_bonus,
+                melee.damage_multiplier,
+                melee.attack_speed,
+                melee.enabled
+            ),
+            (2.25, 1.1, 1.2, true)
+        );
+        assert!(crate::item_tool::melee_profile(&original).is_none());
         assert!(crate::item_tool::unbreakable(changed));
         assert!(!crate::item_tool::mining_enabled(changed));
         assert_eq!(

@@ -133,7 +133,28 @@ impl ServerMod for Welcome {
                         ),
                         unbreakable: !matches!(args, "profile-zero" | "profile-wear"),
                     };
-                    if args == "profile-durability" || args == "profile-bad-durability" {
+                    if args == "profile-combat" || args == "profile-bad-combat" {
+                        let melee = items_tools::MeleeProfile {
+                            damage_bonus: 2.25,
+                            damage_multiplier: 1.1,
+                            attack_speed: if args == "profile-bad-combat" {
+                                0.0
+                            } else {
+                                1.2
+                            },
+                            enabled: true,
+                        };
+                        items_tools::replace_main_hand_combat_profile(
+                            &player.id,
+                            &path,
+                            expected,
+                            &replacement,
+                            &profile,
+                            7,
+                            85,
+                            melee,
+                        )?;
+                    } else if args == "profile-durability" || args == "profile-bad-durability" {
                         let damage = if args == "profile-durability" { 7 } else { 86 };
                         items_tools::replace_main_hand_profile_durability(
                             &player.id,

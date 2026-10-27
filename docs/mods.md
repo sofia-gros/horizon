@@ -481,6 +481,9 @@ This is API level 10; mods using it require a Horizon that supports it.
 Fork preview: the SDK and sandbox also expose opt-in `melee-events` at API
 level 13. The game dispatches it for landed non-Creative direct mob hits. PvP and
 nonliving targets are not connected yet; game-level verification is pending.
+The API level 14 combat profile atomically sets bounded main-hand damage,
+multiplier, speed and attack permission with the checked item state. It is
+experimental; complex target-dependent modifier hooks are not represented.
 
 The fork and upstream independently assigned level 7 to different functions.
 On this merged fork `render.set-far-terrain` requires level 11, while the
