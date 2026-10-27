@@ -727,6 +727,8 @@ interface %world {
 interface items-tools {
     /// Opt in to the optional synchronous mining-events callback.
     enable-mining-events: func();
+    /// Opt in to synchronous successful melee-hit callbacks.
+    enable-melee-events: func();
     record rule {
         /// Direct block ids, or exactly one #tag selector. At most 64 entries.
         blocks: list<string>,
@@ -857,6 +859,14 @@ interface mining-events {
     broken: func(player-id: string, dimension: string, x: s32, y: s32, z: s32, state: string, hardness: f32) -> result<_, string>;
 }
 
+/// Optional synchronous successful melee hit for the held profile owner.
+/// Host provides the acting player and struck entity, and applies checked
+/// item edits to that exact stack before another action. Error/trap cancels edits.
+interface melee-events {
+    /// A direct successful hit; item edits are checked against the acting stack.
+    hit: func(player-id: string, dimension: string, target-id: u64, target-kind: string, dealt: f32) -> result<_, string>;
+}
+
 /// A client mod: runs in the player's game.
 world horizon-mod {
     import log;
@@ -891,6 +901,15 @@ world horizon-server-mining-mod {
 
 world mining-host {
     export mining-events;
+}
+
+world horizon-server-melee-mod {
+    include horizon-server-mining-mod;
+    export melee-events;
+}
+
+world melee-host {
+    export melee-events;
 }
 
 /// A mod with widgets (capability `ui`): the SDK builds every mod against

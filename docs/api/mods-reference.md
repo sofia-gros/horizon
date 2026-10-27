@@ -49,6 +49,16 @@ New SDK server mods export this optional interface as well. Older server mods co
 - Imports (what the game offers): (none)
 - Exports (what the mod provides): `mining-events`
 
+## World `horizon-server-melee-mod`
+
+- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`
+- Exports (what the mod provides): `melee-events`, `mining-events`, `server-events`
+
+## World `melee-host`
+
+- Imports (what the game offers): (none)
+- Exports (what the mod provides): `melee-events`
+
 ## World `horizon-ui-mod`
 
 A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
@@ -759,6 +769,7 @@ Fork preview: checked mining settings and their associated state (server only).
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `enable-mining-events` | `func()` | Opt in to the optional synchronous mining-events callback. |
+| `enable-melee-events` | `func()` | Opt in to synchronous successful melee-hit callbacks. |
 | `replace-main-hand-profile` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile) -> result<_, string>` | Same comparison, text limits and shared attempt budget as items-edit. On success the existing custom string, Tool component, unbreakable setting and host-owned mining control data are applied together. Other data stays. Selectors must exist in the server's block/tag catalog at application time. The reserved custom_data root horizon:tool_control cannot be a text target. |
 | `replace-main-hand-profile-durability` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32) -> result<_, string>` | Atomically update the same checked state and profile, plus vanilla damage and max-damage components. Maximum is positive and damage must not exceed it. This does not itself prevent vanilla destruction. |
 
@@ -853,3 +864,13 @@ Optional synchronous callback for the mod that owns a held mining profile. Runs 
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `broken` | `func(player-id: string, dimension: string, x: s32, y: s32, z: s32, state: string, hardness: f32) -> result<_, string>` | The actor's owned profile just broke this block; queued edits commit synchronously. |
+
+## `melee-events`
+
+Access: exported by the mod: the game calls it.
+
+Optional synchronous successful melee hit for the held profile owner. Host provides the acting player and struck entity, and applies checked item edits to that exact stack before another action. Error/trap cancels edits.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `hit` | `func(player-id: string, dimension: string, target-id: u64, target-kind: string, dealt: f32) -> result<_, string>` | A direct successful hit; item edits are checked against the acting stack. |

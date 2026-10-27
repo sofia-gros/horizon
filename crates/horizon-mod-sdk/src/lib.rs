@@ -184,7 +184,7 @@ macro_rules! export_mod {
 pub mod server {
     wit_bindgen::generate!({
         path: "wit",
-        world: "horizon-server-mining-mod",
+        world: "horizon-server-melee-mod",
         pub_export_macro: true,
         export_macro_name: "__export_horizon_server_mod",
         default_bindings_module: "horizon_mod_sdk::server",
@@ -194,6 +194,7 @@ pub mod server {
         },
     });
 
+    pub use exports::horizon::mods::melee_events::Guest as __MeleeGuest;
     pub use exports::horizon::mods::mining_events::Guest as __MiningGuest;
     pub use exports::horizon::mods::server_events::{
         Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,
@@ -240,6 +241,17 @@ pub mod server {
             _pos: [i32; 3],
             _state: &str,
             _hardness: f32,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        /// The owned held stack landed a successful direct melee hit.
+        fn melee_hit(
+            &mut self,
+            _player_id: &str,
+            _dimension: &str,
+            _target_id: u64,
+            _target_kind: &str,
+            _dealt: f32,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -465,6 +477,21 @@ macro_rules! export_server_mod {
                 ) -> Result<(), String> {
                     let mut result = Err("The mod is not running".to_string());
                     with(|m| result = m.mined(&player_id, &dimension, [x, y, z], &state, hardness));
+                    result
+                }
+            }
+            impl $crate::server::__MeleeGuest for Export {
+                fn hit(
+                    player_id: String,
+                    dimension: String,
+                    target_id: u64,
+                    target_kind: String,
+                    dealt: f32,
+                ) -> Result<(), String> {
+                    let mut result = Err("The mod is not running".to_string());
+                    with(|m| {
+                        result = m.melee_hit(&player_id, &dimension, target_id, &target_kind, dealt)
+                    });
                     result
                 }
             }

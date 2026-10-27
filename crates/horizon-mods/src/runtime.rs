@@ -40,6 +40,9 @@ mod server_bindings {
         },
     });
 }
+mod melee_bindings {
+    wasmtime::component::bindgen!({ path: "../horizon-mod-sdk/wit", world: "melee-host" });
+}
 mod mining_bindings {
     wasmtime::component::bindgen!({ path: "../horizon-mod-sdk/wit", world: "mining-host" });
 }
@@ -354,6 +357,7 @@ struct Running {
     /// server mod.
     ui: Option<UiHost>,
     mining: Option<mining_bindings::MiningHost>,
+    melee: Option<melee_bindings::MeleeHost>,
     hooks: Hooks,
     /// It imports `game.raycast`.
     raycasts: bool,
@@ -471,6 +475,7 @@ struct State {
     item_edits: std::collections::HashSet<String>,
     item_edits_left: usize,
     mining_enabled: bool,
+    melee_enabled: bool,
     limits: StoreLimits,
     world: WorldSlot,
 }
@@ -688,6 +693,7 @@ impl Mods {
             item_edits: Default::default(),
             item_edits_left: 8,
             mining_enabled: false,
+            melee_enabled: false,
             limits: StoreLimitsBuilder::new()
                 .memory_size(MEMORY)
                 .instances(16)
@@ -702,6 +708,11 @@ impl Mods {
             .map_err(|e| reason(&e))?;
         let mining = if server {
             mining_bindings::MiningHost::new(&mut store, &instance).ok()
+        } else {
+            None
+        };
+        let melee = if server {
+            melee_bindings::MeleeHost::new(&mut store, &instance).ok()
         } else {
             None
         };
@@ -752,6 +763,7 @@ impl Mods {
             store,
             ui,
             mining,
+            melee,
             hooks,
             raycasts: functions.iter().any(|f| f == "game.raycast"),
             item_reads: functions.iter().any(|f| {
@@ -1000,6 +1012,60 @@ impl Mods {
         }
         edits
     }
+    /// Call only the owned profile's synchronous successful melee callback.
+    pub fn server_melee_hit(
+        &mut self,
+        owner: &str,
+        player: &str,
+        dimension: &str,
+        target_id: u64,
+        target_kind: &str,
+        dealt: f32,
+    ) -> Vec<ItemEdit> {
+        let Some(i) = self.entries.iter().position(|e| {
+            e.manifest.as_ref().is_some_and(|m| m.id == owner)
+                && e.run.as_ref().is_some_and(|r| {
+                    r.hooks.server().is_some() && r.melee.is_some() && r.store.data().melee_enabled
+                })
+        }) else {
+            return Vec::new();
+        };
+        let start = self.out.len();
+        self.call(i, FUEL_EVENT, |run| {
+            let result = run
+                .melee
+                .as_ref()
+                .expect("checked")
+                .horizon_mods_melee_events()
+                .call_hit(
+                    &mut run.store,
+                    player,
+                    dimension,
+                    target_id,
+                    target_kind,
+                    dealt,
+                );
+            if matches!(&result, Ok(Err(_))) {
+                run.store
+                    .data_mut()
+                    .out
+                    .retain(|output| !matches!(output, Output::ItemEdit(_)));
+            }
+            result
+        });
+        let mut edits = Vec::new();
+        for output in self.out.split_off(start) {
+            match output {
+                Output::ItemEdit(edit) if edit.owner == owner && edit.player == player => {
+                    edits.push(edit)
+                }
+                Output::ItemEdit(_) => {}
+                other => self.out.push(other),
+            }
+        }
+        edits
+    }
+
     /// `player` joined the server (they are in the snapshot's players).
     pub fn player_joined(&mut self, player: &ServerPlayer) {
         self.each_server(

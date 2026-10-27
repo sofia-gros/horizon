@@ -207,7 +207,7 @@ fn undeclared_capabilities_are_refused() {
 /// from the functions they import.
 #[test]
 fn a_mod_for_a_newer_horizon_is_refused() {
-    use horizon_mods::api_level::{LEVEL, imports, needed};
+    use horizon_mods::api_level::{imports, needed};
     use wit_parser::{ManglingAndAbi, Resolve};
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let wit = std::fs::read_to_string(root.join("crates/horizon-mod-sdk/wit/horizon.wit"))
@@ -259,7 +259,7 @@ experimental = ["ui", "render", "input", "recipes"]
     assert_eq!(level("coords_hud.hmod"), 0);
     // The UI guest uses the upstream far terrain API, level 11 on this fork.
     assert_eq!(level("horizon_mods_test_ui_guest.hmod"), 11);
-    assert_eq!(level("welcome.hmod"), LEVEL);
+    assert_eq!(level("welcome.hmod"), 12);
 }
 
 #[test]
@@ -1544,14 +1544,62 @@ fn mining_callbacks_isolate_distinct_mods_and_failures() {
         assert_eq!(edits[0].owner, owner);
         assert_eq!(edits[0].player, player.id);
     }
+    for owner in ["miner_a", "miner_b"] {
+        let edits = mods.server_melee_hit(
+            owner,
+            &player.id,
+            "minecraft:overworld",
+            42,
+            "example:mob",
+            3.0,
+        );
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            (edits[0].owner.as_str(), edits[0].text.as_str()),
+            (owner, "hit")
+        );
+    }
     assert!(
-        mods.server_mined(
+        mods.server_melee_hit(
+            "absent",
+            &player.id,
+            "minecraft:overworld",
+            42,
+            "example:mob",
+            3.0
+        )
+        .is_empty()
+    );
+    assert!(
+        mods.server_melee_hit(
             "miner_a",
             &player.id,
             "minecraft:overworld",
-            [1, 2, 3],
+            42,
+            "example:error",
+            3.0
+        )
+        .is_empty()
+    );
+    assert!(
+        mods.server_melee_hit(
+            "miner_a",
+            "another-player",
+            "minecraft:overworld",
+            42,
+            "example:mob",
+            3.0
+        )
+        .is_empty()
+    );
+    assert!(
+        mods.server_melee_hit(
+            "miner_a",
+            &player.id,
+            "minecraft:overworld",
+            42,
             "example:trap",
-            1.0
+            3.0
         )
         .is_empty()
     );

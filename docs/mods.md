@@ -478,6 +478,10 @@ applied to that same slot before another break. A changed stack, invalid
 profile, error or trap cancels the edit. Drops use the original held stack.
 This is API level 10; mods using it require a Horizon that supports it.
 
+Fork preview: the SDK and sandbox also expose opt-in `melee-events` at API
+level 13. The game does not dispatch it yet; it must not be relied on for
+gameplay until the server attack path is connected and verified.
+
 The fork and upstream independently assigned level 7 to different functions.
 On this merged fork `render.set-far-terrain` requires level 11, while the
 item APIs retain levels 7–10. Packages checked by older upstream or fork
