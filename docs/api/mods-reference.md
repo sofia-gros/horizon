@@ -760,6 +760,7 @@ Fork preview: checked mining settings and their associated state (server only).
 | --- | --- | --- |
 | `enable-mining-events` | `func()` | Opt in to the optional synchronous mining-events callback. |
 | `replace-main-hand-profile` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile) -> result<_, string>` | Same comparison, text limits and shared attempt budget as items-edit. On success the existing custom string, Tool component, unbreakable setting and host-owned mining control data are applied together. Other data stays. Selectors must exist in the server's block/tag catalog at application time. The reserved custom_data root horizon:tool_control cannot be a text target. |
+| `replace-main-hand-profile-durability` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32) -> result<_, string>` | Atomically update the same checked state and profile, plus vanilla damage and max-damage components. Maximum is positive and damage must not exceed it. This does not itself prevent vanilla destruction. |
 
 ## `server-events`
 

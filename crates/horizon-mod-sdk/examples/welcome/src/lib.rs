@@ -133,13 +133,26 @@ impl ServerMod for Welcome {
                         ),
                         unbreakable: !matches!(args, "profile-zero" | "profile-wear"),
                     };
-                    items_tools::replace_main_hand_profile(
-                        &player.id,
-                        &path,
-                        expected,
-                        &replacement,
-                        &profile,
-                    )?;
+                    if args == "profile-durability" || args == "profile-bad-durability" {
+                        let damage = if args == "profile-durability" { 7 } else { 86 };
+                        items_tools::replace_main_hand_profile_durability(
+                            &player.id,
+                            &path,
+                            expected,
+                            &replacement,
+                            &profile,
+                            damage,
+                            85,
+                        )?;
+                    } else {
+                        items_tools::replace_main_hand_profile(
+                            &player.id,
+                            &path,
+                            expected,
+                            &replacement,
+                            &profile,
+                        )?;
+                    }
                     if args == "profile-trap" {
                         panic!("profile trap");
                     }

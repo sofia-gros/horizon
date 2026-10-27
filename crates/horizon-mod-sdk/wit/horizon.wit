@@ -750,6 +750,10 @@ interface items-tools {
     /// Selectors must exist in the server's block/tag catalog at application time.
     /// The reserved custom_data root horizon:tool_control cannot be a text target.
     replace-main-hand-profile: func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile) -> result<_, string>;
+    /// Atomically update the same checked state and profile, plus vanilla
+    /// damage and max-damage components. Maximum is positive and damage must
+    /// not exceed it. This does not itself prevent vanilla destruction.
+    replace-main-hand-profile-durability: func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32) -> result<_, string>;
 }
 
 /// What the server calls in a server mod (manifest `api = "0.3"`,

@@ -61,6 +61,19 @@ impl ServerItems {
         let mut changed = cell.clone();
         self.replace(&edit.player, selected, &mut changed, &edit.path, &edit.text)?;
         let stack = changed.as_mut().ok_or("empty main hand")?;
+        if let Some((damage, max_damage)) = edit.durability {
+            if stack.count != 1
+                || max_damage == 0
+                || max_damage > i32::MAX as u32
+                || damage > max_damage
+            {
+                return Err("invalid item durability".into());
+            }
+            stack.damage = damage;
+            stack
+                .data_mut()
+                .set_other("minecraft:max_damage", Some(Tag::Int(max_damage as i32)));
+        }
         let mut custom = stack
             .data()
             .and_then(|d| d.other("minecraft:custom_data"))
@@ -209,6 +222,7 @@ mod tests {
             path: vec!["state".into()],
             text: "new".into(),
             snapshot: snapshot.clone(),
+            durability: None,
             profile: Some(horizon_mods::ServerToolProfile {
                 rules: vec![horizon_mods::ServerToolRule {
                     blocks: vec!["#minecraft:mineable/pickaxe".into()],
@@ -222,7 +236,11 @@ mod tests {
                 unbreakable: true,
             }),
         };
+        edit.durability = Some((61, 60));
         let mut cell = Some(original.clone());
+        assert!(snapshot.apply(0, &mut cell, &edit).is_err());
+        assert_eq!(cell.as_ref(), Some(&original));
+        edit.durability = Some((60, 85));
         edit.profile.as_mut().unwrap().default_speed = f32::NAN;
         assert!(snapshot.apply(0, &mut cell, &edit).is_err());
         assert_eq!(cell.as_ref(), Some(&original));
@@ -231,7 +249,8 @@ mod tests {
         assert_eq!(cell.as_ref(), Some(&original));
         snapshot.apply(0, &mut cell, &edit).unwrap();
         let changed = cell.as_ref().unwrap();
-        assert_eq!((changed.count, changed.damage), (1, 58));
+        assert_eq!((changed.count, changed.damage), (1, 60));
+        assert_eq!(crate::item_tool::max_damage(changed, 59), 85);
         assert!(crate::item_tool::unbreakable(changed));
         assert!(!crate::item_tool::mining_enabled(changed));
         assert_eq!(

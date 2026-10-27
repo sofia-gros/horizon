@@ -571,6 +571,14 @@ fn network_stack(
         ));
     }
     if let Some(d) = s.data() {
+        if let Some(horizon_world::nbt::Tag::Int(max)) = d.other("minecraft:max_damage")
+            && *max > 0
+        {
+            stack.added.push((
+                horizon_protocol::item::component::MAX_DAMAGE,
+                horizon_protocol::item::Component::Int(*max),
+            ));
+        }
         if crate::item_tool::unbreakable(s) {
             stack.added.push((
                 horizon_protocol::item::component::UNBREAKABLE,
@@ -734,6 +742,22 @@ pub fn within_block_range(eye: [f64; 3], range: f64, pos: [i32; 3]) -> bool {
 mod tests {
     use super::*;
     use horizon_protocol::item::{Component, component};
+
+    #[test]
+    fn per_stack_durability_goes_over_the_wire() {
+        let mut item = ItemStack::new("minecraft:wooden_pickaxe", 1);
+        item.damage = 37;
+        item.data_mut().set_other(
+            "minecraft:max_damage",
+            Some(horizon_world::nbt::Tag::Int(85)),
+        );
+        let wire = stack_to_network(|_| 7, |_, _| None, &Some(item)).unwrap();
+        assert_eq!(wire.component(component::DAMAGE), Some(&Component::Int(37)));
+        assert_eq!(
+            wire.component(component::MAX_DAMAGE),
+            Some(&Component::Int(85))
+        );
+    }
 
     #[test]
     fn potions_go_as_potion_registry_ids() {

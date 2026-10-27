@@ -6,6 +6,14 @@ use horizon_protocol::{
 };
 use horizon_world::nbt::Tag;
 
+/// Per-stack vanilla max-damage patch, otherwise the item's prototype.
+pub fn max_damage(stack: &ItemStack, default: u32) -> u32 {
+    match stack.data().and_then(|d| d.other("minecraft:max_damage")) {
+        Some(Tag::Int(value)) if *value > 0 => *value as u32,
+        _ => default,
+    }
+}
+
 /// Host-owned control accompanies a Mod's Tool profile through custom_data.
 pub fn mining_enabled(stack: &ItemStack) -> bool {
     let control = stack

@@ -2019,17 +2019,14 @@ impl Game<'_> {
         }
         if display.shows("minecraft:damage")
             && let Some(info) = item_info
-            && info.max_damage > 0
+            && horizon_client::item_tool::max_damage(stack, info.max_damage) > 0
             && stack.damage > 0
             && advanced
         {
+            let max = horizon_client::item_tool::max_damage(stack, info.max_damage);
             push(
                 &mut lines,
-                format!(
-                    "Durability: {} / {}",
-                    info.max_damage - stack.damage,
-                    info.max_damage
-                ),
+                format!("Durability: {} / {}", max.saturating_sub(stack.damage), max),
                 u32::MAX,
             );
         }

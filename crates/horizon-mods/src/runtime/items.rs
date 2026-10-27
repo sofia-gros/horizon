@@ -16,6 +16,8 @@ pub struct ItemEdit {
     pub path: Vec<String>,
     pub text: String,
     pub profile: Option<super::ServerToolProfile>,
+    /// Optional checked vanilla damage and max-damage values.
+    pub durability: Option<(u32, u32)>,
     pub snapshot: std::sync::Arc<dyn ItemReader>,
 }
 
@@ -26,6 +28,7 @@ impl PartialEq for ItemEdit {
             && self.path == other.path
             && self.text == other.text
             && self.profile == other.profile
+            && self.durability == other.durability
             && std::sync::Arc::ptr_eq(&self.snapshot, &other.snapshot)
     }
 }
@@ -38,7 +41,7 @@ impl super::server_bindings::horizon::mods::items_edit::Host for State {
         expected: String,
         replacement: String,
     ) -> Result<(), String> {
-        self.queue_item_edit(player, custom_path, expected, replacement, None)
+        self.queue_item_edit(player, custom_path, expected, replacement, None, None)
     }
 }
 
@@ -54,7 +57,29 @@ impl super::server_bindings::horizon::mods::items_tools::Host for State {
         replacement: String,
         tool: super::ServerToolProfile,
     ) -> Result<(), String> {
-        self.queue_item_edit(player, custom_path, expected, replacement, Some(tool))
+        self.queue_item_edit(player, custom_path, expected, replacement, Some(tool), None)
+    }
+    fn replace_main_hand_profile_durability(
+        &mut self,
+        player: String,
+        custom_path: Vec<String>,
+        expected: String,
+        replacement: String,
+        tool: super::ServerToolProfile,
+        damage: u32,
+        max_damage: u32,
+    ) -> Result<(), String> {
+        if max_damage == 0 || max_damage > i32::MAX as u32 || damage > max_damage {
+            return Err("invalid item durability".into());
+        }
+        self.queue_item_edit(
+            player,
+            custom_path,
+            expected,
+            replacement,
+            Some(tool),
+            Some((damage, max_damage)),
+        )
     }
 }
 
@@ -66,6 +91,7 @@ impl State {
         expected: String,
         replacement: String,
         profile: Option<super::ServerToolProfile>,
+        durability: Option<(u32, u32)>,
     ) -> Result<(), String> {
         if self.item_edits_left == 0 {
             return Err("items-edit budget exhausted".into());
@@ -104,6 +130,7 @@ impl State {
             path: custom_path,
             text: replacement,
             profile,
+            durability,
             snapshot,
         }));
         Ok(())

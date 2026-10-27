@@ -258,8 +258,8 @@ experimental = ["ui", "render", "input", "recipes"]
     };
     assert_eq!(level("coords_hud.hmod"), 0);
     // The UI guest uses the upstream far terrain API, level 11 on this fork.
-    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), LEVEL);
-    assert_eq!(level("welcome.hmod"), 10);
+    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), 11);
+    assert_eq!(level("welcome.hmod"), LEVEL);
 }
 
 #[test]
@@ -1047,7 +1047,13 @@ fn server_item_reads_are_frozen_capability_checked_and_budgeted_per_call() {
     );
     assert!(command(&mut mods, "edit").iter().any(|out| matches!(out, Output::ItemEdit(edit) if edit.text == "changed" && edit.player == alex.id)));
     assert!(command(&mut mods, "edit profile").iter().any(|out| matches!(out, Output::ItemEdit(edit) if edit.text == "changed" && edit.profile.as_ref().is_some_and(|p| !p.mining_enabled && p.unbreakable))));
+    assert!(
+        command(&mut mods, "edit profile-durability")
+            .iter()
+            .any(|out| matches!(out, Output::ItemEdit(edit) if edit.durability == Some((7, 85))))
+    );
     for case in [
+        "edit profile-bad-durability",
         "edit error",
         "edit twice",
         "edit stale",
