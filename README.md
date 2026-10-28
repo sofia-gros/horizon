@@ -112,6 +112,12 @@ Everything prepared lands in the gitignored `.local/`. It is derived from the ga
 
 The client starts on the title screen. Command-line options (`--world`, `--seed`, `--creative`, `--render-distance`, `--dedicated`), controls, scripting through `horizon-ctl` and the architecture are described in [the native client guide](docs/native-client.md). The rest of the developer documentation is indexed in [docs/README.md](docs/README.md), including [the parity workflow](docs/parity-workflow.md).
 
+## Developing mods in this fork
+
+This fork develops general Horizon APIs and hooks for WebAssembly mods. Code mods run in a restricted runtime and request host capabilities rather than rewriting engine internals. Mining, combat, items and workstations are being exercised through a partial Tinkers’ Construct port. The aim is a maintainable ecosystem in which mods can share APIs; the current sandbox and conflict checks are not a guarantee that every mod is safe or compatible. Integration with trusted Horizon Mixins is a possible future extension, not a current feature.
+
+Start with the [fork mod-authoring guide](docs/mod-authoring/README.md), or see [Horizon Mods](https://github.com/sofia-gros/horizon-mods) for the port, screenshots and current limitations. The upstream Horizon game instructions above remain applicable; experimental fork APIs require a matching fork build.
+
 ## Roadmap
 
 What is being done now, what comes next and where you can help, in plain words and in technical detail: [ROADMAP.md](ROADMAP.md). [playhorizon.dev/hub](https://playhorizon.dev/hub) shows it with the work board, the journal of what shipped and how to help.
