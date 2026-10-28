@@ -104,6 +104,7 @@ pub enum Capability {
     ItemsTools,
     /// Read and consume the command actor's inventory in a checked edit.
     InventoryTransactions,
+    Workstations,
     /// Blocks in the server's loaded chunks, and changes to them (server
     /// mods; client mods later, where the game runs the world).
     World,
@@ -112,7 +113,7 @@ pub enum Capability {
     Recipes,
 }
 impl Capability {
-    pub const ALL: [Capability; 16] = [
+    pub const ALL: [Capability; 17] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -129,6 +130,7 @@ impl Capability {
         Capability::Recipes,
         Capability::ItemsTools,
         Capability::InventoryTransactions,
+        Capability::Workstations,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
@@ -141,6 +143,7 @@ impl Capability {
                 | Capability::ItemsEdit
                 | Capability::ItemsTools
                 | Capability::InventoryTransactions
+                | Capability::Workstations
         )
     }
     /// The WIT interface it grants, in `horizon:mods`.
@@ -162,6 +165,7 @@ impl Capability {
             Capability::Recipes => "recipes",
             Capability::ItemsTools => "items-tools",
             Capability::InventoryTransactions => "inventory-transactions",
+            Capability::Workstations => "workstations",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -177,6 +181,7 @@ impl Capability {
                 | Capability::ItemsEdit
                 | Capability::ItemsTools
                 | Capability::InventoryTransactions
+                | Capability::Workstations
         )
     }
     /// What the player reads before turning the mod on: "May <this>".
@@ -207,6 +212,9 @@ impl Capability {
             }
             Capability::InventoryTransactions => {
                 "read and consume the invoking player's inventory while changing their held tool on the server"
+            }
+            Capability::Workstations => {
+                "register workstation menus that process their input items on the server"
             }
         }
     }
@@ -253,6 +261,7 @@ impl fmt::Display for Capability {
             Capability::Recipes => "recipes",
             Capability::ItemsTools => "items-tools",
             Capability::InventoryTransactions => "inventory-transactions",
+            Capability::Workstations => "workstations",
         };
         f.write_str(name)
     }

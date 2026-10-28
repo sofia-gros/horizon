@@ -16,6 +16,7 @@ use wasmtime::{
 };
 
 mod items;
+mod workstations;
 pub use items::{ITEM_TEXT_MAX, ItemEdit, ItemReader, valid_melee, validate_tool_profile};
 pub use server_bindings::horizon::mods::items_read::HeldStack as ServerHeldStack;
 pub use server_bindings::horizon::mods::items_tools::{
@@ -45,6 +46,21 @@ mod melee_bindings {
 }
 mod mining_bindings {
     wasmtime::component::bindgen!({ path: "../horizon-mod-sdk/wit", world: "mining-host" });
+}
+mod workstation_bindings {
+    wasmtime::component::bindgen!({ path: "../horizon-mod-sdk/wit", world: "workstation-host" });
+}
+pub use workstation_bindings::exports::horizon::mods::workstation_events::{
+    Input as WorkstationInput, Plan as WorkstationPlan,
+};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkstationRegistration {
+    pub owner: String,
+    pub block: String,
+    pub title: String,
+    pub path: Vec<String>,
+    pub ingredient_tags: Vec<String>,
 }
 /// Capability `ui`'s world beyond `horizon-mod` (docs/mods.md): a second
 /// world, so mods built before it (no `ui-events` export) still instantiate
@@ -358,6 +374,7 @@ struct Running {
     ui: Option<UiHost>,
     mining: Option<mining_bindings::MiningHost>,
     melee: Option<melee_bindings::MeleeHost>,
+    workstation: Option<workstation_bindings::WorkstationHost>,
     hooks: Hooks,
     /// It imports `game.raycast`.
     raycasts: bool,
@@ -475,6 +492,8 @@ struct State {
     item_edits: std::collections::HashSet<String>,
     item_edits_left: usize,
     command_actor: Option<String>,
+    registering_workstations: bool,
+    workstations: Vec<WorkstationRegistration>,
     mining_enabled: bool,
     melee_enabled: bool,
     limits: StoreLimits,
@@ -496,6 +515,62 @@ pub struct Mods {
 }
 
 impl Mods {
+    /// Resolve the handler explicitly authorized by the block owner.
+    pub fn workstation(&self, block: &str, owner: &str) -> Option<WorkstationRegistration> {
+        let mut matches = self.entries.iter().filter_map(|entry| {
+            let run = entry.run.as_ref()?;
+            run.workstation.as_ref()?;
+            run.store
+                .data()
+                .workstations
+                .iter()
+                .find(|r| r.block == block && r.owner == owner)
+        });
+        let first = matches.next()?.clone();
+        matches.next().is_none().then_some(first)
+    }
+
+    /// Query a registered handler without applying any outputs produced while
+    /// previewing. A trap stops that mod; no preview survives the failure.
+    pub fn workstation_preview(
+        &mut self,
+        registration: &WorkstationRegistration,
+        tool: &WorkstationInput,
+        ingredient: &WorkstationInput,
+    ) -> Result<Option<WorkstationPlan>, String> {
+        if self
+            .workstation(&registration.block, &registration.owner)
+            .as_ref()
+            != Some(registration)
+        {
+            return Err("workstation registration changed or conflicts".into());
+        }
+        let i = self
+            .entries
+            .iter()
+            .position(|e| {
+                e.manifest
+                    .as_ref()
+                    .is_some_and(|m| m.id == registration.owner)
+            })
+            .ok_or("workstation mod stopped")?;
+        let start = self.out.len();
+        let result = self.call(i, FUEL_EVENT, |run| {
+            run.workstation
+                .as_ref()
+                .expect("checked")
+                .horizon_mods_workstation_events()
+                .call_preview(&mut run.store, &registration.block, tool, ingredient)
+        });
+        let discarded = self.out.split_off(start);
+        self.out.extend(
+            discarded
+                .into_iter()
+                .filter(|o| matches!(o, Output::Stopped { .. })),
+        );
+        result.ok_or("workstation mod trapped")?
+    }
+
     /// Changes whenever the running mods (so their commands) change.
     pub fn generation(&self) -> u64 {
         self.generation
@@ -614,6 +689,11 @@ impl Mods {
                 HasSelf<State>,
             >(&mut linker, |s| s)
             .map_err(|e| e.to_string())?;
+            server_bindings::horizon::mods::workstations::add_to_linker::<State, HasSelf<State>>(
+                &mut linker,
+                |s| s,
+            )
+            .map_err(|e| e.to_string())?;
             UiHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
             RenderHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
@@ -699,6 +779,8 @@ impl Mods {
             item_edits: Default::default(),
             item_edits_left: 8,
             command_actor: None,
+            registering_workstations: true,
+            workstations: Vec::new(),
             mining_enabled: false,
             melee_enabled: false,
             limits: StoreLimitsBuilder::new()
@@ -723,6 +805,11 @@ impl Mods {
         } else {
             None
         };
+        let workstation = if server {
+            workstation_bindings::WorkstationHost::new(&mut store, &instance).ok()
+        } else {
+            None
+        };
         let (mut hooks, ui) = if server {
             let exports = HorizonServerMod::new(&mut store, &instance).map_err(|e| reason(&e))?;
             let r = exports
@@ -741,6 +828,7 @@ impl Mods {
                 .map_err(|e| reason(&e))??;
             (Hooks::Client(exports, r), ui)
         };
+        store.data_mut().registering_workstations = false;
         let free = |c: &str| {
             let free = !reserved(c) && !taken.iter().any(|t| t == c);
             if !free {
@@ -771,6 +859,7 @@ impl Mods {
             ui,
             mining,
             melee,
+            workstation,
             hooks,
             raycasts: functions.iter().any(|f| f == "game.raycast"),
             item_reads: functions.iter().any(|f| {

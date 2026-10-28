@@ -5752,7 +5752,16 @@ impl Game<'_> {
             return;
         }
         if let Some(kind) = Self::remote_station_kind(&menu) {
-            let title = menu_title(&p.title);
+            let mut title = menu_title(&p.title);
+            let plain_title = title.plain();
+            let kind = if menu == "minecraft:anvil"
+                && let Some(label) = plain_title.strip_prefix("[horizon:workstation]")
+            {
+                title = horizon_client::text::Text::literal(label);
+                super::stations::Kind::Mod
+            } else {
+                kind
+            };
             let pos = target.map_or([0, 0, 0], |t| [t.0, t.1, t.2]);
             self.remote_open_station(p.container, menu, kind, title, pos);
             return;

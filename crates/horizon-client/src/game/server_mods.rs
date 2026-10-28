@@ -6,6 +6,17 @@
 //! Their lines go to the players they name. With no server mod on, each hook
 //! here is one check.
 use super::{Game, lan::LanHost};
+pub(super) fn workstation_player_id(u: u128) -> String {
+    let h = format!("{u:032x}");
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..]
+    )
+}
 #[cfg(not(feature = "mods"))]
 use horizon_world::registry::BlockStateId;
 
@@ -34,6 +45,18 @@ pub(super) enum ModEvent {
 
 #[cfg(not(feature = "mods"))]
 impl Game<'_> {
+    pub(super) fn mod_workstation(&self, _block: &str) -> Option<super::stations::ModRegistration> {
+        None
+    }
+    pub(super) fn mod_workstation_plan(
+        &mut self,
+        _registration: &super::stations::ModRegistration,
+        _player: &str,
+        _tool: &horizon_client::items::ItemStack,
+        _ingredient: &horizon_client::items::ItemStack,
+    ) -> Option<(horizon_client::items::ItemStack, u32)> {
+        None
+    }
     pub(super) fn tick_server_mods(&mut self) {}
     pub(super) fn mod_block_event(&mut self, _pos: [i32; 3], _state: BlockStateId, _placed: bool) {}
     pub(super) fn mod_mined(
@@ -213,6 +236,144 @@ mod run {
     }
 
     impl Game<'_> {
+        pub(in crate::game) fn mod_workstation(
+            &self,
+            block: &str,
+        ) -> Option<super::super::stations::ModRegistration> {
+            let owner = self.mods.workstation_handlers.get(block)?;
+            let r = self.mods.mods.workstation(block, owner)?;
+            Some(super::super::stations::ModRegistration {
+                owner: r.owner,
+                block: r.block,
+                title: r.title,
+                path: r.path,
+                ingredient_tags: r.ingredient_tags,
+            })
+        }
+
+        /// Rebuild a checked result from the complete input snapshots. The mod
+        /// can change only its selected text and the existing generic profile.
+        pub(in crate::game) fn mod_workstation_plan(
+            &mut self,
+            registration: &super::super::stations::ModRegistration,
+            player: &str,
+            tool: &horizon_client::items::ItemStack,
+            ingredient: &horizon_client::items::ItemStack,
+        ) -> Option<(horizon_client::items::ItemStack, u32)> {
+            use horizon_mods::ItemReader;
+            if self.mods.workstation_handlers.get(&registration.block) != Some(&registration.owner)
+            {
+                return None;
+            }
+            let reg = self
+                .mods
+                .mods
+                .workstation(&registration.block, &registration.owner)?;
+            if reg.owner != registration.owner
+                || reg.path != registration.path
+                || reg.ingredient_tags != registration.ingredient_tags
+                || tool.count != 1
+            {
+                return None;
+            }
+            let view = std::sync::Arc::new(horizon_client::mod_items::ServerItems(vec![(
+                player.into(),
+                0,
+                tool.clone(),
+            )]));
+            let tool_view = view.main_hand(player, &reg.path).ok()??;
+            tool_view.custom_text.as_ref()?;
+            let ing_view = horizon_client::mod_items::ServerItems(vec![(
+                player.into(),
+                0,
+                ingredient.clone(),
+            )])
+            .main_hand(player, &reg.path)
+            .ok()??;
+            let tags = reg
+                .ingredient_tags
+                .iter()
+                .filter(|tag| {
+                    self.res
+                        .items()
+                        .item_tags
+                        .get(tag.as_str())
+                        .is_some_and(|items| items.contains(&*ingredient.item))
+                })
+                .cloned()
+                .collect();
+            let input = |v: horizon_mods::ServerHeldStack, tags| horizon_mods::WorkstationInput {
+                item: v.item,
+                count: v.count,
+                damage: v.damage,
+                custom_text: v.custom_text,
+                tags,
+            };
+            let plan = self
+                .mods
+                .mods
+                .workstation_preview(&reg, &input(tool_view, vec![]), &input(ing_view, tags))
+                .ok()??;
+            if plan.consume == 0
+                || plan.consume > ingredient.count
+                || plan.replacement.len() > horizon_mods::ITEM_TEXT_MAX
+            {
+                return None;
+            }
+            let profile = horizon_mods::ServerToolProfile {
+                rules: plan
+                    .tool
+                    .rules
+                    .into_iter()
+                    .map(|r| horizon_mods::ServerToolRule {
+                        blocks: r.blocks,
+                        speed: r.speed,
+                        correct_for_drops: r.correct_for_drops,
+                    })
+                    .collect(),
+                default_speed: plan.tool.default_speed,
+                damage_per_block: plan.tool.damage_per_block,
+                can_destroy_in_creative: plan.tool.can_destroy_in_creative,
+                mining_enabled: plan.tool.mining_enabled,
+                unbreakable: plan.tool.unbreakable,
+            };
+            horizon_mods::validate_tool_profile(&profile).ok()?;
+            if profile
+                .rules
+                .iter()
+                .flat_map(|r| &r.blocks)
+                .any(|selector| {
+                    if let Some(tag) = selector.strip_prefix('#') {
+                        !self.res.items().has_block_tag(tag)
+                    } else {
+                        self.pack.assets.registry.default_state(selector).is_none()
+                    }
+                })
+            {
+                return None;
+            }
+            let melee = horizon_mods::ServerMeleeProfile {
+                damage_bonus: plan.melee.damage_bonus,
+                damage_multiplier: plan.melee.damage_multiplier,
+                attack_speed: plan.melee.attack_speed,
+                enabled: plan.melee.enabled,
+            };
+            let edit = horizon_mods::ItemEdit {
+                owner: reg.owner,
+                player: player.into(),
+                path: reg.path,
+                text: plan.replacement,
+                profile: Some(profile),
+                durability: Some((plan.damage, plan.max_damage)),
+                melee: Some(melee),
+                consumption: None,
+                snapshot: view.clone(),
+            };
+            let mut result = Some(tool.clone());
+            view.apply(0, &mut result, &edit).ok()?;
+            Some((result?, plan.consume))
+        }
+
         /// Called while the acting player's inventory is swapped into Game.
         /// Apply only the profile owner's edit to that same slot before the
         /// guest state is swapped back or another block is broken.

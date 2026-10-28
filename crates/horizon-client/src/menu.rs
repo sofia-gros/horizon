@@ -150,6 +150,7 @@ impl Kind {
             "stonecutter" => Self::Stonecutter,
             "grindstone" => Self::Grindstone,
             "anvil" => Self::Anvil,
+            "mod_workstation" => Self::ModWorkstation,
             "smithing" => Self::Smithing,
             "enchanting" => Self::Enchanting,
             "beacon" => Self::Beacon,
@@ -929,6 +930,10 @@ impl Menu {
     /// the stonecutter lists its recipes, the block crafter refreshes its
     /// result.
     fn slot_changed(&mut self, env: &Env, s: usize) {
+        if self.kind == Kind::ModWorkstation && self.slots[s].container == MAIN {
+            self.clear_workstation_plan();
+            return;
+        }
         // MerchantContainer.setChanged: every slot of it, the result too.
         if self.kind == Kind::Merchant && self.slots[s].container != PLAYER {
             self.merchant_update(env);
@@ -1237,6 +1242,12 @@ impl Menu {
             self.workstation_plan = None;
             self.containers[RESULT][0] = None;
         }
+    }
+
+    pub fn workstation_cost(&self) -> Option<u32> {
+        self.workstation_plan
+            .as_ref()
+            .map(|plan| plan.ingredient_count)
     }
 
     pub fn player_item(&self, i: usize) -> Option<&ItemStack> {
@@ -2608,6 +2619,9 @@ impl Menu {
         {
             if !in_range(slot_index) {
                 return Err(OUT_OF_BOUNDS);
+            }
+            if self.slots[slot_index as usize].role == Role::ModResult {
+                return Ok(());
             }
             if let Some(stack) = self.slot(slot_index as usize) {
                 let mut copy = stack.clone();

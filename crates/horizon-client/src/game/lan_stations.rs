@@ -29,6 +29,7 @@ pub(super) struct GuestStation {
     sent_data: Vec<i32>,
     /// The game time of the menu's last sound (`lastSoundTime`).
     last_sound: u64,
+    mod_registration: Option<super::stations::ModRegistration>,
 }
 
 /// A guest's open lectern: `LecternMenu` over the block entity, made on the
@@ -53,6 +54,7 @@ fn menu_of(kind: StationKind) -> Option<(&'static str, Kind, std::ops::Range<usi
         StationKind::Enchanting => ("minecraft:enchantment", Kind::Enchanting, 0..2),
         StationKind::Beacon => ("minecraft:beacon", Kind::Beacon, 0..1),
         StationKind::Cartography => ("minecraft:cartography_table", Kind::Cartography, 0..2),
+        StationKind::Mod => ("minecraft:anvil", Kind::ModWorkstation, 0..2),
         _ => return None,
     })
 }
@@ -73,7 +75,11 @@ impl Game<'_> {
         self.lan_crafting_closed(host, conn, None);
         // The container it replaces loses its opener.
         self.guest_container_closed(host, conn);
-        let title = horizon_protocol::text::translatable(station.kind.title_key(), &[]);
+        let title = if let Some(r) = &station.mod_registration {
+            horizon_protocol::text::literal(&format!("[horizon:workstation]{}", r.title))
+        } else {
+            horizon_protocol::text::translatable(station.kind.title_key(), &[])
+        };
         let Some(window) = host.hub.open_window(conn, menu_type, title) else {
             return true;
         };
@@ -98,6 +104,7 @@ impl Game<'_> {
             menu,
             sent_data: Vec::new(),
             last_sound: 0,
+            mod_registration: station.mod_registration.clone(),
         });
         self.lan_send_station(host, conn);
         true
@@ -111,6 +118,7 @@ impl Game<'_> {
         host: &mut LanHost,
         conn: u32,
         window: Option<i32>,
+        taking_mod_result: bool,
         op: impl FnOnce(&mut Menu, &horizon_client::menu::Env),
     ) -> bool {
         let Some(mut gs) = host
@@ -123,7 +131,20 @@ impl Game<'_> {
         if let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn)
             && !host.hub.guests[gi].spectator()
         {
+            if gs.kind == StationKind::Mod {
+                let previous = (gs.menu.slot(2).cloned(), gs.menu.workstation_cost());
+                self.lan_mod_station_preview(&host.hub.guests[gi], &mut gs);
+                let current = (gs.menu.slot(2).cloned(), gs.menu.workstation_cost());
+                if taking_mod_result && current != previous {
+                    host.play.entry(conn).or_default().station = Some(gs);
+                    self.lan_send_station(host, conn);
+                    return true;
+                }
+            }
             self.guest_menu_op(host, gi, &mut gs.menu, op);
+            if gs.kind == StationKind::Mod {
+                self.lan_mod_station_preview(&host.hub.guests[gi], &mut gs);
+            }
             self.lan_station_sounds(&mut gs);
             if let Some(amount) = gs.menu.ground.take() {
                 self.grindstone_taken(gs.pos, amount);
@@ -139,6 +160,34 @@ impl Game<'_> {
         host.play.entry(conn).or_default().station = Some(gs);
         self.lan_send_station(host, conn);
         true
+    }
+
+    fn lan_mod_station_preview(
+        &mut self,
+        guest: &horizon_client::lan::guest::Guest,
+        gs: &mut GuestStation,
+    ) {
+        gs.menu.clear_workstation_plan();
+        let Some(registration) = &gs.mod_registration else {
+            return;
+        };
+        let [x, y, z] = gs.pos;
+        let block = &self.res.facts().get(self.world.block(x, y, z)).name;
+        if &**block != registration.block || !guest.within_block_range(gs.pos, 4.0) {
+            return;
+        }
+        let (Some(tool), Some(ingredient)) = (gs.menu.slot(0).cloned(), gs.menu.slot(1).cloned())
+        else {
+            return;
+        };
+        let player = super::server_mods::workstation_player_id(guest.uuid);
+        if let Some((result, cost)) =
+            self.mod_workstation_plan(registration, &player, &tool, &ingredient)
+        {
+            let _ = gs
+                .menu
+                .set_workstation_plan(&tool, &ingredient, cost, result);
+        }
     }
 
     /// `LecternBlock.openScreen` for a guest: `minecraft:lectern` over the
@@ -351,7 +400,7 @@ impl Game<'_> {
             .and_then(|p| p.station.as_ref())
             .is_some_and(|s| s.kind == StationKind::Anvil);
         if anvil {
-            self.lan_station_op(host, conn, None, |menu, env| {
+            self.lan_station_op(host, conn, None, false, |menu, env| {
                 menu.rename(env, name);
             });
         }
@@ -378,7 +427,15 @@ impl Game<'_> {
         conn: u32,
         p: &play::ContainerClick,
     ) -> bool {
-        self.lan_station_op(host, conn, Some(p.container), |menu, env| {
+        if let Some(gs) = host.play.get(&conn).and_then(|p| p.station.as_ref())
+            && gs.kind == StationKind::Mod
+            && gs.window == p.container
+            && gs.state != p.state
+        {
+            self.lan_send_station(host, conn);
+            return true;
+        }
+        self.lan_station_op(host, conn, Some(p.container), p.slot == 2, |menu, env| {
             let _ = menu.click(env, i32::from(p.slot), i32::from(p.button), input(p.input));
         })
     }
@@ -398,7 +455,7 @@ impl Game<'_> {
         }) {
             return;
         }
-        self.lan_station_op(host, conn, Some(window), |menu, env| {
+        self.lan_station_op(host, conn, Some(window), false, |menu, env| {
             menu.button(env, id);
         });
     }
@@ -544,7 +601,7 @@ impl Game<'_> {
         }
         let data = self.beacon_data(host, pos);
         let mut updated = false;
-        self.lan_station_op(host, conn, None, |menu, env| {
+        self.lan_station_op(host, conn, None, false, |menu, env| {
             menu.data.copy_from_slice(&data);
             let power = |k: usize| powers[k].as_ref().map(|(id, n)| (*id, n.as_str()));
             updated = menu.beacon_update(env, power(0), power(1));
@@ -589,7 +646,13 @@ impl Game<'_> {
             };
             let [x, y, z] = gs.pos;
             let name = &self.res.facts().get(self.world.block(x, y, z)).name;
-            let block = StationKind::from_block(name) == Some(gs.kind);
+            let block = if gs.kind == StationKind::Mod {
+                gs.mod_registration.as_ref().is_some_and(|r| {
+                    r.block == &**name && self.mod_workstation(name).as_ref() == Some(r)
+                })
+            } else {
+                StationKind::from_block(name) == Some(gs.kind)
+            };
             if !(block && g.within_block_range(gs.pos, 4.0)) {
                 let window = gs.window;
                 self.lan_station_closed(host, conn, Some(window));

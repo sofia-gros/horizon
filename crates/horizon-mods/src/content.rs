@@ -83,6 +83,8 @@ struct BlockFile {
     properties: BlockProperties,
     #[serde(default = "yes")]
     item: bool,
+    /// The server mod this block's owner explicitly delegates its menu to.
+    workstation_handler: Option<String>,
 }
 fn yes() -> bool {
     true
@@ -99,6 +101,7 @@ pub struct Block {
     pub properties: BlockProperties,
     /// Also add a block item with the same id.
     pub item: bool,
+    pub workstation_handler: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -330,6 +333,7 @@ impl Content {
                 template: file.template,
                 properties: file.properties,
                 item: file.item,
+                workstation_handler: file.workstation_handler,
             });
         }
         for (item, name) in items {
@@ -359,6 +363,15 @@ impl Content {
 }
 
 fn check_block(file: &BlockFile) -> Result<(), String> {
+    if file.workstation_handler.as_ref().is_some_and(|id| {
+        id.is_empty()
+            || id.len() > 64
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    }) {
+        return Err("workstation_handler must be a mod id".into());
+    }
     if !vanilla_id(&file.template) {
         return Err(format!(
             "template {:?} is not a vanilla block (minecraft:...)",
@@ -437,6 +450,34 @@ capabilities = ["registries"]
         "properties": {"hardness": 4.0, "light": 3, "sounds": "minecraft:amethyst_block"}}"#;
     const ITEM: &[u8] = br#"{"template": "minecraft:diamond", "rarity": "uncommon"}"#;
 
+    #[test]
+    fn workstation_delegation_is_declared_by_the_block_owner() {
+        let content = hmod(
+            "station",
+            MANIFEST_TEXT,
+            &[(
+                "data/ruby/horizon/block/station.json",
+                br#"{"template":"minecraft:smithing_table","workstation_handler":"server_mod"}"#,
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            content.blocks[0].workstation_handler.as_deref(),
+            Some("server_mod")
+        );
+        assert!(
+            hmod(
+                "station-invalid",
+                MANIFEST_TEXT,
+                &[(
+                    "data/ruby/horizon/block/station.json",
+                    br#"{"template":"minecraft:smithing_table","workstation_handler":"bad:id"}"#
+                )]
+            )
+            .is_err()
+        );
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("horizon-content-{}-{name}", std::process::id()));
@@ -478,6 +519,7 @@ capabilities = ["registries"]
                     ..BlockProperties::default()
                 },
                 item: true,
+                workstation_handler: None,
             }]
         );
         assert_eq!(content.items[0].id, "ruby:ruby");

@@ -184,7 +184,7 @@ macro_rules! export_mod {
 pub mod server {
     wit_bindgen::generate!({
         path: "wit",
-        world: "horizon-server-melee-mod",
+        world: "horizon-server-workstation-mod",
         pub_export_macro: true,
         export_macro_name: "__export_horizon_server_mod",
         default_bindings_module: "horizon_mod_sdk::server",
@@ -200,11 +200,15 @@ pub mod server {
         Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,
         ServerCommand,
     };
+    pub use exports::horizon::mods::workstation_events::{
+        Guest as __WorkstationGuest, Input as WorkstationInput, Plan as WorkstationPlan,
+    };
     pub use horizon::mods::inventory_transactions;
     pub use horizon::mods::items_edit;
     pub use horizon::mods::items_read::{self, HeldStack};
     pub use horizon::mods::items_tools;
     pub use horizon::mods::players::{self, GameMode, Player};
+    pub use horizon::mods::workstations;
     pub use horizon::mods::world::{self, BlockChange};
 
     /// The server's calls into a mod. Only the hooks [`Registration`] asks
@@ -255,6 +259,14 @@ pub mod server {
             _dealt: f32,
         ) -> Result<(), String> {
             Ok(())
+        }
+        fn workstation_preview(
+            &mut self,
+            _block: &str,
+            _tool: &WorkstationInput,
+            _ingredient: &WorkstationInput,
+        ) -> Result<Option<WorkstationPlan>, String> {
+            Ok(None)
         }
     }
 
@@ -493,6 +505,17 @@ macro_rules! export_server_mod {
                     with(|m| {
                         result = m.melee_hit(&player_id, &dimension, target_id, &target_kind, dealt)
                     });
+                    result
+                }
+            }
+            impl $crate::server::__WorkstationGuest for Export {
+                fn preview(
+                    block: String,
+                    tool: $crate::server::WorkstationInput,
+                    ingredient: $crate::server::WorkstationInput,
+                ) -> Result<Option<$crate::server::WorkstationPlan>, String> {
+                    let mut result = Err("The mod is not running".to_string());
+                    with(|m| result = m.workstation_preview(&block, &tool, &ingredient));
                     result
                 }
             }

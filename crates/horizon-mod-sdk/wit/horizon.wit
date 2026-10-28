@@ -790,6 +790,39 @@ interface inventory-transactions {
     replace-main-hand-combat-profile-consuming: func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32, melee: melee-profile, slot: u32, count: u32) -> result<_, string>;
 }
 
+/// Experimental server workstation registration. A block opens a menu only
+/// for the handler explicitly named in its owning content mod's declaration.
+interface workstations {
+    /// Register a block, visible title and state path during initialization.
+    /// The handler receives only this bounded custom string, and the host
+    /// retains all other components. At most 32 registrations per mod.
+    /// `ingredient-tags` requests at most 16 tag memberships for each preview.
+    register: func(block: string, title: string, custom-path: list<string>, ingredient-tags: list<string>) -> result<_, string>;
+}
+
+/// A pure workstation preview. The host discards any queued host outputs;
+/// input stacks are snapshots and are rechecked before a result is taken.
+interface workstation-events {
+    use items-tools.{profile, melee-profile};
+    record input {
+        item: string,
+        count: u32,
+        damage: u32,
+        custom-text: option<string>,
+        tags: list<string>,
+    }
+    record plan {
+        replacement: string,
+        consume: u32,
+        tool: profile,
+        damage: u32,
+        max-damage: u32,
+        melee: melee-profile,
+    }
+    /// Return a preview for these inputs, or none if they do not match.
+    preview: func(block: string, tool: input, ingredient: input) -> result<option<plan>, string>;
+}
+
 /// What the server calls in a server mod (manifest `api = "0.3"`,
 /// experimental). Only the hooks `init` asks for are ever called. The player
 /// in each event is as the server saw them when it happened.
@@ -922,6 +955,7 @@ world horizon-server-mod {
     import %world;
     import items-tools;
     import inventory-transactions;
+    import workstations;
     export server-events;
 }
 
@@ -943,6 +977,15 @@ world horizon-server-melee-mod {
 
 world melee-host {
     export melee-events;
+}
+
+world horizon-server-workstation-mod {
+    include horizon-server-melee-mod;
+    export workstation-events;
+}
+
+world workstation-host {
+    export workstation-events;
 }
 
 /// A mod with widgets (capability `ui`): the SDK builds every mod against

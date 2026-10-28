@@ -40,6 +40,9 @@ use {
 pub(super) struct ModsState {
     #[cfg(feature = "mods")]
     pub(super) mods: Mods,
+    /// Block-owner declarations authorizing a server mod to handle a menu.
+    #[cfg(feature = "mods")]
+    pub(super) workstation_handlers: std::collections::BTreeMap<String, String>,
     /// Capability `input`: a claimed item's use while the button is down.
     #[cfg(feature = "mods")]
     pub(super) using: Option<super::mod_input::ModUse>,
@@ -305,6 +308,34 @@ impl Game<'_> {
         let enabled = &self.settings.mods.enabled;
         let on = |id: &str| enabled.contains(id) || dev_ids.iter().any(|d| d == id);
         let mods = Mods::load_for(self.mod_runs(), &paths, on, vanilla_command);
+        self.mods.workstation_handlers.clear();
+        for entry in mods.entries() {
+            if matches!(
+                entry.status,
+                horizon_mods::Status::Off | horizon_mods::Status::Failed(_)
+            ) {
+                continue;
+            }
+            let Some(manifest) = &entry.manifest else {
+                continue;
+            };
+            if !manifest
+                .capabilities
+                .contains(&horizon_mods::Capability::Registries)
+            {
+                continue;
+            }
+            if let Ok(content) = horizon_mods::Content::read(&entry.path, manifest) {
+                for block in content.blocks {
+                    if let Some(handler) = block.workstation_handler {
+                        self.mods
+                            .workstation_handlers
+                            .entry(block.id)
+                            .or_insert(handler);
+                    }
+                }
+            }
+        }
         self.mods.mods = mods;
         let chosen = &self.settings.mods;
         self.mods.mods.set_bindings(|id| chosen.keys_of(id));

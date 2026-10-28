@@ -1,5 +1,6 @@
 use horizon_mod_sdk::server::{
-    Args, Player, Registration, ServerMod, inventory_transactions, items_edit, items_tools,
+    Args, Player, Registration, ServerMod, WorkstationInput, WorkstationPlan,
+    inventory_transactions, items_edit, items_tools, players, workstations,
 };
 
 struct MiningGuest;
@@ -7,6 +8,12 @@ impl ServerMod for MiningGuest {
     fn init() -> Result<(Self, Registration), String> {
         items_tools::enable_mining_events();
         items_tools::enable_melee_events();
+        workstations::register(
+            "example:station",
+            "Fixture",
+            &["example".into(), "state".into()],
+            &["example:ingredient".into()],
+        )?;
         Ok((
             Self,
             Registration::new()
@@ -14,6 +21,40 @@ impl ServerMod for MiningGuest {
                 .command("miner-only")
                 .command("consume-fixture"),
         ))
+    }
+
+    fn workstation_preview(
+        &mut self,
+        _: &str,
+        tool: &WorkstationInput,
+        ingredient: &WorkstationInput,
+    ) -> Result<Option<WorkstationPlan>, String> {
+        players::broadcast("discard preview side effect");
+        if tool.custom_text.as_deref() != Some("original")
+            || !ingredient.tags.iter().any(|t| t == "example:ingredient")
+        {
+            return Ok(None);
+        }
+        Ok(Some(WorkstationPlan {
+            replacement: "repaired".into(),
+            consume: 1,
+            tool: items_tools::Profile {
+                rules: vec![],
+                default_speed: 1.0,
+                damage_per_block: 0,
+                can_destroy_in_creative: true,
+                mining_enabled: true,
+                unbreakable: false,
+            },
+            damage: 0,
+            max_damage: 10,
+            melee: items_tools::MeleeProfile {
+                damage_bonus: 0.0,
+                damage_multiplier: 1.0,
+                attack_speed: 1.0,
+                enabled: true,
+            },
+        }))
     }
 
     fn command(
