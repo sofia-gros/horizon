@@ -342,7 +342,7 @@ impl Game<'_> {
         };
         let [x, y, z] = gs.pos;
         let block = &self.res.facts().get(self.world.block(x, y, z)).name;
-        if &**block != registration.block || !guest.within_block_range(gs.pos, 4.0) {
+        if **block != registration.block || !guest.within_block_range(gs.pos, 4.0) {
             return;
         }
         let player = super::server_mods::workstation_player_id(guest.uuid);
@@ -903,7 +903,7 @@ impl Game<'_> {
             let name = &self.res.facts().get(self.world.block(x, y, z)).name;
             let block = if gs.kind == StationKind::Mod {
                 gs.mod_registration.as_ref().is_some_and(|r| {
-                    r.block == &**name && self.mod_workstation(name).as_ref() == Some(r)
+                    r.block == **name && self.mod_workstation(name).as_ref() == Some(r)
                 })
             } else {
                 StationKind::from_block(name) == Some(gs.kind)
