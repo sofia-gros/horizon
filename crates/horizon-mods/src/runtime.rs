@@ -889,17 +889,31 @@ impl Mods {
             pos[2],
             "$selection".to_owned(),
         );
-        if selection.is_some() {
-            let progress = &self.entries[i]
+        let reservation = if selection.is_some() {
+            let progress = self.entries[i]
                 .run
                 .as_ref()
                 .expect("checked")
                 .store
                 .data()
-                .gui_progress;
-            let old = *progress.lock().get(&selection_key).unwrap_or(&0);
-            progress.set(selection_key.clone(), old)?;
-        }
+                .gui_progress
+                .clone();
+            let inserted = {
+                let mut entries = progress.lock();
+                if entries.contains_key(&selection_key) {
+                    false
+                } else {
+                    if entries.len() >= 4096 {
+                        return Err("too many workstation progress entries".into());
+                    }
+                    entries.insert(selection_key.clone(), 0);
+                    true
+                }
+            };
+            Some((progress, inserted))
+        } else {
+            None
+        };
         let start = self.out.len();
         let result = self.call(i, FUEL_EVENT, |run| {
             run.gui_workstation
@@ -918,6 +932,9 @@ impl Mods {
                 )
         });
         if !matches!(result, Some(Ok(()))) {
+            if let Some((progress, true)) = &reservation {
+                progress.lock().remove(&selection_key);
+            }
             let discarded = self.out.split_off(start);
             self.out.extend(
                 discarded

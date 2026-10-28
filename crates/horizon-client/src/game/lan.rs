@@ -1695,6 +1695,7 @@ impl Game<'_> {
         if !paused {
             self.tick_guests(&mut host);
         }
+        self.sync_local_mod_selection();
         self.lan_living_flags(&mut host);
         self.tick_server_travel(&mut host);
         self.lan_swings(&mut host);
