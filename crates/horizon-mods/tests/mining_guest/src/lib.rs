@@ -30,6 +30,17 @@ impl ServerMod for MiningGuest {
         ingredient: &WorkstationInput,
     ) -> Result<Option<WorkstationPlan>, String> {
         players::broadcast("discard preview side effect");
+        if ingredient.item.starts_with("storage-") {
+            assert!(horizon_mod_sdk::storage::set("created", b"changed").is_err());
+            assert!(horizon_mod_sdk::storage::set("existing", b"changed").is_err());
+            horizon_mod_sdk::storage::delete("existing");
+            match ingredient.item.as_str() {
+                "storage-trap" => panic!("preview trap"),
+                "storage-reject" => return Err("preview rejected".into()),
+                "storage-none" => return Ok(None),
+                _ => {}
+            }
+        }
         if tool.custom_text.as_deref() != Some("original")
             || !ingredient.tags.iter().any(|t| t == "example:ingredient")
         {
@@ -63,6 +74,9 @@ impl ServerMod for MiningGuest {
         name: &str,
         args: &Args,
     ) -> Result<Option<String>, String> {
+        if name == "online" && args.text() == "storage-write" {
+            horizon_mod_sdk::storage::set("normal", b"ok")?;
+        }
         if name == "consume-fixture" {
             let target = if args.text() == "other" {
                 "another-player"

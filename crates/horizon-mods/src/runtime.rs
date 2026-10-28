@@ -488,6 +488,8 @@ struct State {
     /// not disk I/O time, so a loop of small-fuel, large-payload `set`s
     /// needs its own budget.
     storage_budget: u64,
+    /// Preview callbacks cannot change persistent storage, even if they trap.
+    previewing_workstation: bool,
     item_reads_left: usize,
     item_edits: std::collections::HashSet<String>,
     item_edits_left: usize,
@@ -556,11 +558,15 @@ impl Mods {
             .ok_or("workstation mod stopped")?;
         let start = self.out.len();
         let result = self.call(i, FUEL_EVENT, |run| {
-            run.workstation
+            run.store.data_mut().previewing_workstation = true;
+            let result = run
+                .workstation
                 .as_ref()
                 .expect("checked")
                 .horizon_mods_workstation_events()
-                .call_preview(&mut run.store, &registration.block, tool, ingredient)
+                .call_preview(&mut run.store, &registration.block, tool, ingredient);
+            run.store.data_mut().previewing_workstation = false;
+            result
         });
         let discarded = self.out.split_off(start);
         self.out.extend(
@@ -775,6 +781,7 @@ impl Mods {
             browser: BrowserState::default(),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
+            previewing_workstation: false,
             item_reads_left: items::READS_PER_CALL,
             item_edits: Default::default(),
             item_edits_left: 8,
@@ -2254,6 +2261,9 @@ impl storage::Host for State {
             .flatten()
     }
     fn set(&mut self, key: String, value: Vec<u8>) -> Result<(), String> {
+        if self.previewing_workstation {
+            return Err("storage writes are forbidden during workstation preview".into());
+        }
         if !storage_key_ok(&key) {
             return Err(format!("{key:?} is not [a-z0-9_.-]{{1,64}}"));
         }
@@ -2288,7 +2298,7 @@ impl storage::Host for State {
         Ok(())
     }
     fn delete(&mut self, key: String) {
-        if storage_key_ok(&key) {
+        if !self.previewing_workstation && storage_key_ok(&key) {
             let _ = std::fs::remove_file(self.data_dir.join(&key));
         }
     }

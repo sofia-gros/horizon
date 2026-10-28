@@ -1548,6 +1548,77 @@ fn browser_lists_items_and_hears_the_player() {
 }
 
 #[test]
+fn workstation_previews_cannot_mutate_persistent_storage() {
+    let dir = mods_dir().join("workstation-storage-preview");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let wasm = std::fs::read(root.join(
+        "target/mods-test/wasm32-unknown-unknown/release/horizon_mods_test_mining_guest.wasm",
+    ))
+    .unwrap();
+    let manifest = "id = \"preview_storage\"\nname = \"Preview Storage\"\nversion = \"0.1.0\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\", \"workstations\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\", \"workstations\"]\n";
+    let path = dir.join("fixture.hmod");
+    std::fs::write(
+        &path,
+        Package::write(manifest, &componentize(&wasm).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let storage = dir.join(".horizon-mod-data/preview_storage");
+    std::fs::create_dir_all(&storage).unwrap();
+    std::fs::write(storage.join("existing"), b"original").unwrap();
+    let mut mods = Mods::load(&[path], |_| true, |_| false);
+    let player = alex();
+    mods.set_snapshot(Snapshot {
+        players: vec![player.clone()],
+        ..Snapshot::default()
+    });
+    let registration = mods
+        .workstation("example:station", "preview_storage")
+        .unwrap();
+    let tool = horizon_mods::WorkstationInput {
+        item: "example:tool".into(),
+        count: 1,
+        damage: 0,
+        custom_text: Some("original".into()),
+        tags: vec![],
+    };
+    let mut ingredient = horizon_mods::WorkstationInput {
+        item: String::new(),
+        count: 1,
+        damage: 0,
+        custom_text: None,
+        tags: vec!["example:ingredient".into()],
+    };
+    for mode in ["storage-success", "storage-none", "storage-reject"] {
+        ingredient.item = mode.into();
+        let result = mods.workstation_preview(&registration, &tool, &ingredient);
+        match mode {
+            "storage-success" => assert!(result.unwrap().is_some()),
+            "storage-none" => assert!(result.unwrap().is_none()),
+            _ => assert!(result.is_err()),
+        }
+        assert_eq!(
+            std::fs::read(storage.join("existing")).unwrap(),
+            b"original"
+        );
+        assert!(!storage.join("created").exists());
+    }
+    assert!(mods.server_command(&player, "online storage-write"));
+    assert_eq!(std::fs::read(storage.join("normal")).unwrap(), b"ok");
+    ingredient.item = "storage-trap".into();
+    assert!(
+        mods.workstation_preview(&registration, &tool, &ingredient)
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(storage.join("existing")).unwrap(),
+        b"original"
+    );
+    assert!(!storage.join("created").exists());
+}
+
+#[test]
 fn mining_callbacks_isolate_distinct_mods_and_failures() {
     #[derive(Debug)]
     struct Items;
