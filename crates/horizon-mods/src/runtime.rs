@@ -609,6 +609,11 @@ impl Mods {
                 |s| s,
             )
             .map_err(|e| e.to_string())?;
+            server_bindings::horizon::mods::inventory_transactions::add_to_linker::<
+                State,
+                HasSelf<State>,
+            >(&mut linker, |s| s)
+            .map_err(|e| e.to_string())?;
             UiHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
             RenderHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
@@ -770,6 +775,7 @@ impl Mods {
             raycasts: functions.iter().any(|f| f == "game.raycast"),
             item_reads: functions.iter().any(|f| {
                 f.starts_with("items-read.")
+                    || f.starts_with("inventory-transactions.")
                     || f.starts_with("items-edit.")
                     || f.starts_with("items-tools.")
             }),

@@ -1245,7 +1245,7 @@ fn server_command_collision_keeps_first_owner_in_both_load_orders() {
         "target/mods-test/wasm32-unknown-unknown/release/horizon_mods_test_mining_guest.wasm",
     ))
     .unwrap();
-    let manifest = "id = \"miner_fixture\"\nname = \"Miner Fixture\"\nversion = \"0.1.0\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\"]\n";
+    let manifest = "id = \"miner_fixture\"\nname = \"Miner Fixture\"\nversion = \"0.1.0\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\n";
     let miner = dir.join("miner.hmod");
     std::fs::write(
         &miner,
@@ -1593,7 +1593,7 @@ fn mining_callbacks_isolate_distinct_mods_and_failures() {
     let wasm = componentize(&core).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
     let paths: Vec<_> = ["miner_a", "miner_b"].iter().map(|id| {
-        let manifest = format!("id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\"]\n");
+        let manifest = format!("id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\n");
         let path = dir.join(format!("{id}.hmod"));
         std::fs::write(&path, Package::write(&manifest, &wasm).unwrap()).unwrap();
         path

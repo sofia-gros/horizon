@@ -1,5 +1,5 @@
 use horizon_mod_sdk::server::{
-    Args, Player, Registration, ServerMod, items_edit, items_read, items_tools,
+    Args, Player, Registration, ServerMod, inventory_transactions, items_edit, items_tools,
 };
 
 struct MiningGuest;
@@ -28,11 +28,12 @@ impl ServerMod for MiningGuest {
             } else {
                 &player.id
             };
-            let input = items_read::inventory_slot(target, 1, &[])?.ok_or("no ingredient")?;
+            let input =
+                inventory_transactions::inventory_slot(target, 1, &[])?.ok_or("no ingredient")?;
             if input.item != "example:ingredient" {
                 return Err("wrong ingredient".into());
             }
-            items_tools::replace_main_hand_combat_profile_consuming(
+            inventory_transactions::replace_main_hand_combat_profile_consuming(
                 target,
                 &["example".into(), "state".into()],
                 "original",

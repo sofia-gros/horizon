@@ -58,55 +58,6 @@ impl super::server_bindings::horizon::mods::items_edit::Host for State {
 }
 
 impl super::server_bindings::horizon::mods::items_tools::Host for State {
-    fn replace_main_hand_combat_profile_consuming(
-        &mut self,
-        player: String,
-        path: Vec<String>,
-        expected: String,
-        replacement: String,
-        tool: super::ServerToolProfile,
-        damage: u32,
-        max_damage: u32,
-        melee: super::ServerMeleeProfile,
-        slot: u32,
-        count: u32,
-    ) -> Result<(), String> {
-        if self.command_actor.as_deref() != Some(player.as_str())
-            || slot >= 36
-            || count == 0
-            || max_damage == 0
-            || max_damage > i32::MAX as u32
-            || damage > max_damage
-            || !valid_melee(&melee)
-        {
-            return Err("invalid command actor, ingredient or profile".into());
-        }
-        let view = read_slot(
-            self.snapshot.items.as_deref(),
-            &mut self.item_reads_left,
-            &player,
-            slot,
-            &[],
-        )?
-        .ok_or("empty ingredient slot")?;
-        if count > view.count {
-            return Err("not enough ingredient items".into());
-        }
-        self.queue_item_edit(
-            player,
-            path,
-            expected,
-            replacement,
-            Some(tool),
-            Some((damage, max_damage)),
-            Some(melee),
-        )?;
-        let Some(super::Output::ItemEdit(edit)) = self.out.last_mut() else {
-            unreachable!()
-        };
-        edit.consumption = Some((slot, count));
-        Ok(())
-    }
     fn enable_melee_events(&mut self) {
         self.melee_enabled = true;
     }
@@ -364,7 +315,7 @@ fn read(
     Ok(item)
 }
 
-impl items_read::Host for State {
+impl super::server_bindings::horizon::mods::inventory_transactions::Host for State {
     fn inventory_slot(
         &mut self,
         player: String,
@@ -382,6 +333,58 @@ impl items_read::Host for State {
             &path,
         )
     }
+    fn replace_main_hand_combat_profile_consuming(
+        &mut self,
+        player: String,
+        path: Vec<String>,
+        expected: String,
+        replacement: String,
+        tool: super::ServerToolProfile,
+        damage: u32,
+        max_damage: u32,
+        melee: super::ServerMeleeProfile,
+        slot: u32,
+        count: u32,
+    ) -> Result<(), String> {
+        if self.command_actor.as_deref() != Some(player.as_str())
+            || slot >= 36
+            || count == 0
+            || max_damage == 0
+            || max_damage > i32::MAX as u32
+            || damage > max_damage
+            || !valid_melee(&melee)
+        {
+            return Err("invalid command actor, ingredient or profile".into());
+        }
+        let view = read_slot(
+            self.snapshot.items.as_deref(),
+            &mut self.item_reads_left,
+            &player,
+            slot,
+            &[],
+        )?
+        .ok_or("empty ingredient slot")?;
+        if count > view.count {
+            return Err("not enough ingredient items".into());
+        }
+        self.queue_item_edit(
+            player,
+            path,
+            expected,
+            replacement,
+            Some(tool),
+            Some((damage, max_damage)),
+            Some(melee),
+        )?;
+        let Some(super::Output::ItemEdit(edit)) = self.out.last_mut() else {
+            unreachable!()
+        };
+        edit.consumption = Some((slot, count));
+        Ok(())
+    }
+}
+
+impl items_read::Host for State {
     fn main_hand(
         &mut self,
         player: String,

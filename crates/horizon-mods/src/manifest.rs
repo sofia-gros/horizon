@@ -102,6 +102,8 @@ pub enum Capability {
     ItemsEdit,
     /// Change held-item mining settings together with an existing state string.
     ItemsTools,
+    /// Read and consume the command actor's inventory in a checked edit.
+    InventoryTransactions,
     /// Blocks in the server's loaded chunks, and changes to them (server
     /// mods; client mods later, where the game runs the world).
     World,
@@ -110,7 +112,7 @@ pub enum Capability {
     Recipes,
 }
 impl Capability {
-    pub const ALL: [Capability; 15] = [
+    pub const ALL: [Capability; 16] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -126,6 +128,7 @@ impl Capability {
         Capability::World,
         Capability::Recipes,
         Capability::ItemsTools,
+        Capability::InventoryTransactions,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
@@ -137,6 +140,7 @@ impl Capability {
                 | Capability::ItemsRead
                 | Capability::ItemsEdit
                 | Capability::ItemsTools
+                | Capability::InventoryTransactions
         )
     }
     /// The WIT interface it grants, in `horizon:mods`.
@@ -157,6 +161,7 @@ impl Capability {
             Capability::World => "world",
             Capability::Recipes => "recipes",
             Capability::ItemsTools => "items-tools",
+            Capability::InventoryTransactions => "inventory-transactions",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -171,6 +176,7 @@ impl Capability {
                 | Capability::ItemsRead
                 | Capability::ItemsEdit
                 | Capability::ItemsTools
+                | Capability::InventoryTransactions
         )
     }
     /// What the player reads before turning the mod on: "May <this>".
@@ -198,6 +204,9 @@ impl Capability {
             }
             Capability::ItemsTools => {
                 "change held items' mining settings, unbreakable setting and associated custom-data strings on the server"
+            }
+            Capability::InventoryTransactions => {
+                "read and consume the invoking player's inventory while changing their held tool on the server"
             }
         }
     }
@@ -243,6 +252,7 @@ impl fmt::Display for Capability {
             Capability::World => "world",
             Capability::Recipes => "recipes",
             Capability::ItemsTools => "items-tools",
+            Capability::InventoryTransactions => "inventory-transactions",
         };
         f.write_str(name)
     }
@@ -595,6 +605,33 @@ capabilities = ["game-read", "hud"]
                     .replace("side = \"server\"", "side = \"client\"")
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn inventory_transactions_require_explicit_experimental_permission() {
+        let base = "id = \"inv\"\nname = \"Inventory\"\nversion = \"1\"\napi = \"0.3\"\nside = \"server\"\n";
+        let import = ["horizon:mods/inventory-transactions@0.1.0"];
+        let old = format!(
+            "{base}capabilities = [\"items-read\", \"items-tools\"]\nexperimental = [\"items-read\", \"items-tools\"]\n"
+        );
+        assert!(
+            Manifest::parse(&old)
+                .unwrap()
+                .check_imports(import)
+                .is_err()
+        );
+        let declared = format!(
+            "{base}capabilities = [\"inventory-transactions\"]\nexperimental = [\"inventory-transactions\"]\n"
+        );
+        assert!(
+            Manifest::parse(&declared)
+                .unwrap()
+                .check_imports(import)
+                .is_ok()
+        );
+        assert!(
+            Manifest::parse(&declared.replace("side = \"server\"", "side = \"client\"")).is_err()
         );
     }
 

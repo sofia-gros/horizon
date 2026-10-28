@@ -69,8 +69,11 @@ pub const FUNCTIONS: [(&str, u32); 55] = [
     ("items-tools.replace-main-hand-profile-durability", 12),
     ("items-tools.enable-melee-events", 13),
     ("items-tools.replace-main-hand-combat-profile", 14),
-    ("items-read.inventory-slot", 15),
-    ("items-tools.replace-main-hand-combat-profile-consuming", 15),
+    ("inventory-transactions.inventory-slot", 15),
+    (
+        "inventory-transactions.replace-main-hand-combat-profile-consuming",
+        15,
+    ),
 ];
 
 /// What the game's program carries so the launcher can read its level
