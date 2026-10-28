@@ -31,6 +31,7 @@ pub(super) struct GuestStation {
     last_sound: u64,
     mod_registration: Option<super::stations::ModRegistration>,
     mod_selection: Option<String>,
+    mod_name: Option<String>,
     storage_snapshot: Option<Vec<Option<ItemStack>>>,
 }
 
@@ -195,6 +196,7 @@ impl Game<'_> {
             last_sound: 0,
             mod_registration: station.mod_registration.clone(),
             mod_selection: station.mod_selection.clone(),
+            mod_name: None,
             storage_snapshot: (!station.mod_storage_indices().is_empty()).then(|| {
                 station
                     .mod_storage_indices()
@@ -260,6 +262,7 @@ impl Game<'_> {
                     .and_then(|code| gui.selection_from_code(*code))
                     .map(str::to_owned);
                 if gs.mod_selection != selection {
+                    gs.mod_name = None;
                     gs.mod_selection = selection;
                     gs.menu.data = values.into_iter().map(i32::from).collect();
                     self.lan_mod_station_preview(&host.hub.guests[gi], &mut gs);
@@ -378,16 +381,36 @@ impl Game<'_> {
             let inputs: Vec<_> = (0..mod_counts(gs).0)
                 .map(|i| gs.menu.slot(i).cloned())
                 .collect();
-            if let Some((results, counts)) = self.mod_gui_workstation_plan(
+            if let Some((mut results, counts)) = self.mod_gui_workstation_plan(
                 registration,
                 &player,
                 &inputs,
                 gs.mod_selection.as_deref(),
             ) {
+                if let Some(gui) = &registration.gui {
+                    if gui.text_input.is_some()
+                        && !super::stations::mod_text_enabled(
+                            gui,
+                            gs.mod_selection.as_deref(),
+                            &inputs,
+                        )
+                    {
+                        gs.mod_name = None;
+                    }
+                    super::stations::name_mod_output(
+                        gui,
+                        gs.mod_selection.as_deref(),
+                        gs.mod_name.as_deref(),
+                        &inputs,
+                        &mut results,
+                    );
+                }
                 let transaction = inputs.into_iter().zip(counts).collect::<Vec<_>>();
                 let _ = gs
                     .menu
                     .set_workstation_transaction_multi(&transaction, results);
+            } else {
+                gs.mod_name = None;
             }
             return;
         }
@@ -608,6 +631,30 @@ impl Game<'_> {
     /// `ServerGamePacketListenerImpl.handleRenameItem`: the guest's anvil
     /// takes the name (`AnvilMenu.setItemName`).
     pub(super) fn lan_station_rename(&mut self, host: &mut LanHost, conn: u32, name: &str) {
+        if let Some(gs) = host.play.get_mut(&conn).and_then(|p| p.station.as_mut())
+            && gs.kind == StationKind::Mod
+        {
+            let inputs: Vec<_> = (0..mod_counts(gs).0)
+                .map(|i| gs.menu.slot(i).cloned())
+                .collect();
+            let valid = gs.menu.slot(mod_counts(gs).0).is_some()
+                && gs
+                    .mod_registration
+                    .as_ref()
+                    .and_then(|r| r.gui.as_ref())
+                    .is_some_and(|gui| {
+                        super::stations::mod_text_enabled(gui, gs.mod_selection.as_deref(), &inputs)
+                            && gui
+                                .text_input
+                                .as_ref()
+                                .is_some_and(|field| field.valid_text(name))
+                    });
+            if valid {
+                gs.mod_name = Some(name.to_owned());
+                self.lan_station_op(host, conn, None, false, |_, _| {});
+            }
+            return;
+        }
         let anvil = host
             .play
             .get(&conn)
@@ -742,6 +789,9 @@ impl Game<'_> {
                 return;
             }
             if let Some(s) = host.play.get_mut(&conn).and_then(|p| p.station.as_mut()) {
+                if s.mod_selection.as_deref() != Some(&selection) {
+                    s.mod_name = None;
+                }
                 s.mod_selection = Some(selection);
             }
             self.lan_station_op(host, conn, Some(window), false, |_, _| {});
@@ -990,6 +1040,7 @@ impl Game<'_> {
                         .is_some_and(|gui| gui.shared_selection)
                         && station.mod_selection != selection;
                     if changed {
+                        station.mod_name = None;
                         station.mod_selection = selection;
                         self.lan_mod_station_preview(g, &mut station);
                     }

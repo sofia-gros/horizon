@@ -633,12 +633,7 @@ impl Game<'_> {
                         self.recipe_text(Some(text), false)
                     }
                     // The anvil's rename box.
-                    Screen::Inventory
-                        if self
-                            .station
-                            .as_ref()
-                            .is_some_and(|s| s.kind == super::stations::Kind::Anvil) =>
-                    {
+                    Screen::Inventory if self.station_typing() => {
                         self.station_text(Some(text), false)
                     }
                     Screen::Creative if self.creative_screen.tab().search => {
