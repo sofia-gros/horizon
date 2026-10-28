@@ -899,6 +899,7 @@ Generic workstation recipe planning. The host checks each complete input snapsho
 | Field | Type | |
 | --- | --- | --- |
 | `item` | `string` |  |
+| `count` | `u32` |  |
 | `source-slot` | `option<u32>` |  |
 | `text` | `option<string>` |  |
 | `tool` | `option<profile>` |  |

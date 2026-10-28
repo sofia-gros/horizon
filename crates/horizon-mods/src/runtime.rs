@@ -531,12 +531,20 @@ impl Mods {
     pub fn workstation(&self, block: &str, owner: &str) -> Option<WorkstationRegistration> {
         let mut matches = self.entries.iter().filter_map(|entry| {
             let run = entry.run.as_ref()?;
-            run.workstation.as_ref()?;
-            run.store
-                .data()
-                .workstations
-                .iter()
-                .find(|r| r.block == block && r.owner == owner)
+            run.store.data().workstations.iter().find(|r| {
+                r.block == block
+                    && r.owner == owner
+                    && match &r.gui {
+                        None => run.workstation.is_some(),
+                        Some(gui) => {
+                            run.gui_workstation.is_some()
+                                || gui
+                                    .slots
+                                    .iter()
+                                    .all(|s| s.role == crate::gui::SlotRole::Storage)
+                        }
+                    }
+            })
         });
         let first = matches.next()?.clone();
         matches.next().is_none().then_some(first)

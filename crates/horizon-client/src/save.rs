@@ -393,9 +393,6 @@ pub use horizon_items::item_nbt::{
 /// is a chest, trapped chest or barrel).
 fn block_entity_id(e: &crate::containers::BlockEntity, block: &str) -> String {
     match (e, block) {
-        (crate::containers::BlockEntity::Chest(_), b) if !b.starts_with("minecraft:") => {
-            "horizon:mod_storage".to_owned()
-        }
         (
             crate::containers::BlockEntity::Chest(_),
             "minecraft:trapped_chest" | "minecraft:barrel" | "minecraft:dropper",
@@ -425,11 +422,14 @@ pub fn encode_block_entity(
         ("components", Tag::Compound(components)),
     ];
     match e {
-        BlockEntity::Chest(items) => {
+        BlockEntity::Chest(items) => entries.push(("Items", encode_items(items))),
+        BlockEntity::ModStorage(ids, items) => {
+            entries.push((
+                "horizon:slot_ids",
+                Tag::List(ids.iter().map(|id| string(id)).collect()),
+            ));
             entries.push(("Items", encode_items(items)));
-            if !block.starts_with("minecraft:") {
-                entries.push(("horizon:slot_count", Tag::Int(items.len() as i32)));
-            }
+            entries.push(("horizon:slot_count", Tag::Int(items.len() as i32)));
         }
         BlockEntity::Furnace(f) => {
             entries.push(("Items", encode_items(&f.items)));
@@ -614,9 +614,22 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         if !(1..=50).contains(&count) {
             return None;
         }
+        let Tag::List(raw_ids) = tag.get("horizon:slot_ids")? else {
+            return None;
+        };
+        let ids = raw_ids
+            .iter()
+            .map(|id| text(Some(id)))
+            .collect::<Option<Vec<_>>>()?;
+        if ids.len() != count
+            || ids.iter().any(|id| id.is_empty() || id.len() > 64)
+            || ids.iter().collect::<std::collections::HashSet<_>>().len() != count
+        {
+            return None;
+        }
         return Some((
             pos,
-            BlockEntity::Chest(decode_items(tag.get("Items"), count)),
+            BlockEntity::ModStorage(ids, decode_items(tag.get("Items"), count)),
         ));
     }
     if id == "minecraft:end_gateway" {
@@ -681,7 +694,9 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
     };
     let mut entity = BlockEntity::for_block(block)?;
     match &mut entity {
-        BlockEntity::Chest(items) => *items = decode_items(tag.get("Items"), items.len()),
+        BlockEntity::Chest(items) | BlockEntity::ModStorage(_, items) => {
+            *items = decode_items(tag.get("Items"), items.len())
+        }
         BlockEntity::Furnace(f) => {
             let items = decode_items(tag.get("Items"), 3);
             f.items = [items[0].clone(), items[1].clone(), items[2].clone()];
@@ -3805,15 +3820,29 @@ mod tests {
         let pos = (3, 64, 7);
         let tag = super::encode_block_entity(
             pos,
-            &crate::containers::BlockEntity::Chest(slots.clone()),
+            &crate::containers::BlockEntity::ModStorage(
+                (0..42).map(|i| format!("slot{i}")).collect(),
+                slots.clone(),
+            ),
             "example:machine",
         );
         let (decoded_pos, decoded) = super::decode_block_entity(&tag).unwrap();
         assert_eq!(decoded_pos, pos);
-        let crate::containers::BlockEntity::Chest(decoded) = decoded else {
+        let crate::containers::BlockEntity::ModStorage(ids, decoded) = decoded else {
             panic!("expected storage");
         };
         assert_eq!(decoded, slots);
+        assert_eq!(ids[41], "slot41");
+        // A legacy modded shulker must retain its vanilla block-entity ID.
+        let legacy = super::encode_block_entity(
+            pos,
+            &crate::containers::BlockEntity::Chest(vec![None; 27]),
+            "example:shulker_box",
+        );
+        assert_eq!(
+            super::text(legacy.get("id")).as_deref(),
+            Some("minecraft:shulker_box")
+        );
     }
     #[test]
     fn points_of_interest_save_as_poi_sections() {

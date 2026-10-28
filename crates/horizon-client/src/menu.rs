@@ -1295,7 +1295,9 @@ impl Menu {
             Kind::ModWorkstation | Kind::ModWorkstationSlots(_) | Kind::ModWorkstationMulti(_, _)
         ) || inputs.len() != self.containers[MAIN].len()
             || outputs.len() != self.containers[RESULT].len()
-            || outputs.iter().any(|result| result.count != 1)
+            || outputs
+                .iter()
+                .any(|result| result.count == 0 || result.count > CONTAINER_MAX)
             || !inputs.iter().any(|(_, count)| *count > 0)
             || inputs.iter().enumerate().any(|(i, (stack, count))| {
                 self.containers[MAIN].get(i) != Some(stack)
@@ -1562,7 +1564,7 @@ impl Menu {
                     && plan.outputs.iter().enumerate().all(|(i, expected)| {
                         self.containers[RESULT].get(i).and_then(Option::as_ref) == Some(expected)
                     })
-                    && (plan.outputs.len() == 1
+                    && (plan.outputs.len() == 1 && plan.outputs[0].count == 1
                         || self.fits_workstation_outputs(env, plan, self.slots[s].index))
             }),
             // AnvilMenu.mayPickup: the levels to pay, and a price.
@@ -3491,6 +3493,57 @@ pub(crate) mod tests {
             assert!(menu.slot(1).is_none());
             assert!(menu.slot(2).is_none());
             assert!(menu.slot(3).is_none());
+        });
+        with_menu(Kind::ModWorkstationMulti(2, 2), |env, menu| {
+            let a = stack("flint", 1).unwrap();
+            let b = stack("paper", 1).unwrap();
+            let outputs = vec![stack("stick", 1).unwrap(), stack("diamond", 1).unwrap()];
+            menu.set_slot(env, 0, Some(a.clone()));
+            menu.set_slot(env, 1, Some(b.clone()));
+            menu.set_workstation_transaction_multi(&[(Some(a), 1), (Some(b), 1)], outputs.clone())
+                .unwrap();
+            menu.click(env, 2, 0, Input::QuickMove).unwrap();
+            assert!(outputs.iter().all(|stack| menu.player_contains(stack)));
+            assert!((0..4).all(|i| menu.slot(i).is_none()));
+            menu.click(env, 3, 0, Input::QuickMove).unwrap();
+            assert_eq!(
+                menu.containers[PLAYER][..36]
+                    .iter()
+                    .flatten()
+                    .filter(|s| s.item.as_ref() == "minecraft:diamond")
+                    .map(|s| s.count)
+                    .sum::<u32>(),
+                1
+            );
+        });
+        with_menu(Kind::ModWorkstationMulti(2, 2), |env, menu| {
+            let material = stack("flint", 1).unwrap();
+            let outputs = vec![stack("stick", 3).unwrap(), stack("diamond", 2).unwrap()];
+            menu.set_slot(env, 0, Some(material.clone()));
+            menu.set_workstation_transaction_multi(
+                &[(Some(material), 1), (None, 0)],
+                outputs.clone(),
+            )
+            .unwrap();
+            menu.click(env, 2, 0, Input::QuickMove).unwrap();
+            assert_eq!(
+                menu.containers[PLAYER][..36]
+                    .iter()
+                    .flatten()
+                    .filter(|s| s.item.as_ref() == "minecraft:stick")
+                    .map(|s| s.count)
+                    .sum::<u32>(),
+                3
+            );
+            assert_eq!(
+                menu.containers[PLAYER][..36]
+                    .iter()
+                    .flatten()
+                    .filter(|s| s.item.as_ref() == "minecraft:diamond")
+                    .map(|s| s.count)
+                    .sum::<u32>(),
+                2
+            );
         });
     }
 

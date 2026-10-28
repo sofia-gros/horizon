@@ -37,6 +37,8 @@ pub struct Furnace {
 #[derive(Clone, Debug)]
 pub enum BlockEntity {
     Chest(Vec<Option<ItemStack>>),
+    /// A mod-owned persistent, variable-size slot inventory.
+    ModStorage(Vec<String>, Vec<Option<ItemStack>>),
     Furnace(Furnace),
     Brewing(Box<BrewingStand>),
     /// Signs and hanging signs (`SignBlockEntity`).

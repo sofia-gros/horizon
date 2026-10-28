@@ -6248,6 +6248,7 @@ impl Game<'_> {
             Some(BlockEntity::Crafter(_)) => v.extend(300..310),
             Some(
                 BlockEntity::Sign(_)
+                | BlockEntity::ModStorage(_, _)
                 | BlockEntity::Jukebox(_)
                 | BlockEntity::Beacon(_)
                 | BlockEntity::Lectern(_)
@@ -6550,6 +6551,7 @@ impl Game<'_> {
                     | BlockEntity::EndGateway(_)
                     | BlockEntity::Skull(_)
                     | BlockEntity::DaylightDetector
+                    | BlockEntity::ModStorage(_, _)
                     | BlockEntity::Campfire(_)
                     | BlockEntity::ChiseledBookshelf(_),
                 ) => {}
@@ -6725,7 +6727,7 @@ impl Game<'_> {
             {
                 return true;
             }
-            let Some(horizon_client::containers::BlockEntity::Chest(current)) =
+            let Some(horizon_client::containers::BlockEntity::ModStorage(_, current)) =
                 self.world.block_entities.get(&key)
             else {
                 return true;
@@ -6831,7 +6833,7 @@ impl Game<'_> {
                 .filter(|s| !s.mod_storage_indices().is_empty())
         {
             let key = (station.pos[0], station.pos[1], station.pos[2]);
-            if let Some(horizon_client::containers::BlockEntity::Chest(slots)) =
+            if let Some(horizon_client::containers::BlockEntity::ModStorage(_, slots)) =
                 self.world.block_entities.get_mut(&key)
             {
                 let current = station

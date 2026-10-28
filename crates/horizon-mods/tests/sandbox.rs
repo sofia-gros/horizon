@@ -1595,6 +1595,10 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
             .is_err()
     );
     assert!(!storage.join("preview-write").exists());
+    assert_eq!(
+        mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
+        Some(vec![10])
+    );
     let tool = horizon_mods::WorkstationInput {
         item: "example:tool".into(),
         count: 1,

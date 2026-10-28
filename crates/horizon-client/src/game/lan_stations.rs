@@ -242,7 +242,8 @@ impl Game<'_> {
                     host.play.entry(conn).or_default().station = Some(gs);
                     return true;
                 }
-                let Some(BlockEntity::Chest(current)) = self.world.block_entities.get(&key) else {
+                let Some(BlockEntity::ModStorage(_, current)) = self.world.block_entities.get(&key)
+                else {
                     host.play.entry(conn).or_default().station = Some(gs);
                     return true;
                 };
@@ -290,7 +291,9 @@ impl Game<'_> {
                     .into_iter()
                     .map(|i| gs.menu.slot(i).cloned())
                     .collect();
-                if let Some(BlockEntity::Chest(slots)) = self.world.block_entities.get_mut(&key) {
+                if let Some(BlockEntity::ModStorage(_, slots)) =
+                    self.world.block_entities.get_mut(&key)
+                {
                     if slots != snapshot {
                         slots.clone_from(snapshot);
                         self.world.modified.insert((key.0 >> 4, key.2 >> 4));
@@ -891,7 +894,7 @@ impl Game<'_> {
             if let Some(snapshot) = gs.storage_snapshot.as_ref() {
                 let key = (x, y, z);
                 let current = match self.world.block_entities.get(&key) {
-                    Some(BlockEntity::Chest(slots))
+                    Some(BlockEntity::ModStorage(_, slots))
                         if slots.len() == snapshot.len() && slots != snapshot =>
                     {
                         Some(slots.clone())

@@ -57,6 +57,7 @@ impl ServerMod for MiningGuest {
             consume: vec![0, 1, 0],
             outputs: vec![GuiWorkstationOutput {
                 item: "example:part".into(),
+                count: 1,
                 source_slot: None,
                 text: None,
                 tool: None,

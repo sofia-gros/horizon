@@ -376,16 +376,41 @@ impl Game<'_> {
         if !storage_indices.is_empty() {
             let key = (pos[0], pos[1], pos[2]);
             let count = storage_indices.len();
+            let expected_ids = station
+                .mod_gui
+                .as_ref()
+                .expect("storage requires GUI")
+                .slots
+                .iter()
+                .filter(|s| s.role == horizon_mods::gui::SlotRole::Storage)
+                .map(|s| s.id.clone())
+                .collect::<Vec<_>>();
             let created = !self.world.block_entities.contains_key(&key);
             if created {
-                self.world
-                    .block_entities
-                    .insert(key, BlockEntity::Chest(vec![None; count]));
+                // Never replace a saved entity this version did not decode.
+                // It may contain data from another mod or a future format.
+                let saved_entity = self.world.chunks.get(&(pos[0] >> 4, pos[2] >> 4)).and_then(|chunk| chunk.saved.as_ref()).and_then(|saved| saved.block_entities.iter().find(|tag| {
+                    matches!(tag.get("x"), Some(horizon_world::nbt::Tag::Int(x)) if *x == pos[0])
+                        && matches!(tag.get("y"), Some(horizon_world::nbt::Tag::Int(y)) if *y == pos[1])
+                        && matches!(tag.get("z"), Some(horizon_world::nbt::Tag::Int(z)) if *z == pos[2])
+                })).cloned();
+                let entity = if let Some(tag) = saved_entity {
+                    let Some((_, entity @ BlockEntity::ModStorage(_, _))) =
+                        horizon_client::save::decode_block_entity(&tag)
+                    else {
+                        return false;
+                    };
+                    entity
+                } else {
+                    BlockEntity::ModStorage(expected_ids.clone(), vec![None; count])
+                };
+                self.world.block_entities.insert(key, entity);
             }
-            let Some(BlockEntity::Chest(slots)) = self.world.block_entities.get(&key) else {
+            let Some(BlockEntity::ModStorage(ids, slots)) = self.world.block_entities.get(&key)
+            else {
                 return false;
             };
-            if slots.len() != count {
+            if slots.len() != count || ids != &expected_ids {
                 return false;
             }
             for (index, stack) in storage_indices.into_iter().zip(slots) {

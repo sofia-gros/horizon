@@ -483,6 +483,21 @@ mod run {
                 let stack = inputs[n].as_ref();
                 n += 1;
                 let view = if let Some(stack) = stack {
+                    if !slot.accepts.is_empty()
+                        && !slot.accepts.iter().any(|selector| {
+                            if let Some(tag) = selector.strip_prefix('#') {
+                                self.res
+                                    .items()
+                                    .item_tags
+                                    .get(tag)
+                                    .is_some_and(|items| items.contains(&*stack.item))
+                            } else {
+                                selector == &*stack.item
+                            }
+                        })
+                    {
+                        return None;
+                    }
                     let read = horizon_client::mod_items::ServerItems(vec![(
                         player.into(),
                         0,
@@ -549,7 +564,10 @@ mod run {
             let mut results = Vec::new();
             let mut used_sources = std::collections::HashSet::new();
             for output in plan.outputs {
-                if self.res.items().get(&output.item).is_none() {
+                let Some(item) = self.res.items().get(&output.item) else {
+                    return None;
+                };
+                if output.count == 0 || output.count > item.max_stack.min(99) {
                     return None;
                 }
                 let mut result = if let Some(source) = output.source_slot {
@@ -567,12 +585,13 @@ mod run {
                         .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
                         .count();
                     let stack = inputs.get(index)?.as_ref()?;
-                    if stack.count != 1 || &*stack.item != output.item {
+                    if stack.count != 1 || output.count != 1 || &*stack.item != output.item {
                         return None;
                     }
                     stack.clone()
                 } else {
-                    let mut stack = horizon_client::items::ItemStack::new(&output.item, 1);
+                    let mut stack =
+                        horizon_client::items::ItemStack::new(&output.item, output.count);
                     if output.text.is_some() {
                         let mut leaf = Tag::String("".into());
                         for key in reg.path.iter().rev() {

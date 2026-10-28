@@ -840,6 +840,7 @@ interface gui-workstation-events {
     use items-tools.{profile, melee-profile};
     record output {
         item: string,
+        count: u32,
         source-slot: option<u32>,
         text: option<string>,
         tool: option<profile>,
