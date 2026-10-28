@@ -1576,6 +1576,21 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
     let registration = mods
         .workstation("example:station", "preview_storage")
         .unwrap();
+    let generic = mods
+        .workstation("example:gui_station", "preview_storage")
+        .unwrap();
+    let generic_inputs = [None, None, None];
+    let planned = mods
+        .gui_workstation_preview(&generic, &generic_inputs, Some("choose"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(planned.consume, [0, 1, 0]);
+    assert_eq!(planned.outputs[0].item, "example:part");
+    assert!(
+        mods.gui_workstation_preview(&generic, &generic_inputs, Some("unknown"))
+            .is_err()
+    );
+    assert!(!storage.join("preview-write").exists());
     let tool = horizon_mods::WorkstationInput {
         item: "example:tool".into(),
         count: 1,

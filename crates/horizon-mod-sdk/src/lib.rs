@@ -194,6 +194,9 @@ pub mod server {
         },
     });
 
+    pub use exports::horizon::mods::gui_workstation_events::{
+        Guest as __GuiWorkstationGuest, Output as GuiWorkstationOutput, Plan as GuiWorkstationPlan,
+    };
     pub use exports::horizon::mods::melee_events::Guest as __MeleeGuest;
     pub use exports::horizon::mods::mining_events::Guest as __MiningGuest;
     pub use exports::horizon::mods::server_events::{
@@ -266,6 +269,14 @@ pub mod server {
             _tool: &WorkstationInput,
             _ingredient: &WorkstationInput,
         ) -> Result<Option<WorkstationPlan>, String> {
+            Ok(None)
+        }
+        fn gui_workstation_preview(
+            &mut self,
+            _block: &str,
+            _inputs: &[Option<WorkstationInput>],
+            _selection: Option<&str>,
+        ) -> Result<Option<GuiWorkstationPlan>, String> {
             Ok(None)
         }
     }
@@ -516,6 +527,19 @@ macro_rules! export_server_mod {
                 ) -> Result<Option<$crate::server::WorkstationPlan>, String> {
                     let mut result = Err("The mod is not running".to_string());
                     with(|m| result = m.workstation_preview(&block, &tool, &ingredient));
+                    result
+                }
+            }
+            impl $crate::server::__GuiWorkstationGuest for Export {
+                fn preview(
+                    block: String,
+                    inputs: Vec<Option<$crate::server::WorkstationInput>>,
+                    selection: Option<String>,
+                ) -> Result<Option<$crate::server::GuiWorkstationPlan>, String> {
+                    let mut result = Err("The mod is not running".to_string());
+                    with(|m| {
+                        result = m.gui_workstation_preview(&block, &inputs, selection.as_deref())
+                    });
                     result
                 }
             }

@@ -798,6 +798,9 @@ interface workstations {
     /// retains all other components. At most 32 registrations per mod.
     /// `ingredient-tags` requests at most 16 tag memberships for each preview.
     register: func(block: string, title: string, custom-path: list<string>, ingredient-tags: list<string>) -> result<_, string>;
+    /// Register a bounded declarative GUI definition for a block. The JSON
+    /// provides slot coordinates, roles, acceptance selectors and elements.
+    register-gui: func(block: string, title: string, custom-path: list<string>, tags: list<string>, definition: string) -> result<_, string>;
 }
 
 /// A workstation preview. The host discards queued host outputs and blocks
@@ -823,6 +826,27 @@ interface workstation-events {
     }
     /// Return a preview for these inputs, or none if they do not match.
     preview: func(block: string, tool: input, ingredient: input) -> result<option<plan>, string>;
+}
+
+/// Generic workstation recipe planning. The host checks each complete input
+/// snapshot and output before committing any consumption.
+interface gui-workstation-events {
+    use workstation-events.{input};
+    use items-tools.{profile, melee-profile};
+    record output {
+        item: string,
+        source-slot: option<u32>,
+        text: option<string>,
+        tool: option<profile>,
+        durability: option<tuple<u32, u32>>,
+        melee: option<melee-profile>,
+    }
+    record plan {
+        consume: list<u32>,
+        outputs: list<output>,
+    }
+    /// Compute a preview for complete input snapshots and a selected button.
+    preview: func(block: string, inputs: list<option<input>>, selection: option<string>) -> result<option<plan>, string>;
 }
 
 /// What the server calls in a server mod (manifest `api = "0.3"`,
@@ -984,10 +1008,15 @@ world melee-host {
 world horizon-server-workstation-mod {
     include horizon-server-melee-mod;
     export workstation-events;
+    export gui-workstation-events;
 }
 
 world workstation-host {
     export workstation-events;
+}
+
+world gui-workstation-host {
+    export gui-workstation-events;
 }
 
 /// A mod with widgets (capability `ui`): the SDK builds every mod against

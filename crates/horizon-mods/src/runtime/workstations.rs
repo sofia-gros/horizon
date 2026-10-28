@@ -45,7 +45,22 @@ impl super::server_bindings::horizon::mods::workstations::Host for State {
             title,
             path,
             ingredient_tags,
+            gui: None,
         });
+        Ok(())
+    }
+
+    fn register_gui(
+        &mut self,
+        block: String,
+        title: String,
+        path: Vec<String>,
+        tags: Vec<String>,
+        definition: String,
+    ) -> Result<(), String> {
+        let gui = crate::gui::Gui::parse(&definition)?;
+        self.register(block, title, path, tags)?;
+        self.workstations.last_mut().expect("registered").gui = Some(gui);
         Ok(())
     }
 }

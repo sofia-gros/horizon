@@ -6677,13 +6677,13 @@ impl Game<'_> {
                 .station
                 .as_ref()
                 .filter(|s| s.kind == stations::Kind::Mod)
-                .map(|s| (s.result.clone(), s.mod_cost));
+                .map(|s| (s.result.clone(), s.mod_cost, s.mod_counts.clone()));
             if let Some(previous) = previous {
                 self.station_changed();
                 let current = self
                     .station
                     .as_ref()
-                    .map(|s| (s.result.clone(), s.mod_cost));
+                    .map(|s| (s.result.clone(), s.mod_cost, s.mod_counts.clone()));
                 if current.as_ref() != Some(&previous) {
                     return true;
                 }
@@ -6905,13 +6905,21 @@ impl Game<'_> {
             (Kind::Beacon, v)
         } else if anvil_open || smithing_open || mod_station_open {
             // ItemCombinerMenu: the inputs, the result, then the inventory.
-            let inputs = if smithing_open { 3 } else { 2 };
+            let inputs = if smithing_open {
+                3
+            } else if mod_station_open {
+                self.station.as_ref().map_or(2, |s| s.inputs.len())
+            } else {
+                2
+            };
             let mut v: Vec<Option<usize>> =
                 (0..inputs).map(|i| Some(stations::INPUT + i)).collect();
             v.push(Some(stations::RESULT));
             v.extend((9..36).chain(0..9).map(Some));
             (
-                if mod_station_open {
+                if mod_station_open && self.station.as_ref().is_some_and(|s| s.mod_gui.is_some()) {
+                    Kind::ModWorkstationSlots(inputs)
+                } else if mod_station_open {
                     Kind::ModWorkstation
                 } else if anvil_open {
                     Kind::Anvil
@@ -7035,22 +7043,43 @@ impl Game<'_> {
             self.level_maps(&held)
         });
         let next_map = if merchant_open { self.peek_map_id() } else { 0 };
-        let mod_plan = if mod_station_open {
-            self.station.as_ref().and_then(|s| {
-                Some((
-                    s.inputs[0].clone()?,
-                    s.inputs[1].clone()?,
-                    s.result.clone()?,
-                    if self.remote.is_some() {
-                        1
-                    } else {
-                        s.mod_cost?
-                    },
-                ))
-            })
-        } else {
-            None
-        };
+        let mod_plan =
+            if mod_station_open && self.station.as_ref().is_none_or(|s| s.mod_gui.is_none()) {
+                self.station.as_ref().and_then(|s| {
+                    Some((
+                        s.inputs[0].clone()?,
+                        s.inputs[1].clone()?,
+                        s.result.clone()?,
+                        if self.remote.is_some() {
+                            1
+                        } else {
+                            s.mod_cost?
+                        },
+                    ))
+                })
+            } else {
+                None
+            };
+        let mod_transaction = self.station.as_ref().and_then(|s| {
+            let gui = s.mod_gui.as_ref()?;
+            let result = s.result.clone()?;
+            let counts = if self.remote.is_some() {
+                let mut counts = vec![0; s.inputs.len()];
+                let first = s.inputs.iter().position(Option::is_some)?;
+                counts[first] = 1;
+                counts
+            } else {
+                s.mod_counts.clone()?
+            };
+            let inputs = s.inputs.iter().cloned().zip(counts).collect::<Vec<_>>();
+            let filters = gui
+                .slots
+                .iter()
+                .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
+                .map(|s| s.accepts.clone())
+                .collect::<Vec<_>>();
+            Some((inputs, result, filters))
+        });
         let tag = |t: &str| self.structure_tag(t);
         let maps = trading::GameMaps {
             terrain: self.end.locator(),
@@ -7088,6 +7117,20 @@ impl Game<'_> {
         }
         if let Some((tool, ingredient, result, count)) = mod_plan {
             let _ = menu.set_workstation_plan(&tool, &ingredient, count, result);
+        }
+        if let Kind::ModWorkstationSlots(_) = kind {
+            if let Some(gui) = self.station.as_ref().and_then(|s| s.mod_gui.as_ref()) {
+                let filters = gui
+                    .slots
+                    .iter()
+                    .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
+                    .map(|s| s.accepts.clone())
+                    .collect();
+                let _ = menu.set_workstation_filters(filters);
+            }
+            if let Some((inputs, result, _)) = mod_transaction {
+                let _ = menu.set_workstation_transaction(&inputs, result);
+            }
         }
         // The off hand is part of the inventory even when the menu has no slot for it.
         let offhand_mapped = game_of.contains(&Some(504));
@@ -7231,7 +7274,7 @@ impl Game<'_> {
         if kind == Kind::Anvil || kind == Kind::Smithing {
             self.combiner_session_end(&menu, predicting);
         }
-        if kind == Kind::ModWorkstation && !predicting {
+        if matches!(kind, Kind::ModWorkstation | Kind::ModWorkstationSlots(_)) && !predicting {
             self.station_changed();
         }
         if kind == Kind::Enchanting && (menu.enchant_changed || before[0] != menu.slot(0).cloned())

@@ -50,6 +50,13 @@ mod mining_bindings {
 mod workstation_bindings {
     wasmtime::component::bindgen!({ path: "../horizon-mod-sdk/wit", world: "workstation-host" });
 }
+mod gui_workstation_bindings {
+    wasmtime::component::bindgen!({ path: "../horizon-mod-sdk/wit", world: "gui-workstation-host" });
+}
+pub use gui_workstation_bindings::exports::horizon::mods::gui_workstation_events::{
+    Output as GuiWorkstationOutput, Plan as GuiWorkstationPlan,
+};
+pub use gui_workstation_bindings::horizon::mods::workstation_events::Input as GuiWorkstationInput;
 pub use workstation_bindings::exports::horizon::mods::workstation_events::{
     Input as WorkstationInput, Plan as WorkstationPlan,
 };
@@ -61,6 +68,7 @@ pub struct WorkstationRegistration {
     pub title: String,
     pub path: Vec<String>,
     pub ingredient_tags: Vec<String>,
+    pub gui: Option<crate::gui::Gui>,
 }
 /// Capability `ui`'s world beyond `horizon-mod` (docs/mods.md): a second
 /// world, so mods built before it (no `ui-events` export) still instantiate
@@ -375,6 +383,7 @@ struct Running {
     mining: Option<mining_bindings::MiningHost>,
     melee: Option<melee_bindings::MeleeHost>,
     workstation: Option<workstation_bindings::WorkstationHost>,
+    gui_workstation: Option<gui_workstation_bindings::GuiWorkstationHost>,
     hooks: Hooks,
     /// It imports `game.raycast`.
     raycasts: bool,
@@ -565,6 +574,67 @@ impl Mods {
                 .expect("checked")
                 .horizon_mods_workstation_events()
                 .call_preview(&mut run.store, &registration.block, tool, ingredient);
+            run.store.data_mut().previewing_workstation = false;
+            result
+        });
+        let discarded = self.out.split_off(start);
+        self.out.extend(
+            discarded
+                .into_iter()
+                .filter(|o| matches!(o, Output::Stopped { .. })),
+        );
+        result.ok_or("workstation mod trapped")?
+    }
+
+    /// Query the owning mod for a declarative workstation preview. The host
+    /// must validate the returned plan against its complete stack snapshots.
+    pub fn gui_workstation_preview(
+        &mut self,
+        registration: &WorkstationRegistration,
+        inputs: &[Option<GuiWorkstationInput>],
+        selection: Option<&str>,
+    ) -> Result<Option<GuiWorkstationPlan>, String> {
+        let gui = registration.gui.as_ref().ok_or("no GUI definition")?;
+        if self
+            .workstation(&registration.block, &registration.owner)
+            .as_ref()
+            != Some(registration)
+            || inputs.len() != gui.slots.len()
+            || selection.is_some_and(|id| {
+                !gui.elements.iter().any(|element| {
+                matches!(element, crate::gui::Element::Button { id: button, .. } if button == id)
+            })
+            })
+        {
+            return Err("invalid GUI workstation preview".into());
+        }
+        let i = self
+            .entries
+            .iter()
+            .position(|entry| {
+                entry
+                    .manifest
+                    .as_ref()
+                    .is_some_and(|m| m.id == registration.owner)
+            })
+            .ok_or("workstation mod stopped")?;
+        if self.entries[i]
+            .run
+            .as_ref()
+            .and_then(|run| run.gui_workstation.as_ref())
+            .is_none()
+        {
+            return Err("missing GUI workstation callback".into());
+        }
+        let start = self.out.len();
+        let result = self.call(i, FUEL_EVENT, |run| {
+            run.store.data_mut().previewing_workstation = true;
+            let result = run
+                .gui_workstation
+                .as_ref()
+                .expect("checked")
+                .horizon_mods_gui_workstation_events()
+                .call_preview(&mut run.store, &registration.block, inputs, selection);
             run.store.data_mut().previewing_workstation = false;
             result
         });
@@ -817,6 +887,11 @@ impl Mods {
         } else {
             None
         };
+        let gui_workstation = if server {
+            gui_workstation_bindings::GuiWorkstationHost::new(&mut store, &instance).ok()
+        } else {
+            None
+        };
         let (mut hooks, ui) = if server {
             let exports = HorizonServerMod::new(&mut store, &instance).map_err(|e| reason(&e))?;
             let r = exports
@@ -867,6 +942,7 @@ impl Mods {
             mining,
             melee,
             workstation,
+            gui_workstation,
             hooks,
             raycasts: functions.iter().any(|f| f == "game.raycast"),
             item_reads: functions.iter().any(|f| {

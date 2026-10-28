@@ -64,12 +64,17 @@ New SDK server mods export this optional interface as well. Older server mods co
 ## World `horizon-server-workstation-mod`
 
 - Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`, `inventory-transactions`, `workstations`
-- Exports (what the mod provides): `workstation-events`, `melee-events`, `mining-events`, `server-events`
+- Exports (what the mod provides): `workstation-events`, `gui-workstation-events`, `melee-events`, `mining-events`, `server-events`
 
 ## World `workstation-host`
 
 - Imports (what the game offers): `items-tools`
 - Exports (what the mod provides): `workstation-events`
+
+## World `gui-workstation-host`
+
+- Imports (what the game offers): `items-tools`, `workstation-events`
+- Exports (what the mod provides): `gui-workstation-events`
 
 ## World `horizon-ui-mod`
 
@@ -829,12 +834,13 @@ Experimental server workstation registration. A block opens a menu only for the 
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `register` | `func(block: string, title: string, custom-path: list<string>, ingredient-tags: list<string>) -> result<_, string>` | Register a block, visible title and state path during initialization. The handler receives only this bounded custom string, and the host retains all other components. At most 32 registrations per mod. `ingredient-tags` requests at most 16 tag memberships for each preview. |
+| `register-gui` | `func(block: string, title: string, custom-path: list<string>, tags: list<string>, definition: string) -> result<_, string>` | Register a bounded declarative GUI definition for a block. The JSON provides slot coordinates, roles, acceptance selectors and elements. |
 
 ## `workstation-events`
 
 Access: exported by the mod: the game calls it.
 
-A pure workstation preview. The host discards any queued host outputs; input stacks are snapshots and are rechecked before a result is taken.
+A workstation preview. The host discards queued host outputs and blocks storage writes and deletes during the callback; input stacks are snapshots rechecked before taking a result. Guest memory is not rolled back: mods must keep their own preview logic side-effect-free and deterministic.
 
 ### type `profile`
 
@@ -868,6 +874,46 @@ A pure workstation preview. The host discards any queued host outputs; input sta
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `preview` | `func(block: string, tool: input, ingredient: input) -> result<option<plan>, string>` | Return a preview for these inputs, or none if they do not match. |
+
+## `gui-workstation-events`
+
+Access: exported by the mod: the game calls it.
+
+Generic workstation recipe planning. The host checks each complete input snapshot and output before committing any consumption.
+
+### type `input`
+
+`type input = input`
+
+### type `profile`
+
+`type profile = profile`
+
+### type `melee-profile`
+
+`type melee-profile = melee-profile`
+
+### record `output`
+
+| Field | Type | |
+| --- | --- | --- |
+| `item` | `string` |  |
+| `source-slot` | `option<u32>` |  |
+| `text` | `option<string>` |  |
+| `tool` | `option<profile>` |  |
+| `durability` | `option<tuple<u32, u32>>` |  |
+| `melee` | `option<melee-profile>` |  |
+
+### record `plan`
+
+| Field | Type | |
+| --- | --- | --- |
+| `consume` | `list<u32>` |  |
+| `outputs` | `list<output>` |  |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `preview` | `func(block: string, inputs: list<option<input>>, selection: option<string>) -> result<option<plan>, string>` | Compute a preview for complete input snapshots and a selected button. |
 
 ## `server-events`
 

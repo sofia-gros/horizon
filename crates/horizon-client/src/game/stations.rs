@@ -45,6 +45,7 @@ pub(super) struct ModRegistration {
     pub title: String,
     pub path: Vec<String>,
     pub ingredient_tags: Vec<String>,
+    pub gui: Option<horizon_mods::gui::Gui>,
 }
 impl Kind {
     pub(super) fn from_block(name: &str) -> Option<Self> {
@@ -174,7 +175,10 @@ pub(super) struct Station {
     /// The loom's patterns, selection and scroller (game/loom.rs).
     pub(super) loom: super::loom::LoomState,
     pub(super) mod_registration: Option<ModRegistration>,
+    pub(super) mod_gui: Option<horizon_mods::gui::Gui>,
     pub(super) mod_cost: Option<u32>,
+    pub(super) mod_counts: Option<Vec<u32>>,
+    pub(super) mod_selection: Option<String>,
 }
 impl Station {
     fn new(kind: Kind, pos: [i32; 3]) -> Self {
@@ -199,7 +203,10 @@ impl Station {
             beacon_levels: None,
             loom: Default::default(),
             mod_registration: None,
+            mod_gui: None,
             mod_cost: None,
+            mod_counts: None,
+            mod_selection: None,
         }
     }
     pub(super) fn new_kind(kind: Kind, pos: [i32; 3]) -> Self {
@@ -324,6 +331,16 @@ impl Game<'_> {
             self.level.xp_seed = self.world.random.next_int();
         }
         let mut station = Station::new(kind, pos);
+        if let Some(gui) = registration.as_ref().and_then(|r| r.gui.as_ref()) {
+            station.inputs.resize(
+                gui.slots
+                    .iter()
+                    .filter(|slot| slot.role != horizon_mods::gui::SlotRole::Output)
+                    .count(),
+                None,
+            );
+            station.mod_gui = Some(gui.clone());
+        }
         station.mod_registration = registration;
         self.station = Some(station);
         self.station_changed();
@@ -402,6 +419,23 @@ impl Game<'_> {
             );
         }
         let s = self.station.as_ref()?;
+        if let Some(gui) = &s.mod_gui {
+            let slot = if i == RESULT {
+                gui.slots
+                    .iter()
+                    .find(|slot| slot.role == horizon_mods::gui::SlotRole::Output)
+            } else if i >= INPUT {
+                gui.slots
+                    .iter()
+                    .filter(|slot| slot.role != horizon_mods::gui::SlotRole::Output)
+                    .nth(i - INPUT)
+            } else {
+                None
+            };
+            if let Some(slot) = slot {
+                return Some((f32::from(slot.x), f32::from(slot.y)));
+            }
+        }
         if s.kind == Kind::Merchant && i < 36 {
             return Some(super::trading::inventory_slot(i));
         }
@@ -476,6 +510,9 @@ impl Game<'_> {
                     {
                         return None;
                     }
+                    if r.gui.is_some() {
+                        return None;
+                    }
                     self.mod_workstation_plan(
                         r,
                         &self.player_uuid_string(),
@@ -485,6 +522,27 @@ impl Game<'_> {
                 });
                 s.mod_cost = plan.as_ref().map(|(_, count)| *count);
                 s.result = plan.map(|(result, _)| result);
+                if let Some(r) = s.mod_registration.as_ref().filter(|r| r.gui.is_some()) {
+                    let [x, y, z] = s.pos;
+                    let actual = &self.res.facts().get(self.world.block(x, y, z)).name;
+                    let range = if self.creative { 9.0 } else { 8.5 };
+                    let plan = if &**actual == r.block
+                        && self.mod_workstation(&r.block).as_ref() == Some(r)
+                        && self.eye_position().is_some_and(|eye| {
+                            horizon_client::lan::guest::within_block_range(eye, range, s.pos)
+                        }) {
+                        self.mod_gui_workstation_plan(
+                            r,
+                            &self.player_uuid_string(),
+                            &s.inputs,
+                            s.mod_selection.as_deref(),
+                        )
+                    } else {
+                        None
+                    };
+                    s.mod_counts = plan.as_ref().map(|(_, counts)| counts.clone());
+                    s.result = plan.map(|(result, _)| result);
+                }
             }
             self.station = Some(s);
             return;
@@ -863,6 +921,27 @@ impl Game<'_> {
         let Some(s) = self.station.as_ref() else {
             return Vec::new();
         };
+        if let Some(gui) = &s.mod_gui {
+            return gui
+                .elements
+                .iter()
+                .filter_map(|element| match element {
+                    horizon_mods::gui::Element::Button {
+                        x,
+                        y,
+                        width,
+                        height,
+                        ..
+                    } => Some([
+                        f32::from(*x),
+                        f32::from(*y),
+                        f32::from(*width),
+                        f32::from(*height),
+                    ]),
+                    _ => None,
+                })
+                .collect();
+        }
         match s.kind {
             Kind::Merchant => self.merchant_targets(),
             Kind::Loom => self.loom_targets(),
@@ -904,6 +983,49 @@ impl Game<'_> {
         let (ox, oy) = self.inventory_origin(&batch);
         let local = (self.cursor.0 - ox, self.cursor.1 - oy);
         let shift = self.has_shift_down();
+        if !right {
+            let selected = self
+                .station
+                .as_ref()
+                .and_then(|s| s.mod_gui.as_ref())
+                .and_then(|gui| {
+                    gui.elements
+                        .iter()
+                        .filter_map(|element| match element {
+                            horizon_mods::gui::Element::Button {
+                                id,
+                                x,
+                                y,
+                                width,
+                                height,
+                                ..
+                            } => Some((id, *x, *y, *width, *height)),
+                            _ => None,
+                        })
+                        .enumerate()
+                        .find(|(_, (_, x, y, w, h))| {
+                            inside(
+                                local,
+                                f32::from(*x),
+                                f32::from(*y),
+                                f32::from(*w),
+                                f32::from(*h),
+                            )
+                        })
+                        .map(|(i, (id, _, _, _, _))| (i, id.clone()))
+                });
+            if let Some((index, id)) = selected {
+                if let Some(s) = self.station.as_mut() {
+                    s.mod_selection = Some(id);
+                }
+                if self.remote.is_some() {
+                    self.remote_station_button(index as i32);
+                } else {
+                    self.station_changed();
+                }
+                return true;
+            }
+        }
         if let Some(kind) = self.station.as_ref().map(|s| s.kind) {
             if kind == Kind::Merchant && !right && self.merchant_click(local) {
                 return true;
@@ -1344,15 +1466,81 @@ impl Game<'_> {
             let has_input = s.inputs.iter().any(Option::is_some);
             match kind {
                 Kind::Mod => {
-                    batch.sprite_scaled(
-                        atlas,
-                        "gui/sprites/container/anvil/text_field_disabled",
-                        ox + 59.0,
-                        oy + 20.0,
-                        110.0,
-                        16.0,
-                        u32::MAX,
-                    );
+                    if let Some(gui) = &s.mod_gui {
+                        for slot in &gui.slots {
+                            batch.fill(
+                                atlas,
+                                ox + f32::from(slot.x),
+                                oy + f32::from(slot.y),
+                                18.0,
+                                18.0,
+                                rgba(100, 100, 100, 255),
+                            );
+                        }
+                        for element in &gui.elements {
+                            match element {
+                                horizon_mods::gui::Element::Label { x, y, text } => {
+                                    batch.text(
+                                        atlas,
+                                        text,
+                                        ox + f32::from(*x),
+                                        oy + f32::from(*y),
+                                        GREY,
+                                        false,
+                                    );
+                                }
+                                horizon_mods::gui::Element::Button {
+                                    x,
+                                    y,
+                                    width,
+                                    height,
+                                    text,
+                                    ..
+                                } => {
+                                    batch.fill(
+                                        atlas,
+                                        ox + f32::from(*x),
+                                        oy + f32::from(*y),
+                                        f32::from(*width),
+                                        f32::from(*height),
+                                        rgba(105, 105, 105, 255),
+                                    );
+                                    batch.text(
+                                        atlas,
+                                        text,
+                                        ox + f32::from(*x) + 2.0,
+                                        oy + f32::from(*y) + 2.0,
+                                        rgba(255, 255, 255, 255),
+                                        false,
+                                    );
+                                }
+                                horizon_mods::gui::Element::Progress {
+                                    x,
+                                    y,
+                                    width,
+                                    height,
+                                    ..
+                                } => batch.fill(
+                                    atlas,
+                                    ox + f32::from(*x),
+                                    oy + f32::from(*y),
+                                    f32::from(*width),
+                                    f32::from(*height),
+                                    rgba(65, 65, 65, 255),
+                                ),
+                            }
+                        }
+                    } else {
+                        batch.sprite_scaled(
+                            atlas,
+                            "gui/sprites/container/anvil/text_field_disabled",
+                            ox + 59.0,
+                            oy + 20.0,
+                            110.0,
+                            16.0,
+                            u32::MAX,
+                        );
+                    }
                 }
                 Kind::Enchanting => {
                     if s.inputs[1].is_none() {
