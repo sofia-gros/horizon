@@ -160,7 +160,7 @@ mod run {
         active_dim: &'static str,
         machine_entities: std::collections::HashMap<
             (i32, i32, i32),
-            horizon_client::chunk::block_entity::BlockEntity,
+            Option<horizon_client::chunk::block_entity::BlockEntity>,
         >,
         machine_handlers: std::collections::BTreeMap<String, String>,
         registry: &'static BlockRegistry,
@@ -219,7 +219,11 @@ mod run {
                 })
             });
             let entity = if let Some(entity) = self.machine_entities.get(&key) {
-                Some(entity.clone())
+                Some(
+                    entity
+                        .clone()
+                        .ok_or("another block entity occupies this position")?,
+                )
             } else if let Some(tag) = saved {
                 Some(
                     horizon_client::save::decode_block_entity(tag)
@@ -1078,65 +1082,43 @@ mod run {
                 Some(_) => return Err("storage layout changed".into()),
                 None => vec![None; capture.ids.len()],
             };
-            if current != capture.slots {
-                return Err("storage changed after snapshot".into());
-            }
-            let mut result = current;
-            for change in &transaction.changes {
-                let index = capture
-                    .ids
-                    .iter()
-                    .position(|id| id == &change.slot)
-                    .ok_or("unknown storage slot")?;
-                let cell = &mut result[index];
-                if change.consume > cell.as_ref().map_or(0, |s| s.count) {
-                    return Err("insufficient input".into());
+            let result = horizon_client::machine_storage::plan(
+                &current,
+                &capture.slots,
+                &specs,
+                &transaction.changes,
+                |item| self.res.items().get(item).map(|def| def.max_stack),
+                |tag, item| {
+                    self.res
+                        .items()
+                        .item_tags
+                        .get(tag)
+                        .is_some_and(|items| items.contains(item))
+                },
+            )?;
+            let mut refresh_station = false;
+            if let Some(station) = self.station.as_mut().filter(|s| {
+                s.pos == p
+                    && s.mod_registration
+                        .as_ref()
+                        .is_some_and(|r| r.block == reg.block && r.owner == reg.owner)
+            }) {
+                for (index, stack) in station
+                    .mod_storage_indices()
+                    .into_iter()
+                    .zip(result.iter().cloned())
+                {
+                    station.inputs[index] = stack;
                 }
-                if change.consume > 0 {
-                    let stack = cell.as_mut().ok_or("missing input")?;
-                    stack.count -= change.consume;
-                    if stack.count == 0 {
-                        *cell = None;
-                    }
-                }
-                if let Some(item) = &change.item {
-                    let def = self.res.items().get(item).ok_or("unknown output item")?;
-                    let spec = specs[index];
-                    if !spec.accepts.is_empty()
-                        && !spec.accepts.iter().any(|selector| {
-                            if let Some(tag) = selector.strip_prefix('#') {
-                                self.res
-                                    .items()
-                                    .item_tags
-                                    .get(tag)
-                                    .is_some_and(|items| items.contains(item.as_str()))
-                            } else {
-                                selector == item
-                            }
-                        })
-                    {
-                        return Err("slot rejects output".into());
-                    }
-                    let output = horizon_client::items::ItemStack::new(item, change.count);
-                    if change.count == 0 || change.count > def.max_stack.min(99) {
-                        return Err("invalid output count".into());
-                    }
-                    if let Some(stack) = cell {
-                        if !stack.same_item_same_components(&output)
-                            || stack.count + change.count > def.max_stack.min(99)
-                        {
-                            return Err("output does not fit".into());
-                        }
-                        stack.count += change.count;
-                    } else {
-                        *cell = Some(output);
-                    }
-                }
+                refresh_station = true;
             }
             self.world
                 .block_entities
                 .insert(key, BlockEntity::ModStorage(capture.ids.clone(), result));
             self.world.modified.insert((p[0] >> 4, p[2] >> 4));
+            if refresh_station {
+                self.station_changed();
+            }
             Ok(())
         }
 
@@ -1389,7 +1371,16 @@ mod run {
                 .world
                 .block_entities
                 .iter()
-                .map(|(pos, entity)| (*pos, entity.clone()))
+                .map(|(pos, entity)| {
+                    (
+                        *pos,
+                        matches!(
+                            entity,
+                            horizon_client::chunk::block_entity::BlockEntity::ModStorage(_, _)
+                        )
+                        .then(|| entity.clone()),
+                    )
+                })
                 .collect();
             let machine_handlers = self.mods.workstation_handlers.clone();
             let active_dim = self.dim.id();

@@ -98,6 +98,8 @@ pub mod light;
 pub mod locator_bar;
 pub mod lod;
 pub mod logging;
+#[cfg(feature = "mods")]
+pub mod machine_storage;
 pub mod menu;
 pub mod menu_blur;
 pub mod merchant;

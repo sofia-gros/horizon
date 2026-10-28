@@ -73,7 +73,12 @@ impl super::server_bindings::horizon::mods::workstations::Host for State {
         z: i32,
     ) -> Result<super::server_bindings::horizon::mods::workstations::StorageView, String> {
         use super::server_bindings::horizon::mods::workstations::{StorageSlot, StorageView};
-        if self.previewing_workstation || self.machine_reads.len() >= 16 {
+        if self.previewing_workstation
+            || self.machine_reads.len() >= 16
+            || block.len() > 128
+            || dimension.is_empty()
+            || dimension.len() > 128
+        {
             return Err(
                 "storage snapshots unavailable during preview or read limit reached".into(),
             );
@@ -134,7 +139,10 @@ impl super::server_bindings::horizon::mods::workstations::Host for State {
         let mut seen = std::collections::HashSet::new();
         let mut requested = Vec::with_capacity(changes.len());
         for change in changes {
-            if !seen.insert(change.slot.clone())
+            if change.slot.len() > 128
+                || change.item.as_ref().is_some_and(|item| item.len() > 128)
+                || change.count > 99
+                || !seen.insert(change.slot.clone())
                 || !read.view.slots.iter().any(|s| s.id == change.slot)
                 || change.item.is_some() != (change.count > 0)
                 || (change.consume == 0 && change.count == 0)

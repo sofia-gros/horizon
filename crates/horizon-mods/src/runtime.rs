@@ -566,6 +566,7 @@ struct State {
     gui_progress: GuiProgress,
     machine_reads: Vec<(u64, MachineRead)>,
     machine_token: u64,
+    machine_storage_imported: bool,
     mining_enabled: bool,
     melee_enabled: bool,
     limits: StoreLimits,
@@ -625,15 +626,10 @@ pub struct Mods {
 impl Mods {
     /// Whether a running mod registered persistent workstation storage.
     pub fn wants_machine_storage(&self) -> bool {
-        self.entries.iter().filter_map(|e| e.run.as_ref()).any(|r| {
-            r.store.data().workstations.iter().any(|w| {
-                w.gui.as_ref().is_some_and(|g| {
-                    g.slots
-                        .iter()
-                        .any(|s| s.role == crate::gui::SlotRole::Storage)
-                })
-            })
-        })
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref())
+            .any(|r| r.store.data().machine_storage_imported)
     }
 
     /// The progress stores currently owned by running mods.
@@ -1111,6 +1107,9 @@ impl Mods {
             gui_progress: Default::default(),
             machine_reads: Vec::new(),
             machine_token: 0,
+            machine_storage_imported: functions
+                .iter()
+                .any(|name| name == "workstations.storage-snapshot"),
             mining_enabled: false,
             melee_enabled: false,
             limits: StoreLimitsBuilder::new()
