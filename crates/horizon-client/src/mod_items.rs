@@ -124,14 +124,18 @@ impl ServerItems {
         {
             return Err("invalid melee profile".into());
         }
-        let prior =
-            data.get(&"horizon:tool_control".into())
-                .and_then(|old| match old.get("owner") {
-                    Some(Tag::String(owner)) if owner.to_string_lossy() == edit.owner => {
-                        old.get("melee").cloned()
-                    }
-                    _ => None,
-                });
+        let prior = match data.get(&"horizon:tool_control".into()) {
+            None => None,
+            Some(old) => {
+                let Some(Tag::String(owner)) = old.get("owner") else {
+                    return Err("invalid existing tool profile owner".into());
+                };
+                if String::from_utf16(&owner.0).ok().as_deref() != Some(edit.owner.as_str()) {
+                    return Err("tool profile belongs to another mod".into());
+                }
+                old.get("melee").cloned()
+            }
+        };
         let melee = edit
             .melee
             .as_ref()
@@ -370,6 +374,107 @@ mod tests {
                 .is_err()
         );
         assert_eq!(inventory, after);
+    }
+
+    #[test]
+    fn another_mod_cannot_take_over_an_existing_profile() {
+        let mut tool = ItemStack::new("example:tool", 1);
+        tool.data_mut().set_other(
+            "minecraft:custom_data",
+            Some(Tag::compound([
+                ("state", Tag::String("old".into())),
+                ("foreign", Tag::Int(7)),
+            ])),
+        );
+        let first = std::sync::Arc::new(ServerItems(vec![("alice".into(), 0, tool.clone())]));
+        let mut edit = horizon_mods::ItemEdit {
+            owner: "mod_a".into(),
+            player: "alice".into(),
+            path: vec!["state".into()],
+            text: "first".into(),
+            snapshot: first.clone(),
+            durability: None,
+            melee: None,
+            profile: Some(horizon_mods::ServerToolProfile {
+                rules: vec![],
+                default_speed: 1.0,
+                damage_per_block: 0,
+                can_destroy_in_creative: true,
+                mining_enabled: true,
+                unbreakable: false,
+            }),
+        };
+        let mut cell = Some(tool);
+        first.apply(0, &mut cell, &edit).unwrap();
+        let captured = std::sync::Arc::new(ServerItems(vec![(
+            "alice".into(),
+            0,
+            cell.clone().unwrap(),
+        )]));
+        edit.owner = "mod_b".into();
+        edit.snapshot = captured.clone();
+        edit.text = "second".into();
+        let before = cell.clone();
+        assert!(captured.apply(0, &mut cell, &edit).is_err());
+        assert_eq!(cell, before);
+        let path = vec!["horizon:tool_control".into(), "owner".into()];
+        assert_eq!(
+            captured
+                .main_hand("alice", &path)
+                .unwrap()
+                .unwrap()
+                .custom_text
+                .as_deref(),
+            Some("mod_a")
+        );
+        edit.owner = "mod_a".into();
+        captured.apply(0, &mut cell, &edit).unwrap();
+        let updated = ServerItems(vec![("alice".into(), 0, cell.unwrap())]);
+        assert_eq!(
+            updated
+                .main_hand("alice", &path)
+                .unwrap()
+                .unwrap()
+                .custom_text
+                .as_deref(),
+            Some("mod_a")
+        );
+    }
+
+    #[test]
+    fn malformed_profile_owner_rejects_edit_without_changes() {
+        for control in [Tag::Int(1), Tag::compound([("owner", Tag::Int(5))])] {
+            let mut tool = ItemStack::new("example:tool", 1);
+            tool.data_mut().set_other(
+                "minecraft:custom_data",
+                Some(Tag::compound([
+                    ("state", Tag::String("old".into())),
+                    ("horizon:tool_control", control),
+                ])),
+            );
+            let snapshot =
+                std::sync::Arc::new(ServerItems(vec![("alice".into(), 0, tool.clone())]));
+            let edit = horizon_mods::ItemEdit {
+                owner: "mod_a".into(),
+                player: "alice".into(),
+                path: vec!["state".into()],
+                text: "new".into(),
+                snapshot: snapshot.clone(),
+                durability: None,
+                melee: None,
+                profile: Some(horizon_mods::ServerToolProfile {
+                    rules: vec![],
+                    default_speed: 1.0,
+                    damage_per_block: 0,
+                    can_destroy_in_creative: true,
+                    mining_enabled: true,
+                    unbreakable: false,
+                }),
+            };
+            let mut cell = Some(tool.clone());
+            assert!(snapshot.apply(0, &mut cell, &edit).is_err());
+            assert_eq!(cell, Some(tool));
+        }
     }
 
     #[test]
