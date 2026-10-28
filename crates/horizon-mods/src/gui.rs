@@ -21,6 +21,8 @@ pub struct Gui {
 pub struct PlayerInventory {
     pub x: u16,
     pub y: u16,
+    #[serde(default = "enabled_by_default", skip_serializing_if = "is_enabled")]
+    pub background: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +32,8 @@ pub struct Slot {
     pub x: u16,
     pub y: u16,
     pub role: SlotRole,
+    #[serde(default = "enabled_by_default", skip_serializing_if = "is_enabled")]
+    pub background: bool,
     #[serde(default)]
     pub accepts: Vec<String>,
 }
@@ -56,6 +60,8 @@ pub enum Element {
         width: u16,
         height: u16,
         texture: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region: Option<[u16; 4]>,
     },
     Button {
         id: String,
@@ -90,6 +96,43 @@ pub struct ButtonImages {
     pub selected: Option<String>,
     #[serde(default)]
     pub disabled: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regions: Option<ButtonRegions>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ButtonRegions {
+    pub normal: [u16; 4],
+    #[serde(default)]
+    pub hover: Option<[u16; 4]>,
+    #[serde(default)]
+    pub selected: Option<[u16; 4]>,
+    #[serde(default)]
+    pub disabled: Option<[u16; 4]>,
+}
+impl ButtonRegions {
+    pub fn region(&self, enabled: bool, selected: bool, hovered: bool) -> [u16; 4] {
+        if !enabled {
+            self.disabled
+        } else if selected {
+            self.selected
+        } else if hovered {
+            self.hover
+        } else {
+            None
+        }
+        .unwrap_or(self.normal)
+    }
+    fn valid(&self) -> bool {
+        region_valid(self.normal)
+            && [self.hover, self.selected, self.disabled]
+                .into_iter()
+                .flatten()
+                .all(region_valid)
+    }
+}
+fn region_valid([x, y, w, h]: [u16; 4]) -> bool {
+    w > 0 && h > 0 && u32::from(x) + u32::from(w) <= 1024 && u32::from(y) + u32::from(h) <= 512
 }
 impl ButtonImages {
     /// Resolve the visible image, falling back to the normal image for missing states.
@@ -234,7 +277,12 @@ impl Gui {
                     width,
                     height,
                     texture,
-                } => inside(*x, *y, *width, *height) && image_valid(texture),
+                    region,
+                } => {
+                    inside(*x, *y, *width, *height)
+                        && image_valid(texture)
+                        && region.is_none_or(region_valid)
+                }
                 Element::Button {
                     id,
                     x,
@@ -252,6 +300,7 @@ impl Gui {
                         && !text.chars().any(char::is_control)
                         && images.as_ref().is_none_or(|images| {
                             image_valid(&images.normal)
+                                && images.regions.as_ref().is_none_or(ButtonRegions::valid)
                                 && [&images.hover, &images.selected, &images.disabled]
                                     .into_iter()
                                     .flatten()
@@ -318,6 +367,24 @@ mod tests {
             ))
             .is_err()
         );
+    }
+    #[test]
+    fn regions_are_bounded_and_resolve_by_button_state() {
+        let json = r#"{"width":176,"height":184,"slots":[],"player_inventory":{"x":8,"y":102,"background":false},"elements":[{"type":"image","x":0,"y":0,"width":176,"height":184,"texture":"example:gui/sheet","region":[0,0,176,184]},{"type":"button","id":"b","x":51,"y":15,"width":18,"height":18,"text":"","images":{"normal":"example:gui/sheet","regions":{"normal":[176,15,18,18],"selected":[176,33,18,18],"hover":[176,51,18,18]}}}]}"#;
+        let gui = Gui::parse(json).unwrap();
+        let Element::Button {
+            images: Some(images),
+            ..
+        } = &gui.elements[1]
+        else {
+            panic!("button")
+        };
+        let regions = images.regions.as_ref().unwrap();
+        assert_eq!(regions.region(true, false, true), [176, 51, 18, 18]);
+        assert_eq!(regions.region(true, true, true), [176, 33, 18, 18]);
+        assert_eq!(regions.region(false, false, false), [176, 15, 18, 18]);
+        assert!(Gui::parse(&json.replace("[0,0,176,184]", "[1000,0,176,184]")).is_err());
+        assert!(Gui::parse(&json.replace("[0,0,176,184]", "[0,0,0,184]")).is_err());
     }
     #[test]
     fn player_inventory_geometry_preserves_legacy_and_rejects_out_of_bounds() {

@@ -1353,6 +1353,26 @@ impl Game<'_> {
 
     // ---------------------------------------------------------------- drawing
 
+    fn gui_region(
+        mut rect: horizon_client::hud::Rect,
+        region: Option<[u16; 4]>,
+    ) -> Option<horizon_client::hud::Rect> {
+        if let Some([x, y, w, h]) = region {
+            if u32::from(x) + u32::from(w) > rect.w || u32::from(y) + u32::from(h) > rect.h {
+                return None;
+            }
+            let (du, dv) = (
+                (rect.u1 - rect.u0) / rect.w as f32,
+                (rect.v1 - rect.v0) / rect.h as f32,
+            );
+            rect.u0 += f32::from(x) * du;
+            rect.v0 += f32::from(y) * dv;
+            rect.u1 = rect.u0 + f32::from(w) * du;
+            rect.v1 = rect.v0 + f32::from(h) * dv;
+        }
+        Some(rect)
+    }
+
     fn part(
         batch: &mut HudBatch,
         atlas: &horizon_client::hud::HudAtlas,
@@ -1576,16 +1596,21 @@ impl Game<'_> {
                             width,
                             height,
                             texture,
+                            region,
                         } = element
                         {
                             let name = texture.strip_prefix("minecraft:").unwrap_or(texture);
-                            if let Some(rect) = atlas.sprites.get(name) {
+                            if let Some(rect) = atlas
+                                .sprites
+                                .get(name)
+                                .and_then(|rect| Self::gui_region(*rect, *region))
+                            {
                                 batch.rect_uv(
                                     ox + f32::from(*x),
                                     oy + f32::from(*y),
                                     f32::from(*width),
                                     f32::from(*height),
-                                    *rect,
+                                    rect,
                                     u32::MAX,
                                 );
                             }
@@ -1615,7 +1640,11 @@ impl Game<'_> {
                             54.0,
                             rgba(198, 198, 198, 255),
                         );
-                    } else {
+                    } else if gui
+                        .player_inventory
+                        .as_ref()
+                        .is_none_or(|inventory| inventory.background)
+                    {
                         for row in 0..4 {
                             for col in 0..9 {
                                 let x = ox + inventory_x + 8.0 + col as f32 * 18.0;
@@ -1678,6 +1707,9 @@ impl Game<'_> {
                             .and_then(|r| self.mod_gui_progress(r, s.pos));
                         let mut progress_index = 0;
                         for slot in &gui.slots {
+                            if !slot.background {
+                                continue;
+                            }
                             batch.fill(
                                 atlas,
                                 ox + f32::from(slot.x),
@@ -1737,8 +1769,20 @@ impl Game<'_> {
                                             .sprites
                                             .get(name.strip_prefix("minecraft:").unwrap_or(name))
                                     });
-                                    if let Some(rect) = rect {
-                                        batch.rect_uv(ox + x, oy + y, w, h, *rect, u32::MAX);
+                                    let region = images
+                                        .as_ref()
+                                        .and_then(|images| images.regions.as_ref())
+                                        .map(|regions| {
+                                            regions.region(
+                                                *enabled,
+                                                s.mod_selection.as_deref() == Some(id.as_str()),
+                                                hovered,
+                                            )
+                                        });
+                                    if let Some(rect) =
+                                        rect.and_then(|rect| Self::gui_region(*rect, region))
+                                    {
+                                        batch.rect_uv(ox + x, oy + y, w, h, rect, u32::MAX);
                                     } else {
                                         batch.fill(
                                             atlas,
