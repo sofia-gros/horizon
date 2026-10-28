@@ -242,11 +242,11 @@ impl Station {
         self.rename.set_value("");
         self.rename.focused = false;
     }
-    fn record_mod_name_edit(&mut self, previous: &str) -> bool {
+    fn record_mod_name_edit(&mut self, previous: &str, explicit_clear: bool) -> bool {
         if self.kind != Kind::Mod {
             return true;
         }
-        if previous == self.rename.value {
+        if previous == self.rename.value && !(explicit_clear && self.rename.value.is_empty()) {
             return false;
         }
         self.mod_name = Some(self.rename.value.clone());
@@ -1566,7 +1566,7 @@ impl Game<'_> {
             s.rename = previous;
             return;
         }
-        if !s.record_mod_name_edit(&previous.value) {
+        if !s.record_mod_name_edit(&previous.value, backspace) {
             return;
         }
         s.name.clone_from(&s.rename.value);
@@ -1584,7 +1584,13 @@ impl Game<'_> {
         if !s.rename.key(key, ctrl, shift) {
             return false;
         }
-        if !s.record_mod_name_edit(&previous) {
+        if !s.record_mod_name_edit(
+            &previous,
+            matches!(
+                key,
+                winit::keyboard::KeyCode::Backspace | winit::keyboard::KeyCode::Delete
+            ),
+        ) {
             return true;
         }
         s.name.clone_from(&s.rename.value);
@@ -1611,7 +1617,7 @@ impl Game<'_> {
                 s.rename.set_value(&s.name);
                 return;
             }
-            if !s.record_mod_name_edit(&previous) {
+            if !s.record_mod_name_edit(&previous, false) {
                 return;
             }
             s.name.clone_from(&s.rename.value);
@@ -3559,18 +3565,21 @@ mod mod_name_tests {
     fn local_edits_are_per_player_and_navigation_does_not_clear_names() {
         let mut first = Station::new(Kind::Mod, [0, 0, 0]);
         let mut second = Station::new(Kind::Mod, [0, 0, 0]);
-        assert!(!first.record_mod_name_edit(""));
+        assert!(!first.record_mod_name_edit("", false));
         assert_eq!(first.mod_name, None);
+        assert!(first.record_mod_name_edit("", true));
+        assert_eq!(first.mod_name.as_deref(), Some(""));
+        first.clear_mod_name();
         first.rename.set_value("刃 😀");
-        assert!(first.record_mod_name_edit(""));
+        assert!(first.record_mod_name_edit("", false));
         assert_eq!(first.mod_name.as_deref(), Some("刃 😀"));
         assert_eq!(second.mod_name, None);
         let previous = first.rename.value.clone();
         first.rename.set_value("");
-        assert!(first.record_mod_name_edit(&previous));
+        assert!(first.record_mod_name_edit(&previous, false));
         assert_eq!(first.mod_name.as_deref(), Some(""));
         second.rename.set_value("Other");
-        assert!(second.record_mod_name_edit(""));
+        assert!(second.record_mod_name_edit("", false));
         first.clear_mod_name();
         assert_eq!(first.mod_name, None);
         assert_eq!(second.mod_name.as_deref(), Some("Other"));
