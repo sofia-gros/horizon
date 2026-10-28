@@ -1873,3 +1873,105 @@ fn mining_callbacks_isolate_distinct_mods_and_failures() {
     assert_eq!(edits.len(), 1);
     assert_eq!(edits[0].owner, "miner_b");
 }
+
+#[test]
+fn failed_machine_command_discards_only_its_own_transaction() {
+    use horizon_mods::{MachineSlotView, MachineView, WorkstationRegistration, WorldView};
+    use std::sync::Arc;
+    struct World;
+    impl WorldView for World {
+        fn block(&self, _: &str, _: i32, _: i32, _: i32) -> Option<String> {
+            None
+        }
+        fn biome(&self, _: &str, _: i32, _: i32, _: i32) -> Option<String> {
+            None
+        }
+        fn has_dimension(&self, _: &str) -> bool {
+            true
+        }
+        fn check_state(&self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn machine_snapshot(
+            &self,
+            _: &WorkstationRegistration,
+            _: &str,
+            _: [i32; 3],
+        ) -> Result<MachineView, String> {
+            Ok(MachineView {
+                slots: vec![MachineSlotView {
+                    id: "material".into(),
+                    item: Some("example:ingredient".into()),
+                    count: 2,
+                    custom_text: None,
+                }],
+                capture: Arc::new(()),
+            })
+        }
+    }
+    let dir = mods_dir().join("machine-command-isolation");
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let core = std::fs::read(root.join(
+        "target/mods-test/wasm32-unknown-unknown/release/horizon_mods_test_mining_guest.wasm",
+    ))
+    .unwrap();
+    let wasm = componentize(&core).unwrap();
+    let paths: Vec<_> = ["machine_a", "machine_b"].iter().map(|id| {
+        let manifest = format!("id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\", \"workstations\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\", \"workstations\"]\n");
+        let path = dir.join(format!("{id}.hmod"));
+        std::fs::write(&path, Package::write(&manifest, &wasm).unwrap()).unwrap();
+        path
+    }).collect();
+    let mut mods = Mods::load(&paths, |_| true, |_| false);
+    let player = alex();
+    mods.set_snapshot(Snapshot {
+        players: vec![player.clone()],
+        ..Snapshot::default()
+    });
+    mods.lend_world(Box::new(World));
+    mods.drain();
+    let other = mods
+        .workstation("example:gui_station", "machine_b")
+        .unwrap();
+    mods.gui_button(&other, &player.id, "example:machine", [0, 71, 2], "choose")
+        .unwrap();
+    assert!(mods.server_command(&player, "machine-fixture"));
+    assert!(mods.server_command(&player, "machine-fixture error"));
+    assert!(
+        mods.server_mined(
+            "machine_a",
+            &player.id,
+            "example:machine",
+            [0, 71, 2],
+            "example:machine-error",
+            1.0
+        )
+        .is_empty()
+    );
+    assert!(
+        mods.server_melee_hit(
+            "machine_a",
+            &player.id,
+            "example:machine",
+            1,
+            "example:machine-error",
+            1.0
+        )
+        .is_empty()
+    );
+    assert!(mods.server_command(&player, "machine-fixture trap"));
+    let out = mods.drain();
+    let owners: Vec<_> = out
+        .iter()
+        .filter_map(|o| match o {
+            Output::MachineTransaction(t) => Some(t.registration.owner.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(owners, ["machine_b", "machine_a"]);
+    assert!(out.iter().any(
+        |o| matches!(o, Output::Reply { error: true, text, .. } if text == "machine rollback")
+    ));
+    assert!(out.iter().any(|o| matches!(o, Output::Stopped { .. })));
+}

@@ -1428,10 +1428,9 @@ impl Mods {
                     hardness,
                 );
             if matches!(&result, Ok(Err(_))) {
-                run.store
-                    .data_mut()
-                    .out
-                    .retain(|output| !matches!(output, Output::ItemEdit(_)));
+                run.store.data_mut().out.retain(|output| {
+                    !matches!(output, Output::ItemEdit(_) | Output::MachineTransaction(_))
+                });
             }
             result
         });
@@ -1481,10 +1480,9 @@ impl Mods {
                     dealt,
                 );
             if matches!(&result, Ok(Err(_))) {
-                run.store
-                    .data_mut()
-                    .out
-                    .retain(|output| !matches!(output, Output::ItemEdit(_)));
+                run.store.data_mut().out.retain(|output| {
+                    !matches!(output, Output::ItemEdit(_) | Output::MachineTransaction(_))
+                });
             }
             result
         });
@@ -1584,10 +1582,9 @@ impl Mods {
                     &values,
                 );
                 if matches!(&result, Ok(Err(_))) {
-                    run.store
-                        .data_mut()
-                        .out
-                        .retain(|output| !matches!(output, Output::ItemEdit(_)));
+                    run.store.data_mut().out.retain(|output| {
+                        !matches!(output, Output::ItemEdit(_) | Output::MachineTransaction(_))
+                    });
                 }
                 result
             }

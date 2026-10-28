@@ -4,6 +4,19 @@ use horizon_mod_sdk::server::{
     workstations,
 };
 
+fn queue_machine() -> Result<(), String> {
+    let view = workstations::storage_snapshot("example:gui_station", "example:machine", 0, 71, 2)?;
+    workstations::storage_commit(
+        view.token,
+        &[workstations::StorageChange {
+            slot: "material".into(),
+            consume: 1,
+            item: None,
+            count: 0,
+        }],
+    )
+}
+
 struct MiningGuest;
 impl ServerMod for MiningGuest {
     fn init() -> Result<(Self, Registration), String> {
@@ -27,7 +40,8 @@ impl ServerMod for MiningGuest {
             Registration::new()
                 .command("online")
                 .command("miner-only")
-                .command("consume-fixture"),
+                .command("consume-fixture")
+                .command("machine-fixture"),
         ))
     }
 
@@ -75,6 +89,9 @@ impl ServerMod for MiningGuest {
         pos: [i32; 3],
         id: &str,
     ) -> Result<(), String> {
+        if id == "choose" && dimension == "example:machine" {
+            queue_machine()?;
+        }
         if id == "choose" {
             workstations::set_progress(block, dimension, pos[0], pos[1], pos[2], "work", 42)?;
         }
@@ -134,6 +151,14 @@ impl ServerMod for MiningGuest {
         name: &str,
         args: &Args,
     ) -> Result<Option<String>, String> {
+        if name == "machine-fixture" {
+            queue_machine()?;
+            match args.text() {
+                "error" => return Err("machine rollback".into()),
+                "trap" => panic!("machine trap"),
+                _ => return Ok(Some("machine queued".into())),
+            }
+        }
         if name == "online" && args.text() == "storage-write" {
             horizon_mod_sdk::storage::set("normal", b"ok")?;
             workstations::set_progress(
@@ -196,6 +221,10 @@ impl ServerMod for MiningGuest {
         target: &str,
         _: f32,
     ) -> Result<(), String> {
+        if target == "example:machine-error" {
+            queue_machine()?;
+            return Err("machine rollback".into());
+        }
         items_edit::replace_main_hand_text(
             player,
             &["example".into(), "state".into()],
@@ -219,6 +248,10 @@ impl ServerMod for MiningGuest {
         state: &str,
         _: f32,
     ) -> Result<(), String> {
+        if state == "example:machine-error" {
+            queue_machine()?;
+            return Err("machine rollback".into());
+        }
         items_edit::replace_main_hand_text(
             player,
             &["example".into(), "state".into()],
