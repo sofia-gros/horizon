@@ -335,9 +335,7 @@ pub struct Menu {
 /// A preview is tied to the complete input stacks, not just their item ids.
 #[derive(Clone)]
 struct WorkstationPlan {
-    tool: ItemStack,
-    ingredient: ItemStack,
-    ingredient_count: u32,
+    inputs: Vec<(Option<ItemStack>, u32)>,
 }
 
 /// `AnvilMenu`'s state besides its slots and `cost`.
@@ -1227,10 +1225,38 @@ impl Menu {
         {
             return Err("invalid workstation preview");
         }
+        self.set_workstation_transaction(
+            &[
+                (Some(tool.clone()), 1),
+                (Some(ingredient.clone()), ingredient_count),
+            ],
+            result,
+        )
+    }
+
+    /// Install a preview with a checked consumption count for every input.
+    /// A zero count keeps an input, for example a reusable pattern. The caller
+    /// must authorize the recipe and the output; all input snapshots are
+    /// compared again immediately before the result is taken.
+    pub fn set_workstation_transaction(
+        &mut self,
+        inputs: &[(Option<ItemStack>, u32)],
+        result: ItemStack,
+    ) -> Result<(), &'static str> {
+        self.clear_workstation_plan();
+        if self.kind != Kind::ModWorkstation
+            || inputs.len() != self.containers[MAIN].len()
+            || result.count != 1
+            || !inputs.iter().any(|(_, count)| *count > 0)
+            || inputs.iter().enumerate().any(|(i, (stack, count))| {
+                self.containers[MAIN].get(i) != Some(stack)
+                    || *count > stack.as_ref().map_or(0, |s| s.count)
+            })
+        {
+            return Err("invalid workstation transaction");
+        }
         self.workstation_plan = Some(WorkstationPlan {
-            tool: tool.clone(),
-            ingredient: ingredient.clone(),
-            ingredient_count,
+            inputs: inputs.to_vec(),
         });
         self.containers[RESULT][0] = Some(result);
         Ok(())
@@ -1247,7 +1273,7 @@ impl Menu {
     pub fn workstation_cost(&self) -> Option<u32> {
         self.workstation_plan
             .as_ref()
-            .map(|plan| plan.ingredient_count)
+            .and_then(|plan| plan.inputs.get(1).map(|(_, count)| *count))
     }
 
     pub fn player_item(&self, i: usize) -> Option<&ItemStack> {
@@ -1384,8 +1410,10 @@ impl Menu {
         match self.slots[s].role {
             Role::Inert => false,
             Role::ModResult => self.workstation_plan.as_ref().is_some_and(|plan| {
-                self.containers[MAIN][0].as_ref() == Some(&plan.tool)
-                    && self.containers[MAIN][1].as_ref() == Some(&plan.ingredient)
+                plan.inputs
+                    .iter()
+                    .enumerate()
+                    .all(|(i, (expected, _))| self.containers[MAIN].get(i) == Some(expected))
             }),
             // AnvilMenu.mayPickup: the levels to pay, and a price.
             Role::CombineResult if self.kind == Kind::Anvil => {
@@ -1594,8 +1622,11 @@ impl Menu {
         if self.slots[s].role == Role::ModResult {
             // may_pickup checked the snapshots immediately before taking it.
             if let Some(plan) = self.workstation_plan.take() {
-                self.put(env, 0, None);
-                self.remove(env, 1, plan.ingredient_count);
+                for (i, (_, count)) in plan.inputs.iter().enumerate() {
+                    if *count > 0 {
+                        self.remove(env, i, *count);
+                    }
+                }
             }
             return;
         }
@@ -3145,6 +3176,34 @@ pub(crate) mod tests {
             let after = menu.slot(1).cloned();
             menu.click(env, 2, 0, Input::Pickup).unwrap();
             assert_eq!(menu.slot(1), after.as_ref());
+        });
+    }
+
+    #[test]
+    fn mod_workstation_transaction_preserves_reusable_input_and_checks_snapshots() {
+        with_menu(Kind::ModWorkstation, |env, menu| {
+            let pattern = stack("paper", 1).unwrap();
+            let material = stack("flint", 3).unwrap();
+            let output = stack("stick", 1).unwrap();
+            menu.set_slot(env, 0, Some(pattern.clone()));
+            menu.set_slot(env, 1, Some(material.clone()));
+            let inputs = [(Some(pattern.clone()), 0), (Some(material.clone()), 2)];
+            let mut stale = inputs.clone();
+            stale[1].0.as_mut().unwrap().damage = 1;
+            assert!(
+                menu.set_workstation_transaction(&stale, output.clone())
+                    .is_err()
+            );
+            assert_eq!(menu.slot(0), Some(&pattern));
+            assert_eq!(menu.slot(1), Some(&material));
+            menu.set_workstation_transaction(&inputs, output.clone())
+                .unwrap();
+            menu.click(env, 2, 0, Input::Pickup).unwrap();
+            assert_eq!(menu.carried, Some(output));
+            assert_eq!(menu.slot(0), Some(&pattern));
+            assert_eq!(menu.slot(1).unwrap().count, 1);
+            menu.click(env, 2, 0, Input::Pickup).unwrap();
+            assert_eq!(menu.slot(1).unwrap().count, 1);
         });
     }
 
