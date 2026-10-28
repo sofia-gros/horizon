@@ -56,7 +56,8 @@ impl ServerMod for MiningGuest {
                 can_destroy_in_creative: true,
                 mining_enabled: true,
                 unbreakable: false,
-            },
+            }
+            .into(),
             damage: 0,
             max_damage: 10,
             melee: items_tools::MeleeProfile {
@@ -64,7 +65,8 @@ impl ServerMod for MiningGuest {
                 damage_multiplier: 1.0,
                 attack_speed: 1.0,
                 enabled: true,
-            },
+            }
+            .into(),
         }))
     }
 
