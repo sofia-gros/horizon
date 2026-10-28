@@ -6,6 +6,7 @@
 //! and the special model renderers submit, in pose space. A sink then draws
 //! them: [`gui`] into the HUD batch with the GUI item lighting, [`WorldSink`]
 //! into entity vertices with the level's lighting.
+mod appearance;
 pub mod gui;
 mod special;
 
@@ -438,6 +439,7 @@ impl FileSprites {
 /// The baked item models and everything resolution needs.
 pub struct ItemRenderer {
     pub models: ItemModels,
+    appearances: Vec<appearance::Appearance>,
     library: Arc<ModelLibrary>,
     sprites: FileSprites,
     baked: Mutex<HashMap<String, Arc<BakedItemModel>>>,
@@ -502,6 +504,7 @@ impl ItemRenderer {
             definitions: load_definitions(root),
             prototypes,
         };
+        let appearances = appearance::load(root, &models.definitions);
         let library = library?;
         let permutations = PalettedPermutations::from_atlas(
             &fs::read_to_string(root.join("assets/minecraft/atlases/items.json"))
@@ -526,6 +529,7 @@ impl ItemRenderer {
         Ok(Self {
             item_ids,
             models,
+            appearances,
             library,
             sprites: FileSprites {
                 root: root.to_path_buf(),
@@ -616,6 +620,17 @@ impl ItemRenderer {
             owner,
             level,
             seed,
+        };
+        let mut visual_stack;
+        let stack = if let Some(model) = appearance::select(&self.appearances, stack) {
+            visual_stack = stack.clone();
+            visual_stack.patch.insert(
+                "minecraft:item_model".into(),
+                Some(Value::String(model.into())),
+            );
+            &visual_stack
+        } else {
+            stack
         };
         let resolved = self.models.resolve(stack, &ctx, env);
         let mut animated = false;
