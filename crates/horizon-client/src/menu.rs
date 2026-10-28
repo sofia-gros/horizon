@@ -3132,6 +3132,11 @@ pub(crate) mod tests {
             menu.set_slot(env, 1, Some(ingredient.clone()));
             menu.set_workstation_plan(&tool, &ingredient, 2, result.clone())
                 .unwrap();
+            menu.carried = stack("stone", 1);
+            menu.click(env, 2, 0, Input::Pickup).unwrap();
+            assert_eq!(menu.slot(0), Some(&tool));
+            assert_eq!(menu.slot(1), Some(&ingredient));
+            menu.carried = None;
             menu.click(env, 2, 0, Input::Pickup).unwrap();
             assert_eq!(menu.carried, Some(result));
             assert!(menu.slot(0).is_none());
@@ -3159,6 +3164,25 @@ pub(crate) mod tests {
             assert_eq!(menu.slot(0), Some(&tool));
             assert_eq!(menu.slot(1), Some(&ingredient));
             assert_eq!(menu.slot(2), Some(&tool));
+        });
+    }
+
+    #[test]
+    fn mod_workstation_merge_invalidates_preview_and_creative_clone_cannot_duplicate_it() {
+        with_menu(Kind::ModWorkstation, |env, menu| {
+            let tool = stack("wooden_pickaxe", 1).unwrap();
+            let ingredient = stack("flint", 1).unwrap();
+            menu.set_slot(env, 0, Some(tool.clone()));
+            menu.set_slot(env, 1, Some(ingredient.clone()));
+            menu.set_workstation_plan(&tool, &ingredient, 1, tool.clone())
+                .unwrap();
+            menu.click(env, 2, 2, Input::Clone).unwrap();
+            assert!(menu.carried.is_none());
+            menu.set_slot(env, 30, stack("flint", 1));
+            menu.click(env, 30, 0, Input::QuickMove).unwrap();
+            assert_eq!(menu.slot(1).unwrap().count, 2);
+            assert!(menu.slot(2).is_none());
+            assert_eq!(menu.slot(0), Some(&tool));
         });
     }
 

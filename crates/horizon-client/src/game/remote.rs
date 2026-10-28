@@ -153,6 +153,7 @@ pub(super) struct Remote {
     /// The open menu's title as the server named it, with its styles.
     pub(super) menu_title: Option<horizon_client::text::Text>,
     state_id: i32,
+    menu_state_id: i32,
     use_target: Option<[i32; 3]>,
     entities: HashMap<i32, Tracked>,
     lerps: HashMap<i32, Lerp>,
@@ -477,6 +478,7 @@ impl Game<'_> {
             menu: None,
             menu_title: None,
             state_id: 0,
+            menu_state_id: 0,
             use_target: None,
             entities: HashMap::new(),
             lerps: HashMap::new(),
@@ -2609,7 +2611,7 @@ impl Game<'_> {
             }
             C::ContainerSetContent(p) => {
                 if let Some(r) = self.remote.as_mut() {
-                    r.state_id = p.state;
+                    r.update_menu_state(p.container, p.state);
                 }
                 for (slot, item) in p.items.iter().enumerate() {
                     let stack = self.to_stack(item);
@@ -2620,7 +2622,7 @@ impl Game<'_> {
             }
             C::ContainerSetSlot(p) => {
                 if let Some(r) = self.remote.as_mut() {
-                    r.state_id = p.state;
+                    r.update_menu_state(p.container, p.state);
                 }
                 let stack = self.to_stack(&p.item);
                 // ClientPacketListener.handleContainerSetSlot: a hotbar slot that
@@ -5552,7 +5554,7 @@ impl Game<'_> {
         self.send_clicks(container, sent);
     }
     fn send_clicks(&mut self, container: i32, clicks: Vec<Predicted>) {
-        let state = self.remote.as_ref().map_or(0, |r| r.state_id);
+        let state = self.remote.as_ref().map_or(0, |r| r.state_for(container));
         let hashed = |g: &Self, s: &Option<ItemStack>| g.to_network(s).map(|s| Hashed::of(&s));
         for (slot, button, input, changed, carried) in clicks {
             let changed = changed.iter().map(|(i, s)| (*i, hashed(self, s))).collect();
@@ -5601,7 +5603,7 @@ impl Game<'_> {
             self.swing_arm();
         }
         let carried = self.to_network(&self.carried).map(|s| Hashed::of(&s));
-        let state = self.remote.as_ref().map_or(0, |r| r.state_id);
+        let state = self.remote.as_ref().map_or(0, |r| r.state_for(container));
         self.send(S::ContainerClick(play::ContainerClick {
             container,
             state,
@@ -5728,6 +5730,9 @@ impl Game<'_> {
         // A new RecipeBookComponent owns fresh ghost slots and an overlay,
         // even when the server replaces a menu without a close packet.
         self.recipe_ui.reset_screen();
+        if let Some(r) = self.remote.as_mut() {
+            r.menu_state_id = 0;
+        }
         let menu = self
             .remote
             .as_ref()
@@ -5866,6 +5871,7 @@ impl Game<'_> {
         if let Some(r) = self.remote.as_mut() {
             r.menu = Some((p.container, format!("{MOUNT_MENU}{columns}")));
             r.menu_title = None;
+            r.menu_state_id = 0;
         }
     }
     /// The type of the menu a server opened (`MenuType`'s id).
@@ -6371,6 +6377,23 @@ impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
 }
 
 impl Remote {
+    fn update_menu_state(&mut self, container: i32, state: i32) {
+        update_menu_revision(
+            &mut self.state_id,
+            &mut self.menu_state_id,
+            self.menu.as_ref().map(|(id, _)| *id),
+            container,
+            state,
+        );
+    }
+
+    fn state_for(&self, container: i32) -> i32 {
+        if container == 0 {
+            self.state_id
+        } else {
+            self.menu_state_id
+        }
+    }
     /// Players in the server's player list, this one included.
     pub(super) fn player_count(&self) -> usize {
         self.players.len()
@@ -6388,9 +6411,32 @@ impl Remote {
     }
 }
 
+fn update_menu_revision(
+    inventory: &mut i32,
+    open: &mut i32,
+    open_id: Option<i32>,
+    container: i32,
+    state: i32,
+) {
+    if container == 0 {
+        *inventory = state;
+    } else if open_id == Some(container) {
+        *open = state;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Game;
+
+    #[test]
+    fn inventory_updates_do_not_replace_open_menu_revision() {
+        let (mut inventory, mut menu) = (0, 0);
+        super::update_menu_revision(&mut inventory, &mut menu, Some(3), 3, 2);
+        super::update_menu_revision(&mut inventory, &mut menu, Some(3), 0, 5);
+        super::update_menu_revision(&mut inventory, &mut menu, Some(3), 8, 9);
+        assert_eq!((inventory, menu), (5, 2));
+    }
 
     #[test]
     fn placement_preview_checks_obstruction_without_changing_the_level() {

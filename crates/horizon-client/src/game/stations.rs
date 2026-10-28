@@ -1343,7 +1343,17 @@ impl Game<'_> {
             let s = self.station.as_ref().expect("open station");
             let has_input = s.inputs.iter().any(Option::is_some);
             match kind {
-                Kind::Mod => {}
+                Kind::Mod => {
+                    batch.sprite_scaled(
+                        atlas,
+                        "gui/sprites/container/anvil/text_field_disabled",
+                        ox + 59.0,
+                        oy + 20.0,
+                        110.0,
+                        16.0,
+                        u32::MAX,
+                    );
+                }
                 Kind::Enchanting => {
                     if s.inputs[1].is_none() {
                         batch.sprite(

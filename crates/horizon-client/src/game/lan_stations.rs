@@ -432,6 +432,11 @@ impl Game<'_> {
             && gs.window == p.container
             && gs.state != p.state
         {
+            log::debug!(
+                "mod station stale click: got {}, expected {}",
+                p.state,
+                gs.state
+            );
             self.lan_send_station(host, conn);
             return true;
         }
