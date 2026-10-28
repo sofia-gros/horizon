@@ -6668,6 +6668,27 @@ impl Game<'_> {
     /// Several clicks on one menu instance (a quick craft drag is three).
     fn menu_ops(&mut self, ops: &[(Option<usize>, i32, horizon_client::menu::Input)]) -> bool {
         use horizon_client::menu::Input;
+        if self.remote.is_none()
+            && ops
+                .iter()
+                .any(|(slot, _, _)| *slot == Some(stations::RESULT))
+        {
+            let previous = self
+                .station
+                .as_ref()
+                .filter(|s| s.kind == stations::Kind::Mod)
+                .map(|s| (s.result.clone(), s.mod_cost));
+            if let Some(previous) = previous {
+                self.station_changed();
+                let current = self
+                    .station
+                    .as_ref()
+                    .map(|s| (s.result.clone(), s.mod_cost));
+                if current.as_ref() != Some(&previous) {
+                    return true;
+                }
+            }
+        }
         // BundleMouseActions.onSlotClicked: a Shift click or a swap clears the bundle's selection.
         for &(slot, _, input) in ops {
             if let (Some(slot), Input::QuickMove | Input::Swap) = (slot, input) {
@@ -6812,6 +6833,7 @@ impl Game<'_> {
         let grindstone_open = station_kind == Some(stations::Kind::Grindstone);
         let cartography_open = station_kind == Some(stations::Kind::Cartography);
         let anvil_open = station_kind == Some(stations::Kind::Anvil);
+        let mod_station_open = station_kind == Some(stations::Kind::Mod);
         let smithing_open = station_kind == Some(stations::Kind::Smithing);
         let enchanting_open = station_kind == Some(stations::Kind::Enchanting);
         let beacon_open = station_kind == Some(stations::Kind::Beacon);
@@ -6881,15 +6903,17 @@ impl Game<'_> {
             let mut v = vec![Some(stations::INPUT)];
             v.extend((9..36).chain(0..9).map(Some));
             (Kind::Beacon, v)
-        } else if anvil_open || smithing_open {
+        } else if anvil_open || smithing_open || mod_station_open {
             // ItemCombinerMenu: the inputs, the result, then the inventory.
-            let inputs = if anvil_open { 2 } else { 3 };
+            let inputs = if smithing_open { 3 } else { 2 };
             let mut v: Vec<Option<usize>> =
                 (0..inputs).map(|i| Some(stations::INPUT + i)).collect();
             v.push(Some(stations::RESULT));
             v.extend((9..36).chain(0..9).map(Some));
             (
-                if anvil_open {
+                if mod_station_open {
+                    Kind::ModWorkstation
+                } else if anvil_open {
                     Kind::Anvil
                 } else {
                     Kind::Smithing
@@ -7011,6 +7035,22 @@ impl Game<'_> {
             self.level_maps(&held)
         });
         let next_map = if merchant_open { self.peek_map_id() } else { 0 };
+        let mod_plan = if mod_station_open {
+            self.station.as_ref().and_then(|s| {
+                Some((
+                    s.inputs[0].clone()?,
+                    s.inputs[1].clone()?,
+                    s.result.clone()?,
+                    if self.remote.is_some() {
+                        1
+                    } else {
+                        s.mod_cost?
+                    },
+                ))
+            })
+        } else {
+            None
+        };
         let tag = |t: &str| self.structure_tag(t);
         let maps = trading::GameMaps {
             terrain: self.end.locator(),
@@ -7045,6 +7085,9 @@ impl Game<'_> {
         }
         for (i, stack) in before.iter().enumerate() {
             menu.set_slot(&env, i, stack.clone());
+        }
+        if let Some((tool, ingredient, result, count)) = mod_plan {
+            let _ = menu.set_workstation_plan(&tool, &ingredient, count, result);
         }
         // The off hand is part of the inventory even when the menu has no slot for it.
         let offhand_mapped = game_of.contains(&Some(504));
@@ -7187,6 +7230,9 @@ impl Game<'_> {
         }
         if kind == Kind::Anvil || kind == Kind::Smithing {
             self.combiner_session_end(&menu, predicting);
+        }
+        if kind == Kind::ModWorkstation && !predicting {
+            self.station_changed();
         }
         if kind == Kind::Enchanting && (menu.enchant_changed || before[0] != menu.slot(0).cloned())
         {

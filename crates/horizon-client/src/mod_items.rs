@@ -472,7 +472,7 @@ mod tests {
         ));
         std::fs::create_dir(&dir).unwrap();
         let paths: Vec<_> = ["miner_a", "miner_b"].iter().map(|id| {
-            let manifest = format!("id = \"{id}\"\nname = \"{id}\"\nversion = \"1\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\n");
+            let manifest = format!("id = \"{id}\"\nname = \"{id}\"\nversion = \"1\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\", \"workstations\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\", \"workstations\"]\n");
             let path = dir.join(format!("{id}.hmod"));
             std::fs::write(&path, Package::write(&manifest, &wasm).unwrap()).unwrap();
             path

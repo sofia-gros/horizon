@@ -34,6 +34,17 @@ pub(super) enum Kind {
     Cartography,
     /// The loom (game/loom.rs).
     Loom,
+    /// A registered server mod's two-input workstation.
+    Mod,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ModRegistration {
+    pub owner: String,
+    pub block: String,
+    pub title: String,
+    pub path: Vec<String>,
+    pub ingredient_tags: Vec<String>,
 }
 impl Kind {
     pub(super) fn from_block(name: &str) -> Option<Self> {
@@ -69,6 +80,7 @@ impl Kind {
             Self::Beacon => "gui/container/beacon",
             Self::Cartography => "gui/container/cartography_table",
             Self::Loom => "gui/container/loom",
+            Self::Mod => "gui/container/anvil",
         }
     }
     pub(super) fn title_key(self) -> &'static str {
@@ -82,6 +94,7 @@ impl Kind {
             Self::Beacon => "container.beacon",
             Self::Cartography => "container.cartography_table",
             Self::Loom => "container.loom",
+            Self::Mod => "container.repair",
         }
     }
     /// (titleLabelX, titleLabelY).
@@ -91,6 +104,7 @@ impl Kind {
             Self::Smithing => (44.0, 15.0),
             Self::Stonecutter => (8.0, 5.0),
             Self::Cartography | Self::Loom => (8.0, 4.0),
+            Self::Mod => (60.0, 6.0),
             _ => (8.0, 6.0),
         }
     }
@@ -105,6 +119,7 @@ impl Kind {
             Self::Beacon => &[(109.0, 110.0)],
             Self::Cartography => &[(15.0, 15.0), (15.0, 52.0)],
             Self::Loom => &[(13.0, 26.0), (33.0, 26.0), (23.0, 45.0)],
+            Self::Mod => &[(27.0, 47.0), (76.0, 47.0)],
         };
         table[i.min(table.len() - 1)]
     }
@@ -123,6 +138,7 @@ impl Kind {
             Self::Beacon => None,
             Self::Cartography => Some((145.0, 39.0)),
             Self::Loom => Some((143.0, 57.0)),
+            Self::Mod => Some((134.0, 47.0)),
         }
     }
 }
@@ -157,6 +173,8 @@ pub(super) struct Station {
     pub(super) beacon_levels: Option<i32>,
     /// The loom's patterns, selection and scroller (game/loom.rs).
     pub(super) loom: super::loom::LoomState,
+    pub(super) mod_registration: Option<ModRegistration>,
+    pub(super) mod_cost: Option<u32>,
 }
 impl Station {
     fn new(kind: Kind, pos: [i32; 3]) -> Self {
@@ -180,6 +198,8 @@ impl Station {
             beacon: [None; 2],
             beacon_levels: None,
             loom: Default::default(),
+            mod_registration: None,
+            mod_cost: None,
         }
     }
     pub(super) fn new_kind(kind: Kind, pos: [i32; 3]) -> Self {
@@ -292,13 +312,20 @@ impl Game<'_> {
     }
     /// Opens a workstation menu for the block; false when it is not one.
     pub(super) fn open_station(&mut self, pos: [i32; 3], name: &str) -> bool {
-        let Some(kind) = Kind::from_block(name) else {
+        let registration = self.mod_workstation(name);
+        let Some(kind) = registration
+            .as_ref()
+            .map(|_| Kind::Mod)
+            .or_else(|| Kind::from_block(name))
+        else {
             return false;
         };
         if self.level.xp_seed == 0 {
             self.level.xp_seed = self.world.random.next_int();
         }
-        self.station = Some(Station::new(kind, pos));
+        let mut station = Station::new(kind, pos);
+        station.mod_registration = registration;
+        self.station = Some(station);
         self.station_changed();
         self.beacon_opened();
         // The block's interaction statistic.
@@ -435,6 +462,33 @@ impl Game<'_> {
         let Some(mut s) = self.station.take() else {
             return;
         };
+        if s.kind == Kind::Mod {
+            if self.remote.is_none() {
+                let plan = s.mod_registration.as_ref().and_then(|r| {
+                    let [x, y, z] = s.pos;
+                    let actual = &self.res.facts().get(self.world.block(x, y, z)).name;
+                    let range = if self.creative { 9.0 } else { 8.5 };
+                    if **actual != r.block
+                        || self.mod_workstation(&r.block).as_ref() != Some(r)
+                        || !self.eye_position().is_some_and(|eye| {
+                            horizon_client::lan::guest::within_block_range(eye, range, s.pos)
+                        })
+                    {
+                        return None;
+                    }
+                    self.mod_workstation_plan(
+                        r,
+                        &self.player_uuid_string(),
+                        s.inputs[0].as_ref()?,
+                        s.inputs[1].as_ref()?,
+                    )
+                });
+                s.mod_cost = plan.as_ref().map(|(_, count)| *count);
+                s.result = plan.map(|(result, _)| result);
+            }
+            self.station = Some(s);
+            return;
+        }
         let creative = self.creative;
         let data = self.res.stations();
         let items = self.res.items();
@@ -498,6 +552,7 @@ impl Game<'_> {
             // The menu engine keeps the cartography table's, the loom's and
             // the stonecutter's state (Game::menu_session).
             Kind::Cartography | Kind::Loom | Kind::Stonecutter => {}
+            Kind::Mod => unreachable!(),
         }
         self.station = Some(s);
     }
@@ -1255,9 +1310,15 @@ impl Game<'_> {
             }
         } else if let Some(kind) = self.station.as_ref().map(|s| s.kind) {
             // A server's menu has the title it was given.
-            let title = self
-                .remote_menu_title()
-                .unwrap_or_else(|| Text::literal(self.translate(kind.title_key(), "")));
+            let title = self.remote_menu_title().unwrap_or_else(|| {
+                Text::literal(
+                    self.station
+                        .as_ref()
+                        .and_then(|s| s.mod_registration.as_ref())
+                        .map(|r| r.title.clone())
+                        .unwrap_or_else(|| self.translate(kind.title_key(), "")),
+                )
+            });
             {
                 let atlas = &self.gui.atlas;
                 Self::part(
@@ -1282,6 +1343,17 @@ impl Game<'_> {
             let s = self.station.as_ref().expect("open station");
             let has_input = s.inputs.iter().any(Option::is_some);
             match kind {
+                Kind::Mod => {
+                    batch.sprite_scaled(
+                        atlas,
+                        "gui/sprites/container/anvil/text_field_disabled",
+                        ox + 59.0,
+                        oy + 20.0,
+                        110.0,
+                        16.0,
+                        u32::MAX,
+                    );
+                }
                 Kind::Enchanting => {
                     if s.inputs[1].is_none() {
                         batch.sprite(

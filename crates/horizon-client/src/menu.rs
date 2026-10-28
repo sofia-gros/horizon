@@ -99,6 +99,8 @@ pub enum Kind {
     Grindstone,
     /// `AnvilMenu`: two inputs, the result, then the inventory.
     Anvil,
+    /// Two input slots and a host-validated result for a mod workstation.
+    ModWorkstation,
     /// `SmithingMenu`: template, base, addition, the result, then the inventory.
     Smithing,
     /// `EnchantmentMenu`: the item, the lapis, then the inventory; its data
@@ -148,6 +150,7 @@ impl Kind {
             "stonecutter" => Self::Stonecutter,
             "grindstone" => Self::Grindstone,
             "anvil" => Self::Anvil,
+            "mod_workstation" => Self::ModWorkstation,
             "smithing" => Self::Smithing,
             "enchanting" => Self::Enchanting,
             "beacon" => Self::Beacon,
@@ -200,6 +203,8 @@ enum Role {
     SmithInput(usize),
     /// `ItemCombinerMenu`'s result slot (the anvil's and the smithing table's).
     CombineResult,
+    /// A host-validated workstation output; taking it consumes its inputs.
+    ModResult,
     /// The enchanting table's item slot (one item).
     EnchantItem,
     /// The enchanting table's lapis slot.
@@ -268,6 +273,7 @@ pub struct Menu {
     containers: [Vec<Option<ItemStack>>; 4],
     grid_size: usize,
     pub carried: Option<ItemStack>,
+    workstation_plan: Option<WorkstationPlan>,
     pub data: Vec<i32>,
     pub creative: bool,
     /// The selected hotbar slot (`Inventory.selected`).
@@ -324,6 +330,14 @@ pub struct Menu {
     /// A mount menu's entity type (`minecraft:horse`): what its saddle and
     /// body slots take.
     pub mount: Option<String>,
+}
+
+/// A preview is tied to the complete input stacks, not just their item ids.
+#[derive(Clone)]
+struct WorkstationPlan {
+    tool: ItemStack,
+    ingredient: ItemStack,
+    ingredient_count: u32,
 }
 
 /// `AnvilMenu`'s state besides its slots and `cost`.
@@ -525,6 +539,16 @@ impl Menu {
                 // cost: DataSlot.standalone() starts at 0.
                 data = 1;
             }
+            Kind::ModWorkstation => {
+                containers[MAIN] = vec![None; 2];
+                slots.extend(main(2, Role::Plain));
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::ModResult,
+                });
+                player(&mut slots);
+            }
             Kind::Smithing => {
                 containers[MAIN] = vec![None; 3];
                 slots.extend((0..3).map(|index| Slot {
@@ -674,6 +698,7 @@ impl Menu {
             containers,
             grid_size,
             carried: None,
+            workstation_plan: None,
             data: vec![0; data],
             creative: false,
             selected: 0,
@@ -905,6 +930,10 @@ impl Menu {
     /// the stonecutter lists its recipes, the block crafter refreshes its
     /// result.
     fn slot_changed(&mut self, env: &Env, s: usize) {
+        if self.kind == Kind::ModWorkstation && self.slots[s].container == MAIN {
+            self.clear_workstation_plan();
+            return;
+        }
         // MerchantContainer.setChanged: every slot of it, the result too.
         if self.kind == Kind::Merchant && self.slots[s].container != PLAYER {
             self.merchant_update(env);
@@ -1176,6 +1205,51 @@ impl Menu {
         self.put(env, i, stack);
     }
 
+    /// Install a server-validated preview for the current workstation inputs.
+    /// No input is consumed until the result is taken. The caller is responsible
+    /// for recipe authorization and for constructing the checked result.
+    pub fn set_workstation_plan(
+        &mut self,
+        tool: &ItemStack,
+        ingredient: &ItemStack,
+        ingredient_count: u32,
+        result: ItemStack,
+    ) -> Result<(), &'static str> {
+        self.clear_workstation_plan();
+        if self.kind != Kind::ModWorkstation
+            || self.containers[MAIN][0].as_ref() != Some(tool)
+            || self.containers[MAIN][1].as_ref() != Some(ingredient)
+            || tool.count != 1
+            || result.item != tool.item
+            || result.count != 1
+            || ingredient_count == 0
+            || ingredient_count > ingredient.count
+        {
+            return Err("invalid workstation preview");
+        }
+        self.workstation_plan = Some(WorkstationPlan {
+            tool: tool.clone(),
+            ingredient: ingredient.clone(),
+            ingredient_count,
+        });
+        self.containers[RESULT][0] = Some(result);
+        Ok(())
+    }
+
+    /// Drop any stale or refused preview without touching inputs.
+    pub fn clear_workstation_plan(&mut self) {
+        if self.kind == Kind::ModWorkstation {
+            self.workstation_plan = None;
+            self.containers[RESULT][0] = None;
+        }
+    }
+
+    pub fn workstation_cost(&self) -> Option<u32> {
+        self.workstation_plan
+            .as_ref()
+            .map(|plan| plan.ingredient_count)
+    }
+
     pub fn player_item(&self, i: usize) -> Option<&ItemStack> {
         self.containers[PLAYER][i].as_ref()
     }
@@ -1288,6 +1362,7 @@ impl Menu {
             | Role::StoneResult
             | Role::GrindResult
             | Role::CombineResult
+            | Role::ModResult
             | Role::CartoResult => false,
         }
     }
@@ -1308,6 +1383,10 @@ impl Menu {
     fn may_pickup(&self, env: &Env, s: usize) -> bool {
         match self.slots[s].role {
             Role::Inert => false,
+            Role::ModResult => self.workstation_plan.as_ref().is_some_and(|plan| {
+                self.containers[MAIN][0].as_ref() == Some(&plan.tool)
+                    && self.containers[MAIN][1].as_ref() == Some(&plan.ingredient)
+            }),
             // AnvilMenu.mayPickup: the levels to pay, and a price.
             Role::CombineResult if self.kind == Kind::Anvil => {
                 (self.creative || self.levels >= self.data[0]) && self.data[0] > 0
@@ -1353,6 +1432,9 @@ impl Menu {
     fn put(&mut self, env: &Env, s: usize, mut stack: Option<ItemStack>) {
         tidy(&mut stack);
         let slot = self.slots[s];
+        if self.kind == Kind::ModWorkstation && slot.container == MAIN {
+            self.clear_workstation_plan();
+        }
         // LecternBlockEntity's bookAccess.setItem does nothing.
         if self.kind == Kind::Lectern && slot.container == MAIN {
             return;
@@ -1509,6 +1591,14 @@ impl Menu {
 
     /// `ResultSlot.onTake` and the other `Slot.onTake` overrides.
     fn on_take(&mut self, env: &Env, s: usize, taken: &ItemStack) {
+        if self.slots[s].role == Role::ModResult {
+            // may_pickup checked the snapshots immediately before taking it.
+            if let Some(plan) = self.workstation_plan.take() {
+                self.put(env, 0, None);
+                self.remove(env, 1, plan.ingredient_count);
+            }
+            return;
+        }
         if self.slots[s].role == Role::Potion {
             // BrewingStandMenu.PotionSlot.onTake: a stack with potion contents.
             if matches!(
@@ -2191,13 +2281,13 @@ impl Menu {
                     self.set_by_player(env, 0, Some(single));
                 }
             }
-            Kind::Anvil | Kind::Smithing => {
+            Kind::Anvil | Kind::Smithing | Kind::ModWorkstation => {
                 // ItemCombinerMenu.quickMoveStack.
                 after_take = true;
-                let result = if self.kind == Kind::Anvil { 2 } else { 3 };
+                let result = if self.kind == Kind::Smithing { 3 } else { 2 };
                 let (start, use_row) = (result + 1, result + 28);
                 let end = result + 37;
-                let into_inputs = self.kind == Kind::Anvil
+                let into_inputs = matches!(self.kind, Kind::Anvil | Kind::ModWorkstation)
                     || (0..3).any(|i| {
                         self.containers[MAIN][i].is_none()
                             && env.station_recipes.smithing_accepts(i, &stack)
@@ -2529,6 +2619,9 @@ impl Menu {
         {
             if !in_range(slot_index) {
                 return Err(OUT_OF_BOUNDS);
+            }
+            if self.slots[slot_index as usize].role == Role::ModResult {
+                return Ok(());
             }
             if let Some(stack) = self.slot(slot_index as usize) {
                 let mut copy = stack.clone();
@@ -3016,6 +3109,81 @@ pub(crate) mod tests {
             damage: 0,
             extra: None,
         })
+    }
+
+    #[test]
+    fn mod_workstation_preview_is_invalidated_and_consumed_once() {
+        with_menu(Kind::ModWorkstation, |env, menu| {
+            let tool = stack("wooden_pickaxe", 1).unwrap();
+            let ingredient = stack("flint", 3).unwrap();
+            let mut result = tool.clone();
+            result.data_mut().custom_name = Some("repaired".into());
+            menu.set_slot(env, 0, Some(tool.clone()));
+            menu.set_slot(env, 1, Some(ingredient.clone()));
+            menu.set_workstation_plan(&tool, &ingredient, 2, result.clone())
+                .unwrap();
+            menu.set_slot(env, 1, stack("flint", 2));
+            assert!(menu.slot(2).is_none());
+            assert!(
+                menu.set_workstation_plan(&tool, &ingredient, 2, result.clone())
+                    .is_err()
+            );
+            assert_eq!(menu.slot(0), Some(&tool));
+            menu.set_slot(env, 1, Some(ingredient.clone()));
+            menu.set_workstation_plan(&tool, &ingredient, 2, result.clone())
+                .unwrap();
+            menu.carried = stack("stone", 1);
+            menu.click(env, 2, 0, Input::Pickup).unwrap();
+            assert_eq!(menu.slot(0), Some(&tool));
+            assert_eq!(menu.slot(1), Some(&ingredient));
+            menu.carried = None;
+            menu.click(env, 2, 0, Input::Pickup).unwrap();
+            assert_eq!(menu.carried, Some(result));
+            assert!(menu.slot(0).is_none());
+            assert_eq!(menu.slot(1).unwrap().count, 1);
+            assert!(menu.slot(2).is_none());
+            let after = menu.slot(1).cloned();
+            menu.click(env, 2, 0, Input::Pickup).unwrap();
+            assert_eq!(menu.slot(1), after.as_ref());
+        });
+    }
+
+    #[test]
+    fn mod_workstation_shift_click_does_not_consume_when_inventory_is_full() {
+        with_menu(Kind::ModWorkstation, |env, menu| {
+            let tool = stack("wooden_pickaxe", 1).unwrap();
+            let ingredient = stack("flint", 2).unwrap();
+            menu.set_slot(env, 0, Some(tool.clone()));
+            menu.set_slot(env, 1, Some(ingredient.clone()));
+            for slot in 3..39 {
+                menu.set_slot(env, slot, stack("stone", 64));
+            }
+            menu.set_workstation_plan(&tool, &ingredient, 2, tool.clone())
+                .unwrap();
+            menu.click(env, 2, 0, Input::QuickMove).unwrap();
+            assert_eq!(menu.slot(0), Some(&tool));
+            assert_eq!(menu.slot(1), Some(&ingredient));
+            assert_eq!(menu.slot(2), Some(&tool));
+        });
+    }
+
+    #[test]
+    fn mod_workstation_merge_invalidates_preview_and_creative_clone_cannot_duplicate_it() {
+        with_menu(Kind::ModWorkstation, |env, menu| {
+            let tool = stack("wooden_pickaxe", 1).unwrap();
+            let ingredient = stack("flint", 1).unwrap();
+            menu.set_slot(env, 0, Some(tool.clone()));
+            menu.set_slot(env, 1, Some(ingredient.clone()));
+            menu.set_workstation_plan(&tool, &ingredient, 1, tool.clone())
+                .unwrap();
+            menu.click(env, 2, 2, Input::Clone).unwrap();
+            assert!(menu.carried.is_none());
+            menu.set_slot(env, 30, stack("flint", 1));
+            menu.click(env, 30, 0, Input::QuickMove).unwrap();
+            assert_eq!(menu.slot(1).unwrap().count, 2);
+            assert!(menu.slot(2).is_none());
+            assert_eq!(menu.slot(0), Some(&tool));
+        });
     }
 
     /// An item tab's ItemPickerMenu: the 45 display slots show `shown`.

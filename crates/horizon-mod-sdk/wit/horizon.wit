@@ -790,6 +790,69 @@ interface inventory-transactions {
     replace-main-hand-combat-profile-consuming: func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32, melee: melee-profile, slot: u32, count: u32) -> result<_, string>;
 }
 
+/// Experimental server workstation registration. A block opens a menu only
+/// for the handler explicitly named in its owning content mod's declaration.
+interface workstations {
+    /// Register a block, visible title and state path during initialization.
+    /// The handler receives only this bounded custom string, and the host
+    /// retains all other components. At most 32 registrations per mod.
+    /// `ingredient-tags` requests at most 16 tag memberships for each preview.
+    register: func(block: string, title: string, custom-path: list<string>, ingredient-tags: list<string>) -> result<_, string>;
+}
+
+/// A workstation preview. The host discards queued host outputs and blocks
+/// storage writes and deletes during the callback; input stacks are snapshots
+/// rechecked before taking a result. Guest memory is not rolled back: mods must
+/// keep their own preview logic side-effect-free and deterministic.
+interface workstation-events {
+    // Independent value types keep the optional export from importing items-tools.
+    record rule {
+        /// Direct block ids, or exactly one #tag selector. At most 64 entries.
+        blocks: list<string>,
+        speed: option<f32>,
+        correct-for-drops: option<bool>,
+    }
+    record profile {
+        /// At most 16 rules, in vanilla Tool order; speeds must be finite and positive.
+        rules: list<rule>,
+        default-speed: f32,
+        damage-per-block: u32,
+        can-destroy-in-creative: bool,
+        /// False prevents mining in prediction and on the server, including Creative.
+        mining-enabled: bool,
+        /// Sets the vanilla unbreakable component; does not implement custom wear.
+        unbreakable: bool,
+    }
+    record melee-profile {
+        /// Additive attack damage above the player's base, before effects.
+        damage-bonus: f32,
+        /// Multiplier applied to base melee damage before critical bonus.
+        damage-multiplier: f32,
+        /// Total attacks per second, including the player's base speed.
+        attack-speed: f32,
+        /// False prevents direct attacks with this stack.
+        enabled: bool,
+    }
+
+    record input {
+        item: string,
+        count: u32,
+        damage: u32,
+        custom-text: option<string>,
+        tags: list<string>,
+    }
+    record plan {
+        replacement: string,
+        consume: u32,
+        tool: profile,
+        damage: u32,
+        max-damage: u32,
+        melee: melee-profile,
+    }
+    /// Return a preview for these inputs, or none if they do not match.
+    preview: func(block: string, tool: input, ingredient: input) -> result<option<plan>, string>;
+}
+
 /// What the server calls in a server mod (manifest `api = "0.3"`,
 /// experimental). Only the hooks `init` asks for are ever called. The player
 /// in each event is as the server saw them when it happened.
@@ -922,6 +985,7 @@ world horizon-server-mod {
     import %world;
     import items-tools;
     import inventory-transactions;
+    import workstations;
     export server-events;
 }
 
@@ -943,6 +1007,15 @@ world horizon-server-melee-mod {
 
 world melee-host {
     export melee-events;
+}
+
+world horizon-server-workstation-mod {
+    include horizon-server-melee-mod;
+    export workstation-events;
+}
+
+world workstation-host {
+    export workstation-events;
 }
 
 /// A mod with widgets (capability `ui`): the SDK builds every mod against

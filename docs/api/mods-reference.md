@@ -23,6 +23,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `recipes` | [`recipes`](#recipes) | read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items |
 | `items-tools` | [`items-tools`](#items-tools) | change held items' mining settings, unbreakable setting and associated custom-data strings on the server |
 | `inventory-transactions` | [`inventory-transactions`](#inventory-transactions) | read and consume the invoking player's inventory while changing their held tool on the server |
+| `workstations` | [`workstations`](#workstations) | register workstation menus that process their input items on the server |
 
 ## World `horizon-mod`
 
@@ -35,14 +36,14 @@ A client mod: runs in the player's game.
 
 A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
 
-- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`, `inventory-transactions`
+- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`, `inventory-transactions`, `workstations`
 - Exports (what the mod provides): `server-events`
 
 ## World `horizon-server-mining-mod`
 
 New SDK server mods export this optional interface as well. Older server mods continue to load through horizon-server-mod without receiving it.
 
-- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`, `inventory-transactions`
+- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`, `inventory-transactions`, `workstations`
 - Exports (what the mod provides): `mining-events`, `server-events`
 
 ## World `mining-host`
@@ -52,13 +53,23 @@ New SDK server mods export this optional interface as well. Older server mods co
 
 ## World `horizon-server-melee-mod`
 
-- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`, `inventory-transactions`
+- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`, `inventory-transactions`, `workstations`
 - Exports (what the mod provides): `melee-events`, `mining-events`, `server-events`
 
 ## World `melee-host`
 
 - Imports (what the game offers): (none)
 - Exports (what the mod provides): `melee-events`
+
+## World `horizon-server-workstation-mod`
+
+- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`, `inventory-transactions`, `workstations`
+- Exports (what the mod provides): `workstation-events`, `melee-events`, `mining-events`, `server-events`
+
+## World `workstation-host`
+
+- Imports (what the game offers): (none)
+- Exports (what the mod provides): `workstation-events`
 
 ## World `horizon-ui-mod`
 
@@ -808,6 +819,77 @@ Experimental server-only inventory capability; command actor only.
 | --- | --- | --- |
 | `inventory-slot` | `func(player: string, slot: u32, custom-path: list<string>) -> result<option<held-stack>, string>` | Read a slot 0..35 of the invoking player's inventory during a command. Shares main-hand's bounds and read budget. Other hooks cannot read slots. |
 | `replace-main-hand-combat-profile-consuming` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32, melee: melee-profile, slot: u32, count: u32) -> result<_, string>` | During a player command, atomically apply the checked combat profile edit and consume `count` from a distinct slot 0..35 captured in the same snapshot. The invoking player must be the target. The server rechecks both complete stacks; ok means queued, not committed. |
+
+## `workstations`
+
+Access: capability `workstations`.
+
+Experimental server workstation registration. A block opens a menu only for the handler explicitly named in its owning content mod's declaration.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `register` | `func(block: string, title: string, custom-path: list<string>, ingredient-tags: list<string>) -> result<_, string>` | Register a block, visible title and state path during initialization. The handler receives only this bounded custom string, and the host retains all other components. At most 32 registrations per mod. `ingredient-tags` requests at most 16 tag memberships for each preview. |
+
+## `workstation-events`
+
+Access: exported by the mod: the game calls it.
+
+A workstation preview. The host discards queued host outputs and blocks storage writes and deletes during the callback; input stacks are snapshots rechecked before taking a result. Guest memory is not rolled back: mods must keep their own preview logic side-effect-free and deterministic.
+
+### record `rule`
+
+Independent value types keep the optional export from importing items-tools.
+
+| Field | Type | |
+| --- | --- | --- |
+| `blocks` | `list<string>` | Direct block ids, or exactly one #tag selector. At most 64 entries. |
+| `speed` | `option<f32>` |  |
+| `correct-for-drops` | `option<bool>` |  |
+
+### record `profile`
+
+| Field | Type | |
+| --- | --- | --- |
+| `rules` | `list<rule>` | At most 16 rules, in vanilla Tool order; speeds must be finite and positive. |
+| `default-speed` | `f32` |  |
+| `damage-per-block` | `u32` |  |
+| `can-destroy-in-creative` | `bool` |  |
+| `mining-enabled` | `bool` | False prevents mining in prediction and on the server, including Creative. |
+| `unbreakable` | `bool` | Sets the vanilla unbreakable component; does not implement custom wear. |
+
+### record `melee-profile`
+
+| Field | Type | |
+| --- | --- | --- |
+| `damage-bonus` | `f32` | Additive attack damage above the player's base, before effects. |
+| `damage-multiplier` | `f32` | Multiplier applied to base melee damage before critical bonus. |
+| `attack-speed` | `f32` | Total attacks per second, including the player's base speed. |
+| `enabled` | `bool` | False prevents direct attacks with this stack. |
+
+### record `input`
+
+| Field | Type | |
+| --- | --- | --- |
+| `item` | `string` |  |
+| `count` | `u32` |  |
+| `damage` | `u32` |  |
+| `custom-text` | `option<string>` |  |
+| `tags` | `list<string>` |  |
+
+### record `plan`
+
+| Field | Type | |
+| --- | --- | --- |
+| `replacement` | `string` |  |
+| `consume` | `u32` |  |
+| `tool` | `profile` |  |
+| `damage` | `u32` |  |
+| `max-damage` | `u32` |  |
+| `melee` | `melee-profile` |  |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `preview` | `func(block: string, tool: input, ingredient: input) -> result<option<plan>, string>` | Return a preview for these inputs, or none if they do not match. |
 
 ## `server-events`
 
