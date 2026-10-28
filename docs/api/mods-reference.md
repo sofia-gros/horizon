@@ -834,7 +834,7 @@ Experimental server workstation registration. A block opens a menu only for the 
 
 Access: exported by the mod: the game calls it.
 
-A pure workstation preview. The host discards any queued host outputs; input stacks are snapshots and are rechecked before a result is taken.
+A workstation preview. The host discards queued host outputs and blocks storage writes and deletes during the callback; input stacks are snapshots rechecked before taking a result. Guest memory is not rolled back: mods must keep their own preview logic side-effect-free and deterministic.
 
 ### type `profile`
 

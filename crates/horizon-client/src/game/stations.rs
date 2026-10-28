@@ -468,7 +468,7 @@ impl Game<'_> {
                     let [x, y, z] = s.pos;
                     let actual = &self.res.facts().get(self.world.block(x, y, z)).name;
                     let range = if self.creative { 9.0 } else { 8.5 };
-                    if &**actual != r.block
+                    if **actual != r.block
                         || self.mod_workstation(&r.block).as_ref() != Some(r)
                         || !self.eye_position().is_some_and(|eye| {
                             horizon_client::lan::guest::within_block_range(eye, range, s.pos)
