@@ -596,12 +596,55 @@ impl Game<'_> {
             None => String::new(),
         }
     }
+    /// Refresh an open local viewer after another player changes a shared selection.
+    pub(super) fn sync_local_mod_selection(&mut self) -> bool {
+        if self.remote.is_some() {
+            return false;
+        }
+        let selection = self.station.as_ref().and_then(|station| {
+            let gui = station
+                .mod_gui
+                .as_ref()
+                .filter(|gui| gui.shared_selection)?;
+            let registration = station.mod_registration.as_ref()?;
+            let values = self.mod_gui_progress(registration, station.pos)?;
+            Some(
+                values
+                    .last()
+                    .and_then(|code| gui.selection_from_code(*code))
+                    .map(str::to_owned),
+            )
+        });
+        let Some(selection) = selection else {
+            return false;
+        };
+        let Some(station) = self.station.as_mut() else {
+            return false;
+        };
+        if station.mod_selection == selection {
+            return false;
+        }
+        station.mod_selection = selection;
+        self.station_changed();
+        true
+    }
+
     /// `slotsChanged` / `createResult` for the open station.
     pub(super) fn station_changed(&mut self) {
         let Some(mut s) = self.station.take() else {
             return;
         };
         if s.kind == Kind::Mod {
+            if self.remote.is_none()
+                && let (Some(gui), Some(registration)) = (&s.mod_gui, &s.mod_registration)
+                && gui.shared_selection
+                && let Some(values) = self.mod_gui_progress(registration, s.pos)
+            {
+                s.mod_selection = values
+                    .last()
+                    .and_then(|code| gui.selection_from_code(*code))
+                    .map(str::to_owned);
+            }
             if s.is_mod_storage() || s.is_mod_display() {
                 self.station = Some(s);
                 return;

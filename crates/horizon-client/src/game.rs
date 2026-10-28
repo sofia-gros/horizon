@@ -6792,6 +6792,9 @@ impl Game<'_> {
                 })
             })
         {
+            if self.sync_local_mod_selection() {
+                return true;
+            }
             let previous = self
                 .station
                 .as_ref()
