@@ -185,7 +185,7 @@ impl Game<'_> {
         if kind == Kind::Beacon {
             menu.data = self.beacon_data(host, station.pos).to_vec();
         }
-        host.play.entry(conn).or_default().station = Some(GuestStation {
+        let mut guest_station = GuestStation {
             window,
             state: 0,
             kind: station.kind,
@@ -194,7 +194,7 @@ impl Game<'_> {
             sent_data: Vec::new(),
             last_sound: 0,
             mod_registration: station.mod_registration.clone(),
-            mod_selection: None,
+            mod_selection: station.mod_selection.clone(),
             storage_snapshot: (!station.mod_storage_indices().is_empty()).then(|| {
                 station
                     .mod_storage_indices()
@@ -202,7 +202,13 @@ impl Game<'_> {
                     .map(|i| station.inputs[i].clone())
                     .collect()
             }),
-        });
+        };
+        if guest_station.mod_selection.is_some()
+            && let Some(guest) = host.hub.guests.iter().find(|g| g.conn == conn)
+        {
+            self.lan_mod_station_preview(guest, &mut guest_station);
+        }
+        host.play.entry(conn).or_default().station = Some(guest_station);
         self.lan_send_station(host, conn);
         true
     }
@@ -236,6 +242,29 @@ impl Game<'_> {
                 }) && host.hub.guests[gi].within_block_range(gs.pos, 4.0);
                 if !valid {
                     host.play.entry(conn).or_default().station = Some(gs);
+                    return true;
+                }
+            }
+            if let Some(gui) = gs
+                .mod_registration
+                .as_ref()
+                .and_then(|r| r.gui.as_ref())
+                .filter(|gui| gui.shared_selection)
+                && let Some(values) = gs
+                    .mod_registration
+                    .as_ref()
+                    .and_then(|r| self.mod_gui_progress(r, gs.pos))
+            {
+                let selection = values
+                    .last()
+                    .and_then(|code| gui.selection_from_code(*code))
+                    .map(str::to_owned);
+                if gs.mod_selection != selection {
+                    gs.mod_selection = selection;
+                    gs.menu.data = values.into_iter().map(i32::from).collect();
+                    self.lan_mod_station_preview(&host.hub.guests[gi], &mut gs);
+                    host.play.entry(conn).or_default().station = Some(gs);
+                    self.lan_send_station(host, conn);
                     return true;
                 }
             }
@@ -938,9 +967,34 @@ impl Game<'_> {
             if let Some(values) = progress {
                 let values = values.into_iter().map(i32::from).collect::<Vec<_>>();
                 if values != gs.menu.data {
-                    if let Some(gs) = host.play.get_mut(&conn).and_then(|p| p.station.as_mut()) {
-                        gs.menu.data = values;
+                    let mut station = host
+                        .play
+                        .get_mut(&conn)
+                        .and_then(|p| p.station.take())
+                        .expect("checked");
+                    let selection = station
+                        .mod_registration
+                        .as_ref()
+                        .and_then(|r| r.gui.as_ref())
+                        .filter(|gui| gui.shared_selection)
+                        .and_then(|gui| {
+                            values
+                                .last()
+                                .and_then(|value| u8::try_from(*value).ok())
+                                .and_then(|code| gui.selection_from_code(code).map(str::to_owned))
+                        });
+                    let changed = station
+                        .mod_registration
+                        .as_ref()
+                        .and_then(|r| r.gui.as_ref())
+                        .is_some_and(|gui| gui.shared_selection)
+                        && station.mod_selection != selection;
+                    if changed {
+                        station.mod_selection = selection;
+                        self.lan_mod_station_preview(g, &mut station);
                     }
+                    station.menu.data = values;
+                    host.play.get_mut(&conn).expect("checked").station = Some(station);
                     self.lan_send_station(host, conn);
                 }
             }

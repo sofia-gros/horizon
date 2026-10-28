@@ -79,6 +79,22 @@ impl Game<'_> {
         };
         match (s.kind, id) {
             (Kind::Mod, _) => {
+                if let Some(gui) = s.mod_gui.as_ref()
+                    && gui.shared_selection
+                    && id
+                        == gui
+                            .elements
+                            .iter()
+                            .filter(|element| {
+                                matches!(element, horizon_mods::gui::Element::Progress { .. })
+                            })
+                            .count()
+                {
+                    s.mod_selection = u8::try_from(value)
+                        .ok()
+                        .and_then(|code| gui.selection_from_code(code).map(str::to_owned));
+                    return;
+                }
                 if let Some(gui) = s.mod_gui.as_mut()
                     && let Some(horizon_mods::gui::Element::Progress {
                         value: progress, ..

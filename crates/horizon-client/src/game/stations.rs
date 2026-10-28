@@ -428,6 +428,14 @@ impl Game<'_> {
             }
         }
         station.mod_registration = registration;
+        if let (Some(reg), Some(gui)) = (&station.mod_registration, &station.mod_gui)
+            && gui.shared_selection
+        {
+            station.mod_selection = self
+                .mod_gui_progress(reg, pos)
+                .and_then(|values| values.last().copied())
+                .and_then(|code| gui.selection_from_code(code).map(str::to_owned));
+        }
         self.station = Some(station);
         self.station_changed();
         self.beacon_opened();

@@ -14,6 +14,8 @@ pub struct Gui {
     pub player_inventory: Option<PlayerInventory>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scroll: Option<ScrollGrid>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub shared_selection: bool,
     #[serde(default)]
     pub elements: Vec<Element>,
 }
@@ -211,6 +213,9 @@ impl ButtonImages {
 fn enabled_by_default() -> bool {
     true
 }
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 fn is_enabled(enabled: &bool) -> bool {
     *enabled
 }
@@ -301,6 +306,36 @@ impl Gui {
                     && y < f32::from(by) + f32::from(height))
                 .then_some((index, id.as_str()))
             })
+    }
+    /// Decode the server's per-block selection; zero means no selection.
+    pub fn selection_from_code(&self, code: u8) -> Option<&str> {
+        let index = usize::from(code).checked_sub(1)?;
+        self.elements
+            .iter()
+            .filter_map(|element| match element {
+                Element::Button {
+                    id, enabled: true, ..
+                } => Some(Some(id.as_str())),
+                Element::Button { .. } => Some(None),
+                _ => None,
+            })
+            .nth(index)
+            .flatten()
+    }
+    pub fn selection_code(&self, id: &str) -> Option<u8> {
+        let index = self
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                Element::Button {
+                    id: button,
+                    enabled,
+                    ..
+                } => Some((button, enabled)),
+                _ => None,
+            })
+            .position(|(button, enabled)| *enabled && button == id)?;
+        u8::try_from(index + 1).ok()
     }
     pub fn validate(&self) -> Result<(), String> {
         if !(176..=512).contains(&self.width)
@@ -460,11 +495,16 @@ mod tests {
             panic!("button")
         };
         assert!(!enabled);
+        assert_eq!(gui.selection_code("select"), None);
+        assert_eq!(gui.selection_from_code(1), None);
         assert_eq!(gui.button_at(4.0, 4.0), None);
         let mut active = gui.clone();
         if let Element::Button { enabled, .. } = &mut active.elements[1] {
             *enabled = true;
         }
+        assert_eq!(active.selection_code("select"), Some(1));
+        assert_eq!(active.selection_from_code(1), Some("select"));
+        assert_eq!(active.selection_from_code(0), None);
         assert_eq!(active.button_at(4.0, 4.0), Some((0, "select")));
         assert_eq!(active.button_at(23.99, 13.99), Some((0, "select")));
         assert_eq!(active.button_at(24.0, 14.0), None);

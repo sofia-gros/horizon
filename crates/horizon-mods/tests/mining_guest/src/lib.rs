@@ -33,7 +33,7 @@ impl ServerMod for MiningGuest {
             "GUI Fixture",
             &["example".into(), "state".into()],
             &[],
-            r#"{"width":176,"height":166,"slots":[{"id":"pattern","x":8,"y":18,"role":"input"},{"id":"material","x":26,"y":18,"role":"input"},{"id":"result","x":134,"y":18,"role":"output"}],"elements":[{"type":"button","id":"choose","x":60,"y":18,"width":24,"height":12,"text":"Pick"},{"type":"button","id":"disabled","x":108,"y":18,"width":24,"height":12,"text":"No","enabled":false},{"type":"progress","id":"work","x":80,"y":40,"width":24,"height":8,"value":10}]}"#,
+            r#"{"width":176,"height":166,"shared_selection":true,"slots":[{"id":"pattern","x":8,"y":18,"role":"input"},{"id":"material","x":26,"y":18,"role":"input"},{"id":"result","x":134,"y":18,"role":"output"}],"elements":[{"type":"button","id":"choose","x":60,"y":18,"width":24,"height":12,"text":"Pick"},{"type":"button","id":"disabled","x":108,"y":18,"width":24,"height":12,"text":"No","enabled":false},{"type":"button","id":"fail","x":140,"y":18,"width":24,"height":12,"text":"Fail"},{"type":"progress","id":"work","x":80,"y":40,"width":24,"height":8,"value":10}]}"#,
         )?;
         Ok((
             Self,
@@ -89,6 +89,9 @@ impl ServerMod for MiningGuest {
         pos: [i32; 3],
         id: &str,
     ) -> Result<(), String> {
+        if id == "fail" {
+            return Err("fixture button failure".into());
+        }
         if id == "choose" && dimension == "example:machine" {
             queue_machine()?;
         }

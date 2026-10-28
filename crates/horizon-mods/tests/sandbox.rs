@@ -1581,7 +1581,7 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
         .unwrap();
     assert_eq!(
         mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
-        Some(vec![10])
+        Some(vec![10, 0])
     );
     assert!(
         mods.gui_button(
@@ -1617,7 +1617,25 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
     .unwrap();
     assert_eq!(
         mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
-        Some(vec![42])
+        Some(vec![42, 1])
+    );
+    assert!(
+        mods.gui_button(
+            &generic,
+            &player.id,
+            "minecraft:overworld",
+            [0, 71, 2],
+            "fail"
+        )
+        .is_err()
+    );
+    assert_eq!(
+        mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
+        Some(vec![42, 1])
+    );
+    assert_eq!(
+        mods.gui_progress(&generic, "minecraft:overworld", [1, 71, 2]),
+        Some(vec![10, 0])
     );
     let generic_inputs = [None, None, None];
     let planned = mods
@@ -1633,7 +1651,7 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
     assert!(!storage.join("preview-write").exists());
     assert_eq!(
         mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
-        Some(vec![42])
+        Some(vec![42, 1])
     );
     let tool = horizon_mods::WorkstationInput {
         item: "example:tool".into(),
@@ -1667,7 +1685,7 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
     assert_eq!(std::fs::read(storage.join("normal")).unwrap(), b"ok");
     assert_eq!(
         mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
-        Some(vec![73])
+        Some(vec![73, 1])
     );
     ingredient.item = "storage-trap".into();
     assert!(
