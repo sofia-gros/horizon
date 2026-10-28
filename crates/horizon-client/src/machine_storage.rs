@@ -93,6 +93,7 @@ mod tests {
             x: 0,
             y: 0,
             role: SlotRole::Storage,
+            background: true,
             accepts: vec![item.into()],
         }
     }

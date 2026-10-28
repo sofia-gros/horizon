@@ -660,11 +660,26 @@ impl Game<'_> {
                 gui.elements
                     .iter()
                     .filter_map(|e| match e {
-                        horizon_mods::gui::Element::Button { id, .. } => Some(id.clone()),
+                        horizon_mods::gui::Element::Button { id, enabled, .. } => {
+                            Some((*enabled, id.clone()))
+                        }
                         _ => None,
                     })
                     .nth(index)
+                    .and_then(|(enabled, id)| enabled.then_some(id))
             });
+        if selection.is_none()
+            && host
+                .play
+                .get(&conn)
+                .and_then(|p| p.station.as_ref())
+                .is_some_and(|s| {
+                    s.window == window
+                        && s.mod_registration.as_ref().is_some_and(|r| r.gui.is_some())
+                })
+        {
+            return;
+        }
         if let Some(selection) = selection {
             let target = host
                 .play

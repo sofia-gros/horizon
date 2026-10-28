@@ -1040,6 +1040,7 @@ impl Game<'_> {
                         y,
                         width,
                         height,
+                        enabled: true,
                         ..
                     } => Some([
                         f32::from(*x),
@@ -1098,30 +1099,8 @@ impl Game<'_> {
                 .as_ref()
                 .and_then(|s| s.mod_gui.as_ref())
                 .and_then(|gui| {
-                    gui.elements
-                        .iter()
-                        .filter_map(|element| match element {
-                            horizon_mods::gui::Element::Button {
-                                id,
-                                x,
-                                y,
-                                width,
-                                height,
-                                ..
-                            } => Some((id, *x, *y, *width, *height)),
-                            _ => None,
-                        })
-                        .enumerate()
-                        .find(|(_, (_, x, y, w, h))| {
-                            inside(
-                                local,
-                                f32::from(*x),
-                                f32::from(*y),
-                                f32::from(*w),
-                                f32::from(*h),
-                            )
-                        })
-                        .map(|(i, (id, _, _, _, _))| (i, id.clone()))
+                    gui.button_at(local.0, local.1)
+                        .map(|(index, id)| (index, id.to_owned()))
                 });
             if let Some((index, id)) = selected {
                 if self.remote.is_some() {
@@ -1374,6 +1353,26 @@ impl Game<'_> {
 
     // ---------------------------------------------------------------- drawing
 
+    fn gui_region(
+        mut rect: horizon_client::hud::Rect,
+        region: Option<[u16; 4]>,
+    ) -> Option<horizon_client::hud::Rect> {
+        if let Some([x, y, w, h]) = region {
+            if u32::from(x) + u32::from(w) > rect.w || u32::from(y) + u32::from(h) > rect.h {
+                return None;
+            }
+            let (du, dv) = (
+                (rect.u1 - rect.u0) / rect.w as f32,
+                (rect.v1 - rect.v0) / rect.h as f32,
+            );
+            rect.u0 += f32::from(x) * du;
+            rect.v0 += f32::from(y) * dv;
+            rect.u1 = rect.u0 + f32::from(w) * du;
+            rect.v1 = rect.v0 + f32::from(h) * dv;
+        }
+        Some(rect)
+    }
+
     fn part(
         batch: &mut HudBatch,
         atlas: &horizon_client::hud::HudAtlas,
@@ -1590,32 +1589,92 @@ impl Game<'_> {
                     let width = f32::from(gui.width);
                     let height = f32::from(gui.height);
                     batch.fill(atlas, ox, oy, width, height, rgba(198, 198, 198, 255));
-                    let inventory_x = (width - 176.0) / 2.0;
-                    Self::part(
-                        batch,
-                        atlas,
-                        kind.texture(),
-                        (0.0, 0.0),
-                        (176.0, 166.0),
-                        (ox + inventory_x, oy + height - 166.0),
-                    );
-                    batch.fill(
-                        atlas,
-                        ox + inventory_x + 7.0,
-                        oy + height - 150.0,
-                        162.0,
-                        54.0,
-                        rgba(198, 198, 198, 255),
-                    );
+                    for element in &gui.elements {
+                        if let horizon_mods::gui::Element::Image {
+                            x,
+                            y,
+                            width,
+                            height,
+                            texture,
+                            region,
+                        } = element
+                        {
+                            let name = texture.strip_prefix("minecraft:").unwrap_or(texture);
+                            if let Some(rect) = atlas
+                                .sprites
+                                .get(name)
+                                .and_then(|rect| Self::gui_region(*rect, *region))
+                            {
+                                batch.rect_uv(
+                                    ox + f32::from(*x),
+                                    oy + f32::from(*y),
+                                    f32::from(*width),
+                                    f32::from(*height),
+                                    rect,
+                                    u32::MAX,
+                                );
+                            }
+                        }
+                    }
+                    let (inventory_x, inventory_y) = gui.player_inventory_origin();
+                    let inventory_x = f32::from(inventory_x) - 8.0;
+                    let inventory_y = f32::from(inventory_y) - 84.0;
+                    if gui.player_inventory.is_none()
+                        && !gui.elements.iter().any(|element| {
+                            matches!(element, horizon_mods::gui::Element::Image { .. })
+                        })
+                    {
+                        Self::part(
+                            batch,
+                            atlas,
+                            kind.texture(),
+                            (0.0, 0.0),
+                            (176.0, 166.0),
+                            (ox + inventory_x, oy + inventory_y),
+                        );
+                        batch.fill(
+                            atlas,
+                            ox + inventory_x + 7.0,
+                            oy + inventory_y + 16.0,
+                            162.0,
+                            54.0,
+                            rgba(198, 198, 198, 255),
+                        );
+                    } else if gui
+                        .player_inventory
+                        .as_ref()
+                        .is_none_or(|inventory| inventory.background)
+                    {
+                        for row in 0..4 {
+                            for col in 0..9 {
+                                let x = ox + inventory_x + 8.0 + col as f32 * 18.0;
+                                let y = oy
+                                    + inventory_y
+                                    + 84.0
+                                    + if row == 3 { 58.0 } else { row as f32 * 18.0 };
+                                batch.fill(atlas, x, y, 18.0, 18.0, rgba(100, 100, 100, 255));
+                                batch.fill(
+                                    atlas,
+                                    x + 1.0,
+                                    y + 1.0,
+                                    16.0,
+                                    16.0,
+                                    rgba(150, 150, 150, 255),
+                                );
+                            }
+                        }
+                    }
                     batch.text_styled(atlas, &title, ox + 8.0, oy + 6.0, GREY, false);
-                    batch.text(
-                        atlas,
-                        &inventory_label,
-                        ox + inventory_x + 8.0,
-                        oy + height - 94.0,
-                        GREY,
-                        false,
-                    );
+                    if inventory_y + 72.0 >= 0.0 {
+                        batch.text(
+                            atlas,
+                            &inventory_label,
+                            ox + inventory_x + 8.0,
+                            oy + inventory_y + 72.0,
+                            GREY,
+                            false,
+                        );
+                    }
                 } else {
                     Self::part(
                         batch,
@@ -1648,6 +1707,9 @@ impl Game<'_> {
                             .and_then(|r| self.mod_gui_progress(r, s.pos));
                         let mut progress_index = 0;
                         for slot in &gui.slots {
+                            if !slot.background {
+                                continue;
+                            }
                             batch.fill(
                                 atlas,
                                 ox + f32::from(slot.x),
@@ -1677,28 +1739,70 @@ impl Game<'_> {
                                         false,
                                     );
                                 }
+                                horizon_mods::gui::Element::Image { .. } => {}
                                 horizon_mods::gui::Element::Button {
+                                    id,
                                     x,
                                     y,
                                     width,
                                     height,
                                     text,
-                                    ..
+                                    enabled,
+                                    images,
                                 } => {
-                                    batch.fill(
-                                        atlas,
-                                        ox + f32::from(*x),
-                                        oy + f32::from(*y),
+                                    let (x, y, w, h) = (
+                                        f32::from(*x),
+                                        f32::from(*y),
                                         f32::from(*width),
                                         f32::from(*height),
-                                        rgba(105, 105, 105, 255),
                                     );
+                                    let hovered = *enabled && inside(local, x, y, w, h);
+                                    let image = images.as_ref().map(|images| {
+                                        images.texture(
+                                            *enabled,
+                                            s.mod_selection.as_deref() == Some(id.as_str()),
+                                            hovered,
+                                        )
+                                    });
+                                    let rect = image.and_then(|name| {
+                                        atlas
+                                            .sprites
+                                            .get(name.strip_prefix("minecraft:").unwrap_or(name))
+                                    });
+                                    let region = images
+                                        .as_ref()
+                                        .and_then(|images| images.regions.as_ref())
+                                        .map(|regions| {
+                                            regions.region(
+                                                *enabled,
+                                                s.mod_selection.as_deref() == Some(id.as_str()),
+                                                hovered,
+                                            )
+                                        });
+                                    if let Some(rect) =
+                                        rect.and_then(|rect| Self::gui_region(*rect, region))
+                                    {
+                                        batch.rect_uv(ox + x, oy + y, w, h, rect, u32::MAX);
+                                    } else {
+                                        batch.fill(
+                                            atlas,
+                                            ox + x,
+                                            oy + y,
+                                            w,
+                                            h,
+                                            rgba(105, 105, 105, 255),
+                                        );
+                                    }
                                     batch.text(
                                         atlas,
                                         text,
-                                        ox + f32::from(*x) + 2.0,
-                                        oy + f32::from(*y) + 2.0,
-                                        rgba(255, 255, 255, 255),
+                                        ox + x + 2.0,
+                                        oy + y + 2.0,
+                                        if *enabled {
+                                            rgba(255, 255, 255, 255)
+                                        } else {
+                                            rgba(128, 128, 128, 255)
+                                        },
                                         false,
                                     );
                                 }

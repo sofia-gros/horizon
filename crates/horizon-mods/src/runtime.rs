@@ -733,7 +733,7 @@ impl Mods {
             || inputs.len() != gui.slots.len()
             || selection.is_some_and(|id| {
                 !gui.elements.iter().any(|element| {
-                matches!(element, crate::gui::Element::Button { id: button, .. } if button == id)
+                matches!(element, crate::gui::Element::Button { id: button, enabled: true, .. } if button == id)
             })
             })
         {
@@ -842,7 +842,7 @@ impl Mods {
             != Some(registration)
             || !registration.gui.as_ref().is_some_and(|gui| {
                 gui.elements.iter().any(
-                    |e| matches!(e, crate::gui::Element::Button { id: button, .. } if button == id),
+                    |e| matches!(e, crate::gui::Element::Button { id: button, enabled: true, .. } if button == id),
                 )
             })
         {

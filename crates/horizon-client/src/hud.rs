@@ -132,9 +132,29 @@ fn png_size(path: &Path) -> Option<(u32, u32)> {
     use std::io::Read;
     let mut header = [0u8; 24];
     fs::File::open(path).ok()?.read_exact(&mut header).ok()?;
-    let field = |at: usize| u32::from_be_bytes(header[at..at + 4].try_into().unwrap_or_default());
-    (header[..8] == *b"\x89PNG\r\n\x1a\n" && header[12..16] == *b"IHDR")
-        .then(|| (field(16), field(20)))
+    png_header_size(&header)
+}
+fn png_header_size(header: &[u8]) -> Option<(u32, u32)> {
+    if header.len() < 24 || header[..8] != *b"\x89PNG\r\n\x1a\n" || header[12..16] != *b"IHDR" {
+        return None;
+    }
+    let field = |at: usize| -> Option<u32> {
+        Some(u32::from_be_bytes(header[at..at + 4].try_into().ok()?))
+    };
+    Some((field(16)?, field(20)?))
+}
+/// Check the same bytes the decoder will receive before allocating from IHDR.
+fn decode_mod_gui_with(
+    path: &Path,
+    decode_image: impl FnOnce(&[u8]) -> Result<(u32, u32, Vec<u8>)>,
+) -> Option<(u32, u32, Vec<u8>)> {
+    let data = fs::read(path).ok()?;
+    let (width, height) = png_header_size(&data)?;
+    if width == 0 || height == 0 || width > 1024 || height > 512 {
+        return None;
+    }
+    let image = decode_image(&data).ok()?;
+    (image.0 == width && image.1 == height).then_some(image)
 }
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -487,6 +507,29 @@ impl HudAtlas {
             images.push(image);
         }
         if full {
+            // Content mod GUI textures are packed under their namespaced resource IDs.
+            for namespace in horizon_items::content_namespaces::namespaces(root) {
+                let base = root.join("assets").join(&namespace).join("textures");
+                let mut paths = Vec::new();
+                walk(&base.join("gui"), &mut paths);
+                paths.sort();
+                for path in paths {
+                    let Ok(relative) = path.strip_prefix(&base) else {
+                        continue;
+                    };
+                    let name = format!(
+                        "{}:{}",
+                        namespace,
+                        relative
+                            .with_extension("")
+                            .to_string_lossy()
+                            .replace('\\', "/")
+                    );
+                    if let Some((w, h, pixels)) = decode_mod_gui_with(&path, decode_bytes) {
+                        images.push((name, w, h, pixels));
+                    }
+                }
+            }
             images.extend(atlas_sprites(root, &images));
         }
         // The title screen's "JAVA EDITION" banner reads "RUST EDITION".
@@ -1686,6 +1729,51 @@ mod tests {
             .unwrap()
             .write_image_data(&pixels)
             .unwrap();
+    }
+    #[test]
+    fn oversized_mod_gui_is_rejected_before_decode() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-mod-gui-limit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_png(&root, "gui/oversized", 2048, 2048);
+        let path = root.join("assets/minecraft/textures/gui/oversized.png");
+        let called = std::cell::Cell::new(false);
+        assert!(
+            decode_mod_gui_with(&path, |data| {
+                called.set(true);
+                decode_bytes(data)
+            })
+            .is_none()
+        );
+        assert!(
+            !called.get(),
+            "oversized PNG must not reach the allocating decoder"
+        );
+        write_png(&root, "gui/within", 1024, 512);
+        let path = root.join("assets/minecraft/textures/gui/within.png");
+        assert_eq!(
+            decode_mod_gui_with(&path, decode_bytes).map(|v| (v.0, v.1)),
+            Some((1024, 512))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+    #[test]
+    fn content_mod_gui_textures_are_packed_with_their_namespace() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-mod-gui-atlas-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("horizon-mod-content.json"), r#"["example"]"#).unwrap();
+        write_png(&root, "gui/example", 4, 4);
+        let source = root.join("assets/minecraft/textures/gui/example.png");
+        let target = root.join("assets/example/textures/gui/example.png");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::rename(source, target).unwrap();
+        let atlas = HudAtlas::build(&root).unwrap();
+        let rect = atlas.sprites["example:gui/example"];
+        assert_eq!(rect.texels((atlas.width, atlas.height)), (4, 4));
+        assert_eq!(texel_at(&atlas, rect, 0, 0), [255, 255, 255, 255]);
+        let _ = fs::remove_dir_all(root);
     }
     #[test]
     fn a_pack_texture_keeps_the_default_textures_gui_size() {
