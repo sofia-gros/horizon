@@ -1,4 +1,42 @@
-> **Wasm Mod API / hooks:** This fork develops a reusable WebAssembly mod API and synchronous hooks for Horizon. Server mods can participate in item state, mining and melee through experimental, capability-gated interfaces. The fork follows upstream Horizon; APIs and coverage are still evolving. See [Mod API and current limits](docs/mods.md).
+# Horizon: a Wasm mod platform for a Rust Minecraft engine
+
+[What this project is](#what-this-project-is) · [Screenshots & features](#screenshots--features) · [Build and run](#build-and-run) · [Create a mod](#create-a-mod) · [API & hooks](#api--hooks) · [Current status](#current-status)
+
+## What this project is
+
+This is a fork of the Horizon engine that develops a reusable WebAssembly mod platform. Horizon provides general APIs and hooks; mods implement their own game rules through those interfaces in a restricted Wasm environment. The goal is to make mod behavior maintainable and help different mods coexist, with capability checks and conflict handling in the host.
+
+Minecraft mod distribution has experienced malware incidents ([CurseForge’s incident notice](https://support.curseforge.com/en/support/solutions/articles/9000228509-june-2023-infected-mods-detection-tool/)). Wasm isolation and declared capabilities reduce exposure, but do not guarantee that every mod is safe or compatible. Trusted host extensions can change that boundary. Future Horizon Mixin integration is being considered to add missing host APIs and hooks while ordinary mods remain Wasm components; it is not a current feature.
+
+## Screenshots & features
+
+![Part Builder with a flint pick head selected and its material information](https://raw.githubusercontent.com/sofia-gros/horizon-mods/0a784dbe55b3b9f4d312be7e55357c487e020934/docs/screenshots/part-builder-interactive/selected-material.png)
+
+This real-game screenshot shows the Part Builder in the separate [Horizon Mods workspace](https://github.com/sofia-gros/horizon-mods). Three pickaxe parts can be selected, and the panel shows information for supported materials. The current subset covers wood and flint; it does not yet reproduce the complete original interface or material catalog. The original GUI textures retain their [source and license notice](https://github.com/sofia-gros/horizon-mods/blob/0a784dbe55b3b9f4d312be7e55357c487e020934/Tinkers%27%20onstruct/assets/tconstruct/source_notice.txt).
+
+## Build and run
+
+- To build this fork and prepare the game from your own Minecraft installation, follow [Build from source](#build-from-source).
+- To build both TConstruct packages and run the supported subset, follow [Try the TConstruct development port](https://github.com/sofia-gros/horizon-mods/blob/0a784dbe55b3b9f4d312be7e55357c487e020934/docs/playing-tconstruct.md).
+- The launcher and download links further down describe **upstream Horizon**; do not assume an upstream release includes this fork’s experimental APIs.
+
+## Create a mod
+
+The [first-mod guide](docs/mod-authoring/getting-started.md) covers the SDK, manifest, build, sandbox test and running a development package. The [architecture guide](docs/mod-authoring/architecture.md#a-small-server-hook) includes a complete server hook example. Client code, server code and content packages have different roles and capability declarations.
+
+## API & hooks
+
+Go directly to the [mining-hook example](docs/mod-authoring/items-and-hooks.md#minimal-mining-callback), [workstation registration example](docs/mod-authoring/workstations.md#minimal-registration), or the [generated WIT API reference](docs/api/mods-reference.md). The [authoring index](docs/mod-authoring/README.md) explains registration, permissions, stale snapshots, transaction failure and compatibility limits.
+
+## Current status
+
+The separate `horizon-mods` repository contains the Tinkers’ Construct port used to test this platform. Its eventual goal is a full TConstruct 1.20.1 port; current `main` supports a limited wood/flint pickaxe, part building, assembly and single-material repair. Other tools and materials, many modifiers, the smeltery and material-dependent tool visuals remain unfinished. Server item and workstation APIs are experimental. Features in open PRs are not yet part of `main`; check the [port’s status and limits](https://github.com/sofia-gros/horizon-mods/blob/0a784dbe55b3b9f4d312be7e55357c487e020934/Tinkers%27%20onstruct/README.md) and use a matching fork revision.
+
+---
+
+## Upstream Horizon engine and resources
+
+The following engine overview, status badges and official services describe upstream Horizon. They do not certify the experimental APIs in this fork.
 
 <p align="center">
   <img src="docs/media/banner.webp" alt="Horizon: Minecraft: Java Edition 26.3, rewritten in Rust and checked against vanilla by 281 differential harnesses" width="100%">
@@ -23,7 +61,7 @@
   <a href="#contributing"><b>Contributing</b></a>
 </p>
 
-# Horizon
+## About the upstream Horizon engine
 
 Horizon is Minecraft: Java Edition 26.3 rewritten in Rust: a native game that reads the same worlds, follows the same rules and generates the same terrain as the Java game, and is checked against it by 281 differential harnesses. You play it through a small launcher, on the files from your own copy of Minecraft. It is free, open source and unofficial.
 
@@ -50,7 +88,7 @@ The [documentation](https://playhorizon.dev/docs/) covers each of these.
 - **Horizon's own extras:** new menus (vanilla's are one setting away), graphics presets, distant terrain up to 1024 chunks, controller support, optional zoom, minimap and more, all off by default where they would change the vanilla look. See [Settings](https://playhorizon.dev/docs/settings).
 - **Resource packs and data packs:** resource packs work, and data packs load functions, predicates and item modifiers.
 - **Playing with others:** invite friends from the pause menu's Friends button with a code, Open to LAN, and joining servers, online-mode ones with the Microsoft account the launcher signs in with. See [Multiplayer](https://playhorizon.dev/docs/multiplayer).
-- **Mods:** Horizon has its own mod system (Rust compiled to WebAssembly). Java mod jars do not run. See [Mods and data packs](https://playhorizon.dev/docs/mods).
+- **Mods:** Horizon has its own mod system (Rust compiled to WebAssembly). Java mod jars do not run. For this fork’s experimental APIs, start with [Create a mod](docs/mod-authoring/getting-started.md) and [API and hooks](docs/mod-authoring/README.md).
 
 Screenshots, captured in the Rust client itself with vanilla assets and no mods or shaders:
 
@@ -93,7 +131,7 @@ Commands block until the action is done and reply with what happened; errors are
 
 ## Build from source
 
-For developers. Requirements: Rust 1.90 or newer, Python 3.10 or newer, JDK 25, and on Linux the ALSA and udev development headers (`libasound2-dev libudev-dev` on Debian and Ubuntu). Development and the vanilla harnesses run on Linux.
+For developers building this fork. The Wasm mod runtime requires Rust 1.95 or newer; the game preparation tools also need Python 3.10 or newer, JDK 25, and on Linux the ALSA and udev development headers (`libasound2-dev libudev-dev` on Debian and Ubuntu). Development and the vanilla harnesses run on Linux.
 
 Horizon contains no game files and never downloads them. It builds its resources from **your own copy** of Minecraft: Java Edition 26.3, verified against the checksums in `research-lock.json`:
 
@@ -101,22 +139,16 @@ Horizon contains no game files and never downloads them. It builds its resources
 2. **Server jar:** the 26.3 server jar, from the `downloads.server.url` in your launcher's `versions/26.3/26.3.json` (or [minecraft.net/download/server](https://www.minecraft.net/en-us/download/server) while 26.3 is the current release). Pass it with `--server-jar` or set `HORIZON_SERVER_JAR`. It is only needed the first time.
 
 ```sh
-git clone https://github.com/horizon-rust/horizon.git
+git clone https://github.com/sofia-gros/horizon.git
 cd horizon
 cargo run --release -p horizon-prepare -- --prepare --server-jar ~/Downloads/server.jar   # needs JDK 25
 cargo run --release -p horizon-prepare -- sounds   # optional: sounds from your launcher install
-cargo run --release -p horizon-client
+cargo run --release -p horizon-client --features mods
 ```
 
 Everything prepared lands in the gitignored `.local/`. It is derived from the game: never commit it or share it.
 
 The client starts on the title screen. Command-line options (`--world`, `--seed`, `--creative`, `--render-distance`, `--dedicated`), controls, scripting through `horizon-ctl` and the architecture are described in [the native client guide](docs/native-client.md). The rest of the developer documentation is indexed in [docs/README.md](docs/README.md), including [the parity workflow](docs/parity-workflow.md).
-
-## Developing mods in this fork
-
-This fork develops general Horizon APIs and hooks for WebAssembly mods. Code mods run in a restricted runtime and request host capabilities rather than rewriting engine internals. Mining, combat, items and workstations are being exercised through a partial Tinkers’ Construct port. The aim is a maintainable ecosystem in which mods can share APIs; the current sandbox and conflict checks are not a guarantee that every mod is safe or compatible. Integration with trusted Horizon Mixins is a possible future extension, not a current feature.
-
-Start with the [fork mod-authoring guide](docs/mod-authoring/README.md), or see [Horizon Mods](https://github.com/sofia-gros/horizon-mods) for the port, screenshots and current limitations. The upstream Horizon game instructions above remain applicable; experimental fork APIs require a matching fork build.
 
 ## Roadmap
 
