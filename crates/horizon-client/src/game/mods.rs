@@ -337,6 +337,7 @@ impl Game<'_> {
             }
         }
         self.mods.mods = mods;
+        self.mod_configure_gui_progress();
         let chosen = &self.settings.mods;
         self.mods.mods.set_bindings(|id| chosen.keys_of(id));
         // Entries were replaced wholesale: a screen's owner index is stale.
@@ -645,6 +646,7 @@ impl Game<'_> {
         }
         self.mods.checked = Some(Instant::now());
         if self.mods.mods.reload_changed(vanilla_command) {
+            self.mod_configure_gui_progress();
             let chosen = &self.settings.mods;
             self.mods.mods.set_bindings(|id| chosen.keys_of(id));
             self.list_mods();

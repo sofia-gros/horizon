@@ -281,6 +281,7 @@ impl Game<'_> {
             self.swap_level(&mut p);
             p.idle = 0;
             let left = std::mem::replace(&mut self.dim, target);
+            self.mod_configure_gui_progress();
             self.levels.parked.insert(left, p);
             if opened {
                 // The new streaming's radius and meshing options.

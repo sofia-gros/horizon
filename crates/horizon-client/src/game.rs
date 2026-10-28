@@ -9372,6 +9372,8 @@ impl Game<'_> {
         book.recipes.retain(|r| index.contains(r));
         book.to_be_displayed.retain(|r| index.contains(r));
         self.dim = dim;
+        self.mod_reset_gui_progress();
+        self.mod_configure_gui_progress();
         self.world_root = save_root.clone();
         self.world_flat = horizon_client::save::WorldGen::read(&save_root).is_some_and(|w| w.flat);
         self.block_ticks = Ticks::new(self.level.seed as i32);
@@ -9497,6 +9499,7 @@ impl Game<'_> {
         self.world = world;
         self.save = save;
         self.dim = target;
+        self.mod_configure_gui_progress();
         self.level.dimension = target.id().to_owned();
         self.block_ticks = Ticks::new(self.level.seed as i32);
         self.tick_chunks.clear();
@@ -9690,6 +9693,7 @@ impl Game<'_> {
         self.begin_closing_save(false)
     }
     fn finish_close_world(&mut self) -> Result<()> {
+        self.mod_reset_gui_progress();
         self.ambience.clear(&mut self.audio);
         // updateLevelInEngines(null): every sound stops; the music manager
         // lets go of its track.

@@ -78,6 +78,13 @@ pub struct World {
     pub watched: Vec<bool>,
     /// Writes of watched states: position, previous and new state.
     pub watched_writes: Vec<((i32, i32, i32), u32, u32)>,
+    /// Transient mod progress stores and block state names to invalidate on replacement.
+    #[cfg(feature = "mods")]
+    pub gui_progress: Vec<horizon_mods::GuiProgress>,
+    #[cfg(feature = "mods")]
+    pub gui_progress_states: Vec<Option<std::sync::Arc<str>>>,
+    #[cfg(feature = "mods")]
+    pub gui_progress_dimension: String,
     /// `ChunkAccess.inhabitedTime` of resident chunks: ticks a player spent
     /// within spawning range (local difficulty).
     pub inhabited: HashMap<(i32, i32), i64>,
@@ -183,6 +190,12 @@ impl World {
             block_names: HashMap::new(),
             watched: Vec::new(),
             watched_writes: Vec::new(),
+            #[cfg(feature = "mods")]
+            gui_progress: Vec::new(),
+            #[cfg(feature = "mods")]
+            gui_progress_states: Vec::new(),
+            #[cfg(feature = "mods")]
+            gui_progress_dimension: String::new(),
             inhabited: HashMap::new(),
             game_time: 0,
             day_time: 1000,
@@ -263,6 +276,18 @@ impl World {
         }
         let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
         if previous != state.0 {
+            #[cfg(feature = "mods")]
+            if let Some(Some(old)) = self.gui_progress_states.get(previous as usize) {
+                let new = self
+                    .gui_progress_states
+                    .get(state.0 as usize)
+                    .and_then(Option::as_ref);
+                if new != Some(old) {
+                    for progress in &self.gui_progress {
+                        progress.remove_block(old, &self.gui_progress_dimension, [x, y, z]);
+                    }
+                }
+            }
             self.block_entities
                 .state_changed((x, y, z), previous, state.0);
             let watches = |id: u32| self.watched.get(id as usize).copied().unwrap_or(false);

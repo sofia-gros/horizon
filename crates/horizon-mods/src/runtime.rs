@@ -505,11 +505,47 @@ struct State {
     command_actor: Option<String>,
     registering_workstations: bool,
     workstations: Vec<WorkstationRegistration>,
-    gui_progress: std::collections::HashMap<(String, String, i32, i32, i32, String), u8>,
+    gui_progress: GuiProgress,
     mining_enabled: bool,
     melee_enabled: bool,
     limits: StoreLimits,
     world: WorldSlot,
+}
+
+type GuiProgressKey = (String, String, i32, i32, i32, String);
+
+/// One mod's transient GUI progress, shared with the world's block lifecycle.
+#[derive(Clone, Default)]
+pub struct GuiProgress(Arc<Mutex<std::collections::HashMap<GuiProgressKey, u8>>>);
+
+impl GuiProgress {
+    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<GuiProgressKey, u8>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+    fn set(&self, key: GuiProgressKey, value: u8) -> Result<(), String> {
+        let mut progress = self.lock();
+        if progress.len() >= 4096 && !progress.contains_key(&key) {
+            return Err("too many workstation progress entries".into());
+        }
+        progress.insert(key, value);
+        Ok(())
+    }
+    /// Invalidate only entries for the removed block in this dimension.
+    pub fn remove_block(&self, block: &str, dimension: &str, pos: [i32; 3]) {
+        self.lock()
+            .retain(|(b, d, x, y, z, _), _| !(b == block && d == dimension && [*x, *y, *z] == pos));
+    }
+    /// End a world's lifetime, including all its dimensions.
+    pub fn clear(&self) {
+        self.lock().clear();
+    }
+    /// Discard entries whose positions the host confirms no longer contain their block.
+    pub fn retain_blocks(&self, mut valid: impl FnMut(&str, &str, [i32; 3]) -> bool) {
+        self.lock()
+            .retain(|(b, d, x, y, z, _), _| valid(b, d, [*x, *y, *z]));
+    }
 }
 
 /// The installed mods and the engine running them. `Mods::default()` is
@@ -527,6 +563,19 @@ pub struct Mods {
 }
 
 impl Mods {
+    /// The progress stores currently owned by running mods.
+    pub fn gui_progress_stores(&self) -> Vec<GuiProgress> {
+        self.entries
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .run
+                    .as_ref()
+                    .map(|run| run.store.data().gui_progress.clone())
+            })
+            .collect()
+    }
+
     /// Resolve the handler explicitly authorized by the block owner.
     pub fn workstation(&self, block: &str, owner: &str) -> Option<WorkstationRegistration> {
         let mut matches = self.entries.iter().filter_map(|entry| {
@@ -701,7 +750,7 @@ impl Mods {
                             pos[2],
                             id.clone(),
                         );
-                        Some(*state.gui_progress.get(&key).unwrap_or(value))
+                        Some(*state.gui_progress.lock().get(&key).unwrap_or(value))
                     }
                     _ => None,
                 })
@@ -2517,4 +2566,60 @@ fn storage_key_ok(key: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b));
     chars_ok && key != "." && key != ".."
+}
+
+#[cfg(test)]
+mod gui_progress_tests {
+    use super::GuiProgress;
+    fn key(block: &str, dim: &str, x: i32) -> (String, String, i32, i32, i32, String) {
+        (block.into(), dim.into(), x, 64, 0, "work".into())
+    }
+    #[test]
+    fn removal_reclaims_capacity_and_isolates_other_mods_blocks_and_dimensions() {
+        let a = GuiProgress::default();
+        let b = GuiProgress::default();
+        for x in 0..4096 {
+            a.set(key("fixture:machine", "overworld", x), 80).unwrap();
+        }
+        assert!(
+            a.set(key("fixture:machine", "overworld", 4096), 50)
+                .is_err()
+        );
+        b.set(key("fixture:machine", "overworld", 7), 20).unwrap();
+        a.remove_block("fixture:machine", "overworld", [7, 64, 0]);
+        assert!(
+            !a.lock()
+                .contains_key(&key("fixture:machine", "overworld", 7))
+        );
+        assert!(
+            b.lock()
+                .contains_key(&key("fixture:machine", "overworld", 7))
+        );
+        a.set(key("fixture:machine", "overworld", 4096), 50)
+            .unwrap();
+        a.remove_block("fixture:other", "overworld", [8, 64, 0]);
+        a.remove_block("fixture:machine", "nether", [8, 64, 0]);
+        assert_eq!(
+            a.lock().get(&key("fixture:machine", "overworld", 8)),
+            Some(&80)
+        );
+        a.clear();
+        assert!(a.lock().is_empty());
+        assert!(!b.lock().is_empty());
+    }
+    #[test]
+    fn prune_preserves_unconfirmed_positions_and_reclaims_invalid_ones() {
+        let p = GuiProgress::default();
+        p.set(key("fixture:machine", "overworld", 1), 10).unwrap();
+        p.set(key("fixture:machine", "overworld", 2), 20).unwrap();
+        p.retain_blocks(|_, _, pos| pos[0] != 1);
+        assert!(
+            !p.lock()
+                .contains_key(&key("fixture:machine", "overworld", 1))
+        );
+        assert!(
+            p.lock()
+                .contains_key(&key("fixture:machine", "overworld", 2))
+        );
+    }
 }

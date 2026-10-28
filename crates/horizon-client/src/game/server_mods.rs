@@ -82,6 +82,8 @@ impl Game<'_> {
     ) -> bool {
         false
     }
+    pub(super) fn mod_configure_gui_progress(&mut self) {}
+    pub(super) fn mod_reset_gui_progress(&mut self) {}
     pub(super) fn tick_server_mods(&mut self) {}
     pub(super) fn mod_block_event(&mut self, _pos: [i32; 3], _state: BlockStateId, _placed: bool) {}
     pub(super) fn mod_mined(
@@ -318,6 +320,48 @@ mod run {
             self.mods.mods.gui_progress(&reg, self.dim.id(), pos)
         }
 
+        /// Bind progress invalidation to this dimension's block writes.
+        pub(in crate::game) fn mod_configure_gui_progress(&mut self) {
+            let n = self.pack.assets.registry.len();
+            self.world.gui_progress_states = (0..n)
+                .map(|i| {
+                    let name = &self
+                        .res
+                        .facts()
+                        .get(horizon_world::registry::BlockStateId(i as u32))
+                        .name;
+                    self.mods
+                        .workstation_handlers
+                        .contains_key(&**name)
+                        .then(|| name.clone())
+                })
+                .collect();
+            self.world.gui_progress = self.mods.mods.gui_progress_stores();
+            self.world.gui_progress_dimension = self.dim.id().to_owned();
+        }
+
+        pub(in crate::game) fn mod_reset_gui_progress(&mut self) {
+            for progress in self.mods.mods.gui_progress_stores() {
+                progress.clear();
+            }
+        }
+
+        /// The guest may write progress for a position that has already gone.
+        /// Reclaim those entries when the position is loaded; unloaded chunks
+        /// and other dimensions cannot be judged from this level.
+        fn mod_prune_gui_progress(&self) {
+            let dimension = self.dim.id();
+            let world = &self.world;
+            let facts = self.res.facts();
+            for progress in &world.gui_progress {
+                progress.retain_blocks(|block, dim, pos| {
+                    dim != dimension
+                        || !world.loaded(pos[0], pos[2])
+                        || &*facts.get(world.block(pos[0], pos[1], pos[2])).name == block
+                });
+            }
+        }
+
         pub(in crate::game) fn mod_gui_button(
             &mut self,
             registration: &super::super::stations::ModRegistration,
@@ -339,10 +383,13 @@ mod run {
             if reg.gui != registration.gui {
                 return false;
             }
-            self.mods
+            let ok = self
+                .mods
                 .mods
                 .gui_button(&reg, player, self.dim.id(), pos, id)
-                .is_ok()
+                .is_ok();
+            self.mod_prune_gui_progress();
+            ok
         }
 
         /// Rebuild a checked result from the complete input snapshots. The mod
@@ -1071,6 +1118,7 @@ mod run {
             }
             self.mods.mods.server_tick(self.ticks);
             self.return_world();
+            self.mod_prune_gui_progress();
             self.mods.players = players;
             self.show_mod_output();
             self.apply_mod_block_writes();
@@ -1206,6 +1254,7 @@ mod run {
             self.lend_world();
             let owned = self.mods.mods.server_command(&me, line);
             self.return_world();
+            self.mod_prune_gui_progress();
             self.show_mod_output();
             self.apply_mod_block_writes();
             owned
@@ -1236,6 +1285,7 @@ mod run {
             self.lend_world();
             let owned = self.mods.mods.server_command(&me, line);
             self.return_world();
+            self.mod_prune_gui_progress();
             if !owned {
                 return false;
             }

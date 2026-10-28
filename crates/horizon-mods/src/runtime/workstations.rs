@@ -85,10 +85,6 @@ impl super::server_bindings::horizon::mods::workstations::Host for State {
             return Err("unknown workstation progress element".into());
         }
         let key = (block, dimension, x, y, z, id);
-        if self.gui_progress.len() >= 4096 && !self.gui_progress.contains_key(&key) {
-            return Err("too many workstation progress entries".into());
-        }
-        self.gui_progress.insert(key, value);
-        Ok(())
+        self.gui_progress.set(key, value)
     }
 }
