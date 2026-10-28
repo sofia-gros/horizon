@@ -751,6 +751,9 @@ interface items-tools {
     /// and host-owned mining control data are applied together. Other data stays.
     /// Selectors must exist in the server's block/tag catalog at application time.
     /// The reserved custom_data root horizon:tool_control cannot be a text target.
+    /// The first profile edit claims the stack for the calling mod. A later
+    /// profile edit by a different mod, or a malformed existing owner, is
+    /// rejected without changing the stack. No ownership transfer is provided.
     replace-main-hand-profile: func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile) -> result<_, string>;
     /// Atomically update the same checked state and profile, plus vanilla
     /// damage and max-damage components. Maximum is positive and damage must
