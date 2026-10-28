@@ -68,7 +68,7 @@ New SDK server mods export this optional interface as well. Older server mods co
 
 ## World `workstation-host`
 
-- Imports (what the game offers): `items-tools`
+- Imports (what the game offers): (none)
 - Exports (what the mod provides): `workstation-events`
 
 ## World `horizon-ui-mod`
@@ -836,13 +836,35 @@ Access: exported by the mod: the game calls it.
 
 A workstation preview. The host discards queued host outputs and blocks storage writes and deletes during the callback; input stacks are snapshots rechecked before taking a result. Guest memory is not rolled back: mods must keep their own preview logic side-effect-free and deterministic.
 
-### type `profile`
+### record `rule`
 
-`type profile = profile`
+Independent value types keep the optional export from importing items-tools.
 
-### type `melee-profile`
+| Field | Type | |
+| --- | --- | --- |
+| `blocks` | `list<string>` | Direct block ids, or exactly one #tag selector. At most 64 entries. |
+| `speed` | `option<f32>` |  |
+| `correct-for-drops` | `option<bool>` |  |
 
-`type melee-profile = melee-profile`
+### record `profile`
+
+| Field | Type | |
+| --- | --- | --- |
+| `rules` | `list<rule>` | At most 16 rules, in vanilla Tool order; speeds must be finite and positive. |
+| `default-speed` | `f32` |  |
+| `damage-per-block` | `u32` |  |
+| `can-destroy-in-creative` | `bool` |  |
+| `mining-enabled` | `bool` | False prevents mining in prediction and on the server, including Creative. |
+| `unbreakable` | `bool` | Sets the vanilla unbreakable component; does not implement custom wear. |
+
+### record `melee-profile`
+
+| Field | Type | |
+| --- | --- | --- |
+| `damage-bonus` | `f32` | Additive attack damage above the player's base, before effects. |
+| `damage-multiplier` | `f32` | Multiplier applied to base melee damage before critical bonus. |
+| `attack-speed` | `f32` | Total attacks per second, including the player's base speed. |
+| `enabled` | `bool` | False prevents direct attacks with this stack. |
 
 ### record `input`
 
