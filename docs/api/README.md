@@ -7,7 +7,7 @@ section has one page per surface, plus the rules every surface follows:
 
 | Surface | For | API today | Stability | Reference |
 | --- | --- | --- | --- | --- |
-| [Mods](mods.md) | mod authors | WIT `horizon:mods@0.1.0`, manifest `api` 0.1 (code) and 0.2 (content) | preview | [mods-reference.md](mods-reference.md) (generated) |
+| [Mods](mods.md) | mod authors | WIT `horizon:mods@0.1.0`; manifest `api` 0.1 (client), 0.2 (content), 0.3 (experimental server in this fork) | preview | [mods-reference.md](mods-reference.md) (generated) |
 | [Shaders](shaders.md) | shader authors | none yet: packs were removed on 2026-10-24 | planned | none |
 | [Agent control](agent-control.md) | agents, scripts, tests | `horizon-ctl`, its MCP server, the game's control socket | preview | [horizon-ctl-commands.md](../horizon-ctl-commands.md) (generated) |
 | [Servers](server.md) | hosts, panels, bots | `horizon-server` commands, `server.toml`, control API `/api/v1` | stable | [server-reference.md](server-reference.md) (generated) |
