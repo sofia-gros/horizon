@@ -1109,6 +1109,15 @@ impl LevelAccess for GameLevel<'_> {
             event => self.events.push(event),
         }
     }
+    fn has_extra_block_entity(&self, pos: BlockPos) -> bool {
+        let key = (pos.x, pos.y, pos.z);
+        if let Some(entity) = self.world.block_entities.get(&key) {
+            return matches!(entity, BlockEntity::ModStorage(_, _));
+        }
+        spill::saved_entity(self.world, [pos.x, pos.y, pos.z])
+            .and_then(|tag| horizon_client::save::decode_block_entity(&tag))
+            .is_some_and(|(_, entity)| matches!(entity, BlockEntity::ModStorage(_, _)))
+    }
     fn remove_block_entity(&mut self, pos: BlockPos, old: BlockStateId, side_effects: bool) -> u8 {
         self.remove_entity(pos, old, side_effects)
     }
