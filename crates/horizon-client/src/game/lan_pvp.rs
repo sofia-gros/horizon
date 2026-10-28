@@ -34,6 +34,8 @@ pub(super) enum Victim {
 pub(super) struct Strike {
     /// The attacking guest, kept after their turn through `as_guest` ends.
     attacker: Option<u32>,
+    held_slot: usize,
+    held_stack: Option<horizon_client::items::ItemStack>,
     amount: f32,
     scale: f32,
     crit: bool,
@@ -138,6 +140,8 @@ impl Game<'_> {
         self.swing_arm();
         Some(Strike {
             attacker: self.lan_acting,
+            held_slot: self.selected,
+            held_stack: self.held().cloned(),
             amount,
             scale,
             crit,
@@ -257,6 +261,7 @@ impl Game<'_> {
         // Player.attack: the hurt (with its knockback away from the
         // attacker), then causeExtraKnockback along the attacker's yaw.
         let land = |g: &mut Self| {
+            let before = g.player.as_ref().map_or(0.0, |p| p.health.health());
             let hurt = g.mob_hits_player(s.amount, s.from, "minecraft:player_attack");
             let (strength, xd, zd) = s.knockback;
             if hurt && strength > 0.0 {
@@ -264,9 +269,10 @@ impl Game<'_> {
             }
             // The victim's thorns, dealt to the attacker below.
             let thorns = if hurt { g.thorns_damage() } else { Vec::new() };
-            (hurt, thorns)
+            let after = g.player.as_ref().map_or(before, |p| p.health.health());
+            (hurt, thorns, (before - after).max(0.0))
         };
-        let (hurt, thorns) = if self.ui.rules.bool("pvp") && harm {
+        let (hurt, thorns, dealt) = if self.ui.rules.bool("pvp") && harm {
             match victim {
                 Victim::Host => land(self),
                 Victim::Guest(conn) => self.guest_struck_by(host, conn, land).unwrap_or_default(),
@@ -274,6 +280,30 @@ impl Game<'_> {
         } else {
             Default::default()
         };
+        if hurt {
+            let target_id = match victim {
+                Victim::Host => Some(host.host_entity),
+                Victim::Guest(conn) => host.hub.guest(conn).map(|g| g.entity_id),
+            };
+            if let Some(target_id) = target_id {
+                let notify = |game: &mut Self| {
+                    if !game.creative {
+                        game.mod_melee_hit(
+                            target_id as u64,
+                            "minecraft:player",
+                            dealt,
+                            s.held_slot,
+                            s.held_stack.as_ref(),
+                        );
+                    }
+                };
+                if let Some(conn) = s.attacker {
+                    self.as_guest(host, conn, notify);
+                } else {
+                    notify(self);
+                }
+            }
+        }
         if hurt && (s.crit || s.magic) {
             let target = match victim {
                 Victim::Host => self.player.as_ref().map(|p| (host.host_entity, p)),
