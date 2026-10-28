@@ -690,6 +690,7 @@ impl Game<'_> {
         if station.mod_selection == selection {
             return false;
         }
+        station.clear_mod_name();
         station.mod_selection = selection;
         self.station_changed();
         true
@@ -706,10 +707,14 @@ impl Game<'_> {
                 && gui.shared_selection
                 && let Some(values) = self.mod_gui_progress(registration, s.pos)
             {
-                s.mod_selection = values
+                let selection = values
                     .last()
                     .and_then(|code| gui.selection_from_code(*code))
                     .map(str::to_owned);
+                if s.mod_selection != selection {
+                    s.clear_mod_name();
+                    s.mod_selection = selection;
+                }
             }
             if s.is_mod_storage() || s.is_mod_display() {
                 self.station = Some(s);
