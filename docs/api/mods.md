@@ -1,5 +1,7 @@
 # Mod API
 
+For this fork’s server, item and workstation extensions, start with the [fork mod-authoring guide](../mod-authoring/README.md). Its baseline and compatibility notes distinguish shipped main code from work under review. The generated [WIT reference](mods-reference.md) remains the exact interface reference.
+
 Mods are Rust crates compiled to sandboxed WebAssembly components. Client mods run in the player's game; server mods
 (experimental) run wherever a world is simulated: single player, a LAN host, the dedicated server. Design and the runtime: [mods.md](../mods.md).
 

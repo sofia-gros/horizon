@@ -719,7 +719,11 @@ API 0.2 is content-only `.hmod`s (blocks, items, recipes, loot, models and
 textures), then server hooks (0.3) and block entities, menus, capabilities and
 `net` (0.4), in the order the ATM10 inventory needs them.
 
-### Declarative server workstations (experimental fork API 18)
+<a id="declarative-server-workstations-experimental-fork-api-18"></a>
+
+### Declarative server workstations (experimental fork API 17 and later)
+
+`register-gui` requires API level 17. Progress updates require level 18, and automatic storage transactions require level 19. A package can therefore require different levels depending on the imports it actually uses.
 
 `workstations.register-gui` accepts a bounded JSON definition: width and height (176–512 pixels), up to 50 persistent storage slots or up to 36 processing inputs plus eight outputs, slot IDs, coordinates, input/storage/output roles and item IDs or `#item_tag` acceptance selectors. Text, buttons and percentage progress elements have named IDs. Button events are delivered only for the acting player’s open menu after the host checks block, owner and reach; their resulting host outputs are discarded if the callback fails. Button callbacks are not inventory transactions, and immediate mod storage writes and progress updates are not rolled back on callback failure. The block-owning content mod must explicitly delegate the block's `workstation_handler` to the registering server mod. Registration happens during init; old two-input `register` and its callback remain supported.
 

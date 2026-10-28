@@ -1,0 +1,9 @@
+# Compatibility, failures and limits
+
+This fork is experimental. Pin the Horizon revision used by your SDK, tool, server and tests. API numbers alone are not enough to establish compatibility across independently developed branches; the fork and upstream previously assigned the same level to different functions. `cargo horizon-mod check` reports required imports and API level, but also test against the runtime you will ship.
+
+A Fabric or NeoForge Java `.jar` is not a Horizon `.hmod`. Existing mods need a port or a separate compatibility mechanism. A server code mod runs on the authoritative Horizon world; GUI definitions require a compatible Horizon client. Content changes, world persistence, multiplayer timing and actual gameplay need in-game tests in addition to a sandbox scenario.
+
+The host enforces declared capabilities, bounded imports and resource limits. Traps stop the offending mod, and individual APIs document which queued operations are discarded. These mechanisms do not prove that permitted actions are benign, make all mods compatible, or roll back all private guest state and immediate side effects. Review the permissions and test conflicts. Two mods may coexist while still competing for a command, block handler or a stack's single profile owner; resolve those conflicts deliberately.
+
+This project aims for a common, maintainable mod ecosystem, using the TConstruct port as a practical test rather than a special host branch. The eventual goal is a full 1.20.1 port, not a claim of current completeness. The current material, tool, modifier, workstation and machine coverage is documented in [the mod repository](https://github.com/sofia-gros/horizon-mods/tree/ce3a5ab5e8a51ea01d1da502ce5f11d0584ef0ff). Mixing trusted native host extensions or future Mixins with Wasm changes the trust boundary; this integration remains a plan, not a current feature.
