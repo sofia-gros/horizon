@@ -1568,6 +1568,21 @@ fn mining_callbacks_isolate_distinct_mods_and_failures() {
                 }),
             )
         }
+        fn inventory_slot(
+            &self,
+            player: &str,
+            slot: u32,
+            _: &[String],
+        ) -> Result<Option<horizon_mods::ServerHeldStack>, String> {
+            Ok(
+                (player == alex().id && slot == 1).then(|| horizon_mods::ServerHeldStack {
+                    item: "example:ingredient".into(),
+                    count: 2,
+                    damage: 0,
+                    custom_text: None,
+                }),
+            )
+        }
     }
     let dir = mods_dir().join("mining-isolation");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -1600,6 +1615,33 @@ fn mining_callbacks_isolate_distinct_mods_and_failures() {
         players: vec![player.clone()],
         ..Snapshot::default()
     });
+    assert!(mods.server_command(&player, "consume-fixture"));
+    let out = mods.drain();
+    let edit = out
+        .iter()
+        .find_map(|o| {
+            if let Output::ItemEdit(edit) = o {
+                Some(edit)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(edit.consumption, Some((1, 1)));
+    assert!(mods.server_command(&player, "consume-fixture other"));
+    assert!(
+        !mods
+            .drain()
+            .iter()
+            .any(|o| matches!(o, Output::ItemEdit(_)))
+    );
+    assert!(mods.server_command(&player, "consume-fixture error"));
+    assert!(
+        !mods
+            .drain()
+            .iter()
+            .any(|o| matches!(o, Output::ItemEdit(_)))
+    );
     for owner in ["miner_a", "miner_b"] {
         let edits = mods.server_mined(
             owner,

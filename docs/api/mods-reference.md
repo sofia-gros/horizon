@@ -709,6 +709,7 @@ Experimental server-only capability `items-read`. Immutable views of the authori
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `main-hand` | `func(player: string, custom-path: list<string>) -> result<option<held-stack>, string>` | None if offline or empty-handed. Path: at most 8 nonempty compound keys, each at most 128 UTF-8 bytes. At most 16 reads per hook call. No arbitrary NBT parsing or command execution is exposed. |
+| `inventory-slot` | `func(player: string, slot: u32, custom-path: list<string>) -> result<option<held-stack>, string>` | Read a slot 0..35 of the invoking player's inventory during a command. Shares main-hand's bounds and read budget. Other hooks cannot read slots. |
 
 ## `items-edit`
 
@@ -784,6 +785,7 @@ Generic main-hand combat settings resolved by the mod for this stack.
 | `replace-main-hand-profile` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile) -> result<_, string>` | Same comparison, text limits and shared attempt budget as items-edit. On success the existing custom string, Tool component, unbreakable setting and host-owned mining control data are applied together. Other data stays. Selectors must exist in the server's block/tag catalog at application time. The reserved custom_data root horizon:tool_control cannot be a text target. The first profile edit claims the stack for the calling mod. A later profile edit by a different mod, or a malformed existing owner, is rejected without changing the stack. No ownership transfer is provided. |
 | `replace-main-hand-profile-durability` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32) -> result<_, string>` | Atomically update the same checked state and profile, plus vanilla damage and max-damage components. Maximum is positive and damage must not exceed it. This does not itself prevent vanilla destruction. |
 | `replace-main-hand-combat-profile` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32, melee: melee-profile) -> result<_, string>` | Atomically replace state, tool, vanilla durability and melee settings. |
+| `replace-main-hand-combat-profile-consuming` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32, melee: melee-profile, slot: u32, count: u32) -> result<_, string>` | During a player command, atomically apply the checked combat profile edit and consume `count` from a distinct slot 0..35 captured in the same snapshot. The invoking player must be the target. The server rechecks both complete stacks; ok means queued, not committed. |
 
 ## `server-events`
 

@@ -474,6 +474,7 @@ struct State {
     item_reads_left: usize,
     item_edits: std::collections::HashSet<String>,
     item_edits_left: usize,
+    command_actor: Option<String>,
     mining_enabled: bool,
     melee_enabled: bool,
     limits: StoreLimits,
@@ -692,6 +693,7 @@ impl Mods {
             item_reads_left: items::READS_PER_CALL,
             item_edits: Default::default(),
             item_edits_left: 8,
+            command_actor: None,
             mining_enabled: false,
             melee_enabled: false,
             limits: StoreLimitsBuilder::new()
@@ -767,7 +769,7 @@ impl Mods {
             hooks,
             raycasts: functions.iter().any(|f| f == "game.raycast"),
             item_reads: functions.iter().any(|f| {
-                f == "items-read.main-hand"
+                f.starts_with("items-read.")
                     || f.starts_with("items-edit.")
                     || f.starts_with("items-tools.")
             }),
@@ -857,6 +859,7 @@ impl Mods {
         run.store.data_mut().item_reads_left = items::READS_PER_CALL;
         run.store.data_mut().item_edits.clear();
         run.store.data_mut().item_edits_left = 8;
+        run.store.data_mut().command_actor = None;
         let started = Instant::now();
         let result = run.store.set_fuel(fuel).and_then(|()| f(run));
         // An average over about the last 64 calls.
@@ -1140,6 +1143,7 @@ impl Mods {
         };
         let result = self.call(i, FUEL_EVENT, |run| match &run.hooks {
             Hooks::Server(m, _) => {
+                run.store.data_mut().command_actor = Some(player.id.clone());
                 let result = m.horizon_mods_server_events().call_command(
                     &mut run.store,
                     player,

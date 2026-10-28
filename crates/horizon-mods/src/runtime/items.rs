@@ -7,6 +7,14 @@ pub(super) const READS_PER_CALL: usize = 16;
 /// string conversion before allocating; the runtime checks the result as well.
 pub trait ItemReader: std::any::Any + std::fmt::Debug + Send + Sync {
     fn main_hand(&self, player: &str, path: &[String]) -> Result<Option<ServerHeldStack>, String>;
+    fn inventory_slot(
+        &self,
+        _player: &str,
+        _slot: u32,
+        _path: &[String],
+    ) -> Result<Option<ServerHeldStack>, String> {
+        Ok(None)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -19,6 +27,7 @@ pub struct ItemEdit {
     /// Optional checked vanilla damage and max-damage values.
     pub durability: Option<(u32, u32)>,
     pub melee: Option<super::ServerMeleeProfile>,
+    pub consumption: Option<(u32, u32)>,
     pub snapshot: std::sync::Arc<dyn ItemReader>,
 }
 
@@ -31,6 +40,7 @@ impl PartialEq for ItemEdit {
             && self.profile == other.profile
             && self.durability == other.durability
             && self.melee == other.melee
+            && self.consumption == other.consumption
             && std::sync::Arc::ptr_eq(&self.snapshot, &other.snapshot)
     }
 }
@@ -48,6 +58,55 @@ impl super::server_bindings::horizon::mods::items_edit::Host for State {
 }
 
 impl super::server_bindings::horizon::mods::items_tools::Host for State {
+    fn replace_main_hand_combat_profile_consuming(
+        &mut self,
+        player: String,
+        path: Vec<String>,
+        expected: String,
+        replacement: String,
+        tool: super::ServerToolProfile,
+        damage: u32,
+        max_damage: u32,
+        melee: super::ServerMeleeProfile,
+        slot: u32,
+        count: u32,
+    ) -> Result<(), String> {
+        if self.command_actor.as_deref() != Some(player.as_str())
+            || slot >= 36
+            || count == 0
+            || max_damage == 0
+            || max_damage > i32::MAX as u32
+            || damage > max_damage
+            || !valid_melee(&melee)
+        {
+            return Err("invalid command actor, ingredient or profile".into());
+        }
+        let view = read_slot(
+            self.snapshot.items.as_deref(),
+            &mut self.item_reads_left,
+            &player,
+            slot,
+            &[],
+        )?
+        .ok_or("empty ingredient slot")?;
+        if count > view.count {
+            return Err("not enough ingredient items".into());
+        }
+        self.queue_item_edit(
+            player,
+            path,
+            expected,
+            replacement,
+            Some(tool),
+            Some((damage, max_damage)),
+            Some(melee),
+        )?;
+        let Some(super::Output::ItemEdit(edit)) = self.out.last_mut() else {
+            unreachable!()
+        };
+        edit.consumption = Some((slot, count));
+        Ok(())
+    }
     fn enable_melee_events(&mut self) {
         self.melee_enabled = true;
     }
@@ -175,6 +234,7 @@ impl State {
             profile,
             durability,
             melee,
+            consumption: None,
             snapshot,
         }));
         Ok(())
@@ -305,6 +365,23 @@ fn read(
 }
 
 impl items_read::Host for State {
+    fn inventory_slot(
+        &mut self,
+        player: String,
+        slot: u32,
+        path: Vec<String>,
+    ) -> Result<Option<ServerHeldStack>, String> {
+        if self.command_actor.as_deref() != Some(player.as_str()) || slot >= 36 {
+            return Err("inventory reads require the invoking player and a valid slot".into());
+        }
+        read_slot(
+            self.snapshot.items.as_deref(),
+            &mut self.item_reads_left,
+            &player,
+            slot,
+            &path,
+        )
+    }
     fn main_hand(
         &mut self,
         player: String,
@@ -317,6 +394,36 @@ impl items_read::Host for State {
             &custom_path,
         )
     }
+}
+
+fn read_slot(
+    reader: Option<&dyn ItemReader>,
+    remaining: &mut usize,
+    player: &str,
+    slot: u32,
+    path: &[String],
+) -> Result<Option<ServerHeldStack>, String> {
+    if *remaining == 0 {
+        return Err("items-read budget exhausted".into());
+    }
+    *remaining -= 1;
+    if player.len() > 64
+        || path.len() > 8
+        || path.iter().any(|key| key.is_empty() || key.len() > 128)
+    {
+        return Err("invalid items-read player or custom path".into());
+    }
+    let item = reader.map_or(Ok(None), |reader| reader.inventory_slot(player, slot, path))?;
+    if item.as_ref().is_some_and(|item| {
+        item.item.len() > 256
+            || item
+                .custom_text
+                .as_ref()
+                .is_some_and(|text| text.len() > ITEM_TEXT_MAX)
+    }) {
+        return Err("items-read result exceeds its size limit".into());
+    }
+    Ok(item)
 }
 
 #[cfg(test)]

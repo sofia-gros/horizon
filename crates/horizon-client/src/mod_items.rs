@@ -6,6 +6,61 @@ use horizon_world::nbt::Tag;
 #[derive(Debug)]
 pub struct ServerItems(pub Vec<(String, usize, ItemStack)>);
 
+/// A command snapshot of held stacks and player inventories.
+#[derive(Debug)]
+pub struct ServerInventories {
+    pub held: ServerItems,
+    pub slots: Vec<(String, Vec<Option<ItemStack>>)>,
+}
+
+impl ItemReader for ServerInventories {
+    fn main_hand(&self, player: &str, path: &[String]) -> Result<Option<ServerHeldStack>, String> {
+        self.held.main_hand(player, path)
+    }
+    fn inventory_slot(
+        &self,
+        player: &str,
+        slot: u32,
+        path: &[String],
+    ) -> Result<Option<ServerHeldStack>, String> {
+        let stack = self
+            .slots
+            .iter()
+            .find(|(id, _)| id == player)
+            .and_then(|(_, slots)| slots.get(slot as usize))
+            .and_then(Option::as_ref);
+        match stack {
+            Some(stack) => ServerItems(vec![(player.into(), slot as usize, stack.clone())])
+                .main_hand(player, path),
+            None => Ok(None),
+        }
+    }
+}
+
+impl ServerInventories {
+    pub fn apply(
+        &self,
+        selected: usize,
+        inventory: &mut [Option<ItemStack>],
+        edit: &horizon_mods::ItemEdit,
+    ) -> Result<(), String> {
+        if let Some((slot, count)) = edit.consumption {
+            let ingredient = self
+                .slots
+                .iter()
+                .find(|(id, _)| id == &edit.player)
+                .and_then(|(_, slots)| slots.get(slot as usize))
+                .and_then(Option::as_ref)
+                .ok_or("no captured ingredient")?;
+            self.held
+                .apply_consuming(selected, inventory, slot as usize, ingredient, count, edit)
+        } else {
+            let cell = inventory.get_mut(selected).ok_or("invalid selected slot")?;
+            self.held.apply(selected, cell, edit)
+        }
+    }
+}
+
 impl ItemReader for ServerItems {
     fn main_hand(&self, player: &str, path: &[String]) -> Result<Option<ServerHeldStack>, String> {
         let Some((_, _, stack)) = self.0.iter().find(|(id, _, _)| id == player) else {
@@ -292,6 +347,7 @@ mod tests {
             snapshot: first.clone(),
             durability: None,
             melee: None,
+            consumption: None,
             profile: Some(horizon_mods::ServerToolProfile {
                 rules: vec![],
                 default_speed: 1.0,
@@ -359,6 +415,7 @@ mod tests {
                 snapshot: snapshot.clone(),
                 durability: None,
                 melee: None,
+                consumption: None,
                 profile: Some(horizon_mods::ServerToolProfile {
                     rules: vec![],
                     default_speed: 1.0,
@@ -397,6 +454,7 @@ mod tests {
             snapshot: snapshot.clone(),
             durability: None,
             melee: None,
+            consumption: None,
             profile: None,
         };
         let original = vec![Some(tool), Some(material.clone())];
@@ -478,6 +536,77 @@ mod tests {
     }
 
     #[test]
+    fn command_inventory_snapshot_applies_only_captured_player_and_slots() {
+        let mut tool = ItemStack::new("example:tool", 1);
+        tool.data_mut().set_other(
+            "minecraft:custom_data",
+            Some(Tag::compound([
+                ("state", Tag::String("old".into())),
+                ("foreign", Tag::Int(7)),
+            ])),
+        );
+        let mut material = ItemStack::new("example:flint", 2);
+        material
+            .data_mut()
+            .set_other("example:unknown", Some(Tag::Int(4)));
+        let original = vec![Some(tool.clone()), Some(material.clone())];
+        let view = std::sync::Arc::new(ServerInventories {
+            held: ServerItems(vec![("alice".into(), 0, tool)]),
+            slots: vec![("alice".into(), original.clone())],
+        });
+        let mut edit = horizon_mods::ItemEdit {
+            owner: "mod_a".into(),
+            player: "alice".into(),
+            path: vec!["state".into()],
+            text: "new".into(),
+            snapshot: view.clone(),
+            profile: None,
+            durability: None,
+            melee: None,
+            consumption: Some((1, 1)),
+        };
+        let mut slots = original.clone();
+        edit.player = "bob".into();
+        assert!(view.apply(0, &mut slots, &edit).is_err());
+        assert_eq!(slots, original);
+        edit.player = "alice".into();
+        slots[1]
+            .as_mut()
+            .unwrap()
+            .data_mut()
+            .set_other("example:unknown", Some(Tag::Int(9)));
+        let before = slots.clone();
+        assert!(view.apply(0, &mut slots, &edit).is_err());
+        assert_eq!(slots, before);
+        slots = original.clone();
+        view.apply(0, &mut slots, &edit).unwrap();
+        assert_eq!(slots[1].as_ref().unwrap().count, 1);
+        assert_eq!(
+            slots[1]
+                .as_ref()
+                .unwrap()
+                .data()
+                .unwrap()
+                .other("example:unknown"),
+            Some(&Tag::Int(4))
+        );
+        assert_eq!(
+            slots[0]
+                .as_ref()
+                .unwrap()
+                .data()
+                .unwrap()
+                .other("minecraft:custom_data")
+                .unwrap()
+                .get("foreign"),
+            Some(&Tag::Int(7))
+        );
+        let after = slots.clone();
+        assert!(view.apply(0, &mut slots, &edit).is_err());
+        assert_eq!(slots, after);
+    }
+
+    #[test]
     fn profiles_update_text_and_controls_atomically_and_keep_foreign_data() {
         let mut original = ItemStack::new("example:tool", 1);
         original.damage = 58;
@@ -498,6 +627,7 @@ mod tests {
             snapshot: snapshot.clone(),
             durability: None,
             melee: None,
+            consumption: None,
             profile: Some(horizon_mods::ServerToolProfile {
                 rules: vec![horizon_mods::ServerToolRule {
                     blocks: vec!["#minecraft:mineable/pickaxe".into()],
