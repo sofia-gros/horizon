@@ -400,7 +400,14 @@ impl GameLevel<'_> {
         side_effects: bool,
     ) -> u8 {
         let key = (pos.x, pos.y, pos.z);
-        if self.remove_saved_entity(pos, old, side_effects) {
+        let live_mod_storage = matches!(
+            self.world.block_entities.get(&key),
+            Some(BlockEntity::ModStorage(_, _))
+        );
+        if live_mod_storage {
+            // A loaded inventory is authoritative over the old saved NBT.
+            self.remove_saved_entity(pos, old, false);
+        } else if self.remove_saved_entity(pos, old, side_effects) {
             return 0;
         }
         // Sculk blocks and creaking hearts notice their removal on their own tick.
@@ -416,6 +423,11 @@ impl GameLevel<'_> {
         let kind = removal::pre_remove(&name);
         let mut neighbour_updates = 0;
         if side_effects {
+            if let Some(BlockEntity::ModStorage(_, items)) = &entity {
+                for stack in items {
+                    self.drop_item_stack(pos, stack.clone());
+                }
+            }
             match kind {
                 PreRemove::Contents { slots, furnace } => {
                     let items = entity.as_ref().map_or(&[][..], BlockEntity::slots);
@@ -563,6 +575,14 @@ impl GameLevel<'_> {
         };
         let tag = std::sync::Arc::make_mut(saved).block_entities.remove(index);
         if !side_effects {
+            return true;
+        }
+        if let Some((_, BlockEntity::ModStorage(_, items))) =
+            horizon_client::save::decode_block_entity(&tag)
+        {
+            for stack in items {
+                self.drop_item_stack(pos, stack);
+            }
             return true;
         }
         let name = self.facts.get(old).name.clone();

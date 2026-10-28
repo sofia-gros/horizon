@@ -30,6 +30,36 @@ pub(super) struct GuestStation {
     /// The game time of the menu's last sound (`lastSoundTime`).
     last_sound: u64,
     mod_registration: Option<super::stations::ModRegistration>,
+    mod_selection: Option<String>,
+    storage_snapshot: Option<Vec<Option<ItemStack>>>,
+}
+
+fn mod_counts(gs: &GuestStation) -> (usize, usize) {
+    gs.mod_registration
+        .as_ref()
+        .and_then(|r| r.gui.as_ref())
+        .map_or((2, 1), |gui| {
+            let outputs = gui
+                .slots
+                .iter()
+                .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
+                .count();
+            (gui.slots.len() - outputs, outputs)
+        })
+}
+
+fn storage_indices(gs: &GuestStation) -> Vec<usize> {
+    gs.mod_registration
+        .as_ref()
+        .and_then(|r| r.gui.as_ref())
+        .map_or_else(Vec::new, |gui| {
+            gui.slots
+                .iter()
+                .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
+                .enumerate()
+                .filter_map(|(i, s)| (s.role == horizon_mods::gui::SlotRole::Storage).then_some(i))
+                .collect()
+        })
 }
 
 /// A guest's open lectern: `LecternMenu` over the block entity, made on the
@@ -68,14 +98,48 @@ impl Game<'_> {
         conn: u32,
         station: &Station,
     ) -> bool {
-        let Some((menu_type, kind, _)) = menu_of(station.kind) else {
+        let Some((menu_type, mut kind, _)) = menu_of(station.kind) else {
             return false;
         };
+        if let Some(gui) = station.mod_gui.as_ref() {
+            let count = gui
+                .slots
+                .iter()
+                .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
+                .count();
+            let storage_only = station.is_mod_storage() || station.is_mod_display();
+            let outputs = gui
+                .slots
+                .iter()
+                .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
+                .count();
+            if !(if storage_only { 0..=50 } else { 1..=36 }).contains(&count)
+                || !(if storage_only {
+                    outputs == 0
+                } else {
+                    (1..=8).contains(&outputs)
+                })
+            {
+                return false;
+            }
+            kind = if storage_only {
+                Kind::ModStorageSlots(count)
+            } else if outputs == 1 {
+                Kind::ModWorkstationSlots(count)
+            } else {
+                Kind::ModWorkstationMulti(count, outputs)
+            };
+        }
         self.lan_station_closed(host, conn, None);
         self.lan_crafting_closed(host, conn, None);
         // The container it replaces loses its opener.
         self.guest_container_closed(host, conn);
-        let title = if let Some(r) = &station.mod_registration {
+        let title = if let (Some(r), Some(gui)) = (&station.mod_registration, &station.mod_gui) {
+            let Ok(data) = serde_json::to_string(&(r.title.as_str(), gui)) else {
+                return false;
+            };
+            horizon_protocol::text::literal(&format!("[horizon:gui]{data}"))
+        } else if let Some(r) = &station.mod_registration {
             horizon_protocol::text::literal(&format!("[horizon:workstation]{}", r.title))
         } else {
             horizon_protocol::text::translatable(station.kind.title_key(), &[])
@@ -84,6 +148,31 @@ impl Game<'_> {
             return true;
         };
         let mut menu = Box::new(Menu::new(kind));
+        if let Some(gui) = &station.mod_gui {
+            let filters = gui
+                .slots
+                .iter()
+                .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
+                .map(|s| s.accepts.clone())
+                .collect();
+            if menu.set_workstation_filters(filters).is_err() {
+                return false;
+            }
+            if let Some(r) = &station.mod_registration {
+                menu.data = self
+                    .mod_gui_progress(r, station.pos)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(i32::from)
+                    .collect();
+            }
+        }
+        if !station.mod_storage_indices().is_empty() {
+            let env = self.menu_env();
+            for (i, stack) in station.inputs.iter().enumerate() {
+                menu.set_slot(&env, i, stack.clone());
+            }
+        }
         if let Some(g) = host.hub.guests.iter_mut().find(|g| g.conn == conn)
             && kind == Kind::Enchanting
         {
@@ -105,6 +194,14 @@ impl Game<'_> {
             sent_data: Vec::new(),
             last_sound: 0,
             mod_registration: station.mod_registration.clone(),
+            mod_selection: None,
+            storage_snapshot: (!station.mod_storage_indices().is_empty()).then(|| {
+                station
+                    .mod_storage_indices()
+                    .into_iter()
+                    .map(|i| station.inputs[i].clone())
+                    .collect()
+            }),
         });
         self.lan_send_station(host, conn);
         true
@@ -132,9 +229,65 @@ impl Game<'_> {
             && !host.hub.guests[gi].spectator()
         {
             if gs.kind == StationKind::Mod {
-                let previous = (gs.menu.slot(2).cloned(), gs.menu.workstation_cost());
+                let valid = gs.mod_registration.as_ref().is_some_and(|r| {
+                    let [x, y, z] = gs.pos;
+                    let block = &self.res.facts().get(self.world.block(x, y, z)).name;
+                    **block == r.block && self.mod_workstation(&r.block).as_ref() == Some(r)
+                }) && host.hub.guests[gi].within_block_range(gs.pos, 4.0);
+                if !valid {
+                    host.play.entry(conn).or_default().station = Some(gs);
+                    return true;
+                }
+            }
+            if let Some(snapshot) = &gs.storage_snapshot {
+                let key = (gs.pos[0], gs.pos[1], gs.pos[2]);
+                let valid = gs.mod_registration.as_ref().is_some_and(|r| {
+                    let block = &self
+                        .res
+                        .facts()
+                        .get(self.world.block(key.0, key.1, key.2))
+                        .name;
+                    **block == r.block && self.mod_workstation(&r.block).as_ref() == Some(r)
+                }) && host.hub.guests[gi].within_block_range(gs.pos, 4.0);
+                if !valid {
+                    host.play.entry(conn).or_default().station = Some(gs);
+                    return true;
+                }
+                let Some(BlockEntity::ModStorage(_, current)) = self.world.block_entities.get(&key)
+                else {
+                    host.play.entry(conn).or_default().station = Some(gs);
+                    return true;
+                };
+                if current != snapshot {
+                    let current = current.clone();
+                    let env = self.menu_env();
+                    for (i, stack) in storage_indices(&gs).into_iter().zip(current.iter()) {
+                        gs.menu.set_slot(&env, i, stack.clone());
+                    }
+                    gs.storage_snapshot = Some(current);
+                    if mod_counts(&gs).1 > 0 {
+                        self.lan_mod_station_preview(&host.hub.guests[gi], &mut gs);
+                    }
+                    host.play.entry(conn).or_default().station = Some(gs);
+                    self.lan_send_station(host, conn);
+                    return true;
+                }
+            }
+            if gs.kind == StationKind::Mod && mod_counts(&gs).1 > 0 {
+                let (result_slot, outputs) = mod_counts(&gs);
+                let previous = (
+                    (result_slot..result_slot + outputs)
+                        .map(|i| gs.menu.slot(i).cloned())
+                        .collect::<Vec<_>>(),
+                    gs.menu.workstation_counts(),
+                );
                 self.lan_mod_station_preview(&host.hub.guests[gi], &mut gs);
-                let current = (gs.menu.slot(2).cloned(), gs.menu.workstation_cost());
+                let current = (
+                    (result_slot..result_slot + outputs)
+                        .map(|i| gs.menu.slot(i).cloned())
+                        .collect::<Vec<_>>(),
+                    gs.menu.workstation_counts(),
+                );
                 if taking_mod_result && current != previous {
                     host.play.entry(conn).or_default().station = Some(gs);
                     self.lan_send_station(host, conn);
@@ -142,7 +295,22 @@ impl Game<'_> {
                 }
             }
             self.guest_menu_op(host, gi, &mut gs.menu, op);
-            if gs.kind == StationKind::Mod {
+            let indices = storage_indices(&gs);
+            if let Some(snapshot) = &mut gs.storage_snapshot {
+                let key = (gs.pos[0], gs.pos[1], gs.pos[2]);
+                *snapshot = indices
+                    .into_iter()
+                    .map(|i| gs.menu.slot(i).cloned())
+                    .collect();
+                if let Some(BlockEntity::ModStorage(_, slots)) =
+                    self.world.block_entities.get_mut(&key)
+                    && slots != snapshot
+                {
+                    slots.clone_from(snapshot);
+                    self.world.modified.insert((key.0 >> 4, key.2 >> 4));
+                }
+            }
+            if gs.kind == StationKind::Mod && mod_counts(&gs).1 > 0 {
                 self.lan_mod_station_preview(&host.hub.guests[gi], &mut gs);
             }
             self.lan_station_sounds(&mut gs);
@@ -176,11 +344,28 @@ impl Game<'_> {
         if **block != registration.block || !guest.within_block_range(gs.pos, 4.0) {
             return;
         }
+        let player = super::server_mods::workstation_player_id(guest.uuid);
+        if registration.gui.is_some() {
+            let inputs: Vec<_> = (0..mod_counts(gs).0)
+                .map(|i| gs.menu.slot(i).cloned())
+                .collect();
+            if let Some((results, counts)) = self.mod_gui_workstation_plan(
+                registration,
+                &player,
+                &inputs,
+                gs.mod_selection.as_deref(),
+            ) {
+                let transaction = inputs.into_iter().zip(counts).collect::<Vec<_>>();
+                let _ = gs
+                    .menu
+                    .set_workstation_transaction_multi(&transaction, results);
+            }
+            return;
+        }
         let (Some(tool), Some(ingredient)) = (gs.menu.slot(0).cloned(), gs.menu.slot(1).cloned())
         else {
             return;
         };
-        let player = super::server_mods::workstation_player_id(guest.uuid);
         if let Some((result, cost)) =
             self.mod_workstation_plan(registration, &player, &tool, &ingredient)
         {
@@ -440,7 +625,17 @@ impl Game<'_> {
             self.lan_send_station(host, conn);
             return true;
         }
-        self.lan_station_op(host, conn, Some(p.container), p.slot == 2, |menu, env| {
+        let taking_result = host
+            .play
+            .get(&conn)
+            .and_then(|p| p.station.as_ref())
+            .is_some_and(|s| {
+                let (start, count) = mod_counts(s);
+                usize::try_from(p.slot)
+                    .ok()
+                    .is_some_and(|slot| (start..start + count).contains(&slot))
+            });
+        self.lan_station_op(host, conn, Some(p.container), taking_result, |menu, env| {
             let _ = menu.click(env, i32::from(p.slot), i32::from(p.button), input(p.input));
         })
     }
@@ -454,6 +649,60 @@ impl Game<'_> {
         window: i32,
         id: i32,
     ) {
+        let selection = host
+            .play
+            .get(&conn)
+            .and_then(|p| p.station.as_ref())
+            .filter(|s| s.window == window)
+            .and_then(|s| s.mod_registration.as_ref()?.gui.as_ref())
+            .and_then(|gui| {
+                let index = usize::try_from(id).ok()?;
+                gui.elements
+                    .iter()
+                    .filter_map(|e| match e {
+                        horizon_mods::gui::Element::Button { id, .. } => Some(id.clone()),
+                        _ => None,
+                    })
+                    .nth(index)
+            });
+        if let Some(selection) = selection {
+            let target = host
+                .play
+                .get(&conn)
+                .and_then(|p| p.station.as_ref())
+                .and_then(|s| s.mod_registration.clone().map(|r| (r, s.pos)));
+            let guest = host.hub.guests.iter().find(|g| g.conn == conn);
+            if let (Some((registration, pos)), Some(guest)) = (target, guest) {
+                if guest.spectator() {
+                    return;
+                }
+                let actual = &self
+                    .res
+                    .facts()
+                    .get(self.world.block(pos[0], pos[1], pos[2]))
+                    .name;
+                if **actual != registration.block
+                    || self.mod_workstation(&registration.block).as_ref() != Some(&registration)
+                    || !guest.within_block_range(pos, 4.0)
+                {
+                    return;
+                }
+                let player = super::server_mods::workstation_player_id(guest.uuid);
+                let accepted = self.mod_gui_button(&registration, &player, pos, &selection);
+                #[cfg(feature = "mods")]
+                self.route_mod_output(Some(host));
+                if !accepted {
+                    return;
+                }
+            } else {
+                return;
+            }
+            if let Some(s) = host.play.get_mut(&conn).and_then(|p| p.station.as_mut()) {
+                s.mod_selection = Some(selection);
+            }
+            self.lan_station_op(host, conn, Some(window), false, |_, _| {});
+            return;
+        }
         // LecternMenu's page buttons and Take Book.
         if self.lan_lectern_op(host, conn, window, |menu, env| {
             menu.button(env, id);
@@ -665,6 +914,50 @@ impl Game<'_> {
                     conn,
                     &C::ContainerClose(play::ContainerClose { container: window }),
                 );
+                continue;
+            }
+            let progress = gs
+                .mod_registration
+                .as_ref()
+                .and_then(|r| self.mod_gui_progress(r, gs.pos));
+            if let Some(values) = progress {
+                let values = values.into_iter().map(i32::from).collect::<Vec<_>>();
+                if values != gs.menu.data {
+                    if let Some(gs) = host.play.get_mut(&conn).and_then(|p| p.station.as_mut()) {
+                        gs.menu.data = values;
+                    }
+                    self.lan_send_station(host, conn);
+                }
+            }
+            let Some(gs) = host.play.get(&conn).and_then(|p| p.station.as_ref()) else {
+                continue;
+            };
+            if let Some(snapshot) = gs.storage_snapshot.as_ref() {
+                let key = (x, y, z);
+                let current = match self.world.block_entities.get(&key) {
+                    Some(BlockEntity::ModStorage(_, slots))
+                        if slots.len() == snapshot.len() && slots != snapshot =>
+                    {
+                        Some(slots.clone())
+                    }
+                    _ => None,
+                };
+                if let Some(current) = current {
+                    if let Some(mut gs) = host.play.get_mut(&conn).and_then(|p| p.station.take()) {
+                        let env = self.menu_env();
+                        for (i, stack) in storage_indices(&gs).into_iter().zip(current.iter()) {
+                            gs.menu.set_slot(&env, i, stack.clone());
+                        }
+                        gs.storage_snapshot = Some(current);
+                        if mod_counts(&gs).1 > 0
+                            && let Some(guest) = host.hub.guests.iter().find(|g| g.conn == conn)
+                        {
+                            self.lan_mod_station_preview(guest, &mut gs);
+                        }
+                        host.play.entry(conn).or_default().station = Some(gs);
+                    }
+                    self.lan_send_station(host, conn);
+                }
             } else if gs.kind == StationKind::Beacon {
                 // The beacon's data slots follow its block entity.
                 let data = self.beacon_data(host, gs.pos);
@@ -717,6 +1010,17 @@ impl Game<'_> {
 
 /// What `clearContainer` gives back from a station's menu.
 pub(super) fn station_inputs(gs: &GuestStation) -> Vec<ItemStack> {
+    if gs
+        .mod_registration
+        .as_ref()
+        .is_some_and(|r| r.gui.is_some())
+    {
+        let storage = storage_indices(gs);
+        return (0..mod_counts(gs).0)
+            .filter(|i| !storage.contains(i))
+            .filter_map(|s| gs.menu.slot(s).cloned())
+            .collect();
+    }
     menu_of(gs.kind)
         .map(|(_, _, inputs)| inputs.filter_map(|s| gs.menu.slot(s).cloned()).collect())
         .unwrap_or_default()

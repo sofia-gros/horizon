@@ -1550,6 +1550,33 @@ impl Game<'_> {
     /// Map a menu slot to Horizon's inventory screen slot ids.
     fn menu_slot(menu: &str, slot: i32) -> Option<usize> {
         let s = usize::try_from(slot).ok()?;
+        if let Some(n) = menu
+            .strip_prefix("horizon:storage:")
+            .and_then(|n| n.parse::<usize>().ok())
+            .filter(|n| *n <= 50)
+        {
+            return match s {
+                _ if s < n => Some(super::stations::INPUT + s),
+                _ if s < n + 27 => Some(9 + s - n),
+                _ if s < n + 36 => Some(s - n - 27),
+                _ => None,
+            };
+        }
+        if let Some((n, outputs)) = menu
+            .strip_prefix("horizon:gui:")
+            .and_then(|n| n.split_once(':'))
+            .and_then(|(n, m)| Some((n.parse::<usize>().ok()?, m.parse::<usize>().ok()?)))
+            .filter(|(n, m)| (1..=36).contains(n) && (1..=8).contains(m))
+        {
+            let own = n + outputs;
+            return match s {
+                _ if s < n => Some(super::stations::INPUT + s),
+                _ if s < own => Some(super::stations::RESULT + s - n),
+                _ if s < own + 27 => Some(9 + s - own),
+                _ if s < own + 36 => Some(s - own - 27),
+                _ => None,
+            };
+        }
         // A container of `n` slots, then the inventory and the hotbar.
         let slots = |n: usize| -> Option<usize> {
             match s {
@@ -1641,6 +1668,21 @@ impl Game<'_> {
     /// The workstation screen of a menu type a server opens.
     pub(super) fn remote_station_kind(menu: &str) -> Option<super::stations::Kind> {
         use super::stations::Kind;
+        if menu
+            .strip_prefix("horizon:storage:")
+            .and_then(|n| n.parse::<usize>().ok())
+            .is_some_and(|n| n <= 50)
+        {
+            return Some(Kind::Mod);
+        }
+        if menu
+            .strip_prefix("horizon:gui:")
+            .and_then(|n| n.split_once(':'))
+            .and_then(|(n, m)| Some((n.parse::<usize>().ok()?, m.parse::<usize>().ok()?)))
+            .is_some_and(|(n, m)| (1..=36).contains(&n) && (1..=8).contains(&m))
+        {
+            return Some(Kind::Mod);
+        }
         Some(match menu {
             "minecraft:loom" => Kind::Loom,
             "minecraft:stonecutter" => Kind::Stonecutter,
@@ -5759,6 +5801,56 @@ impl Game<'_> {
         if let Some(kind) = Self::remote_station_kind(&menu) {
             let mut title = menu_title(&p.title);
             let plain_title = title.plain();
+            if menu == "minecraft:anvil"
+                && let Some(raw) = plain_title.strip_prefix("[horizon:gui]")
+                && raw.len() <= 16384
+                && let Ok((label, gui)) =
+                    serde_json::from_str::<(String, horizon_mods::gui::Gui)>(raw)
+                && gui.validate().is_ok()
+            {
+                let count = gui
+                    .slots
+                    .iter()
+                    .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
+                    .count();
+                let storage_only = gui
+                    .slots
+                    .iter()
+                    .all(|s| s.role == horizon_mods::gui::SlotRole::Storage);
+                let outputs = gui
+                    .slots
+                    .iter()
+                    .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
+                    .count();
+                if (if storage_only { 0..=50 } else { 1..=36 }).contains(&count)
+                    && (if storage_only {
+                        outputs == 0
+                    } else {
+                        (1..=8).contains(&outputs)
+                    })
+                {
+                    let pos = target.map_or([0, 0, 0], |t| [t.0, t.1, t.2]);
+                    self.remote_open_station(
+                        p.container,
+                        if storage_only {
+                            format!("horizon:storage:{count}")
+                        } else {
+                            format!("horizon:gui:{count}:{outputs}")
+                        },
+                        super::stations::Kind::Mod,
+                        horizon_client::text::Text::literal(label),
+                        pos,
+                    );
+                    if let Some(station) = self.station.as_mut() {
+                        station.inputs.resize(count, None);
+                        station
+                            .mod_extra_results
+                            .resize(outputs.saturating_sub(1), None);
+                        station.mod_gui = Some(gui);
+                    }
+                    return;
+                }
+            }
             let kind = if menu == "minecraft:anvil"
                 && let Some(label) = plain_title.strip_prefix("[horizon:workstation]")
             {

@@ -49,6 +49,8 @@ pub(crate) struct TestLevel {
     pub block_light: HashMap<BlockPos, i32>,
     /// `Level.isClientSide`.
     pub client_side: bool,
+    extra_entity: Option<BlockPos>,
+    extra_removed: Vec<(BlockPos, bool)>,
 }
 impl TestLevel {
     fn new(b: &Behaviours) -> Self {
@@ -61,10 +63,20 @@ impl TestLevel {
             events: Vec::new(),
             block_light: HashMap::new(),
             client_side: false,
+            extra_entity: None,
+            extra_removed: Vec::new(),
         }
     }
 }
 impl LevelAccess for TestLevel {
+    fn has_extra_block_entity(&self, pos: BlockPos) -> bool {
+        self.extra_entity == Some(pos)
+    }
+    fn remove_block_entity(&mut self, pos: BlockPos, _: BlockStateId, side_effects: bool) -> u8 {
+        self.extra_removed.push((pos, side_effects));
+        self.extra_entity = None;
+        0
+    }
     fn is_client_side(&self) -> bool {
         self.client_side
     }
@@ -1423,4 +1435,15 @@ fn big_dripleaf_tilts_under_an_entity_standing_on_it() {
     w.put(BlockPos::new(1, 1, 0), power);
     stand(&mut w, true, 1.9375);
     assert_eq!(w.prop(pos, "tilt"), "none");
+}
+
+#[test]
+fn dynamic_block_entity_is_removed_when_non_entity_block_changes() {
+    let Some(f) = fixture() else { return };
+    let mut world = World::new(f);
+    let pos = BlockPos::new(0, 70, 0);
+    world.put(pos, world.id("stone", &[]));
+    world.level.extra_entity = Some(pos);
+    assert!(world.set(pos, world.id("air", &[])));
+    assert_eq!(world.level.extra_removed, vec![(pos, true)]);
 }

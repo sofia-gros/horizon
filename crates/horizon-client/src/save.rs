@@ -423,6 +423,14 @@ pub fn encode_block_entity(
     ];
     match e {
         BlockEntity::Chest(items) => entries.push(("Items", encode_items(items))),
+        BlockEntity::ModStorage(ids, items) => {
+            entries.push((
+                "horizon:slot_ids",
+                Tag::List(ids.iter().map(|id| string(id)).collect()),
+            ));
+            entries.push(("Items", encode_items(items)));
+            entries.push(("horizon:slot_count", Tag::Int(items.len() as i32)));
+        }
         BlockEntity::Furnace(f) => {
             entries.push(("Items", encode_items(&f.items)));
             entries.push(("lit_time_remaining", Tag::Int(f.lit_remaining)));
@@ -601,6 +609,29 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
     let id = text(tag.get("id"))?;
     let pos = (int("x")?, int("y")?, int("z")?);
+    if id == "horizon:mod_storage" {
+        let count = usize::try_from(int("horizon:slot_count")?).ok()?;
+        if !(1..=50).contains(&count) {
+            return None;
+        }
+        let Tag::List(raw_ids) = tag.get("horizon:slot_ids")? else {
+            return None;
+        };
+        let ids = raw_ids
+            .iter()
+            .map(|id| text(Some(id)))
+            .collect::<Option<Vec<_>>>()?;
+        if ids.len() != count
+            || ids.iter().any(|id| id.is_empty() || id.len() > 64)
+            || ids.iter().collect::<std::collections::HashSet<_>>().len() != count
+        {
+            return None;
+        }
+        return Some((
+            pos,
+            BlockEntity::ModStorage(ids, decode_items(tag.get("Items"), count)),
+        ));
+    }
     if id == "minecraft:end_gateway" {
         return Some((pos, BlockEntity::EndGateway(decode_end_gateway(tag))));
     }
@@ -663,7 +694,9 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
     };
     let mut entity = BlockEntity::for_block(block)?;
     match &mut entity {
-        BlockEntity::Chest(items) => *items = decode_items(tag.get("Items"), items.len()),
+        BlockEntity::Chest(items) | BlockEntity::ModStorage(_, items) => {
+            *items = decode_items(tag.get("Items"), items.len())
+        }
         BlockEntity::Furnace(f) => {
             let items = decode_items(tag.get("Items"), 3);
             f.items = [items[0].clone(), items[1].clone(), items[2].clone()];
@@ -3776,6 +3809,41 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mod_storage_preserves_variable_size_and_item_components() {
+        let mut stack = crate::items::ItemStack::new("minecraft:stone", 3);
+        stack
+            .data_mut()
+            .set_other("example:foreign", Some(horizon_world::nbt::Tag::Int(7)));
+        let mut slots = vec![None; 42];
+        slots[41] = Some(stack);
+        let pos = (3, 64, 7);
+        let tag = super::encode_block_entity(
+            pos,
+            &crate::containers::BlockEntity::ModStorage(
+                (0..42).map(|i| format!("slot{i}")).collect(),
+                slots.clone(),
+            ),
+            "example:machine",
+        );
+        let (decoded_pos, decoded) = super::decode_block_entity(&tag).unwrap();
+        assert_eq!(decoded_pos, pos);
+        let crate::containers::BlockEntity::ModStorage(ids, decoded) = decoded else {
+            panic!("expected storage");
+        };
+        assert_eq!(decoded, slots);
+        assert_eq!(ids[41], "slot41");
+        // A legacy modded shulker must retain its vanilla block-entity ID.
+        let legacy = super::encode_block_entity(
+            pos,
+            &crate::containers::BlockEntity::Chest(vec![None; 27]),
+            "example:shulker_box",
+        );
+        assert_eq!(
+            super::text(legacy.get("id")).as_deref(),
+            Some("minecraft:shulker_box")
+        );
+    }
     #[test]
     fn points_of_interest_save_as_poi_sections() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {

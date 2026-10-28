@@ -1576,6 +1576,51 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
     let registration = mods
         .workstation("example:station", "preview_storage")
         .unwrap();
+    let generic = mods
+        .workstation("example:gui_station", "preview_storage")
+        .unwrap();
+    assert_eq!(
+        mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
+        Some(vec![10])
+    );
+    assert!(
+        mods.gui_button(
+            &generic,
+            &player.id,
+            "minecraft:overworld",
+            [0, 71, 2],
+            "unknown"
+        )
+        .is_err()
+    );
+    mods.gui_button(
+        &generic,
+        &player.id,
+        "minecraft:overworld",
+        [0, 71, 2],
+        "choose",
+    )
+    .unwrap();
+    assert_eq!(
+        mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
+        Some(vec![42])
+    );
+    let generic_inputs = [None, None, None];
+    let planned = mods
+        .gui_workstation_preview(&generic, &generic_inputs, Some("choose"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(planned.consume, [0, 1, 0]);
+    assert_eq!(planned.outputs[0].item, "example:part");
+    assert!(
+        mods.gui_workstation_preview(&generic, &generic_inputs, Some("unknown"))
+            .is_err()
+    );
+    assert!(!storage.join("preview-write").exists());
+    assert_eq!(
+        mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
+        Some(vec![42])
+    );
     let tool = horizon_mods::WorkstationInput {
         item: "example:tool".into(),
         count: 1,
@@ -1606,6 +1651,10 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
     }
     assert!(mods.server_command(&player, "online storage-write"));
     assert_eq!(std::fs::read(storage.join("normal")).unwrap(), b"ok");
+    assert_eq!(
+        mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
+        Some(vec![73])
+    );
     ingredient.item = "storage-trap".into();
     assert!(
         mods.workstation_preview(&registration, &tool, &ingredient)

@@ -271,6 +271,7 @@ impl BlockEntity {
     }
     pub fn id(&self) -> &'static str {
         match self {
+            Self::ModStorage(_, _) => "horizon:mod_storage",
             Self::Chest(items) => match items.len() {
                 HOPPER_SLOTS => "minecraft:hopper",
                 9 => "minecraft:dispenser",
@@ -304,7 +305,9 @@ impl BlockEntity {
     }
     pub fn contents(&self) -> Vec<ItemStack> {
         match self {
-            Self::Chest(items) => items.iter().flatten().cloned().collect(),
+            Self::Chest(items) | Self::ModStorage(_, items) => {
+                items.iter().flatten().cloned().collect()
+            }
             Self::Furnace(f) => f.items.iter().flatten().cloned().collect(),
             Self::Brewing(b) => b.items.iter().flatten().cloned().collect(),
             Self::Sign(_) => Vec::new(),
@@ -332,7 +335,8 @@ impl BlockEntity {
             Self::Chest(items) => items,
             Self::Furnace(f) => &f.items,
             Self::Brewing(b) => &b.items,
-            Self::Sign(_)
+            Self::ModStorage(_, _)
+            | Self::Sign(_)
             | Self::Jukebox(_)
             | Self::Beacon(_)
             | Self::Lectern(_)
@@ -358,7 +362,8 @@ impl BlockEntity {
             Self::Chest(items) => items,
             Self::Furnace(f) => &mut f.items,
             Self::Brewing(b) => &mut b.items,
-            Self::Sign(_)
+            Self::ModStorage(_, _)
+            | Self::Sign(_)
             | Self::Jukebox(_)
             | Self::Beacon(_)
             | Self::Lectern(_)

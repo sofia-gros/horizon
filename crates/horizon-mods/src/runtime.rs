@@ -50,6 +50,13 @@ mod mining_bindings {
 mod workstation_bindings {
     wasmtime::component::bindgen!({ path: "../horizon-mod-sdk/wit", world: "workstation-host" });
 }
+mod gui_workstation_bindings {
+    wasmtime::component::bindgen!({ path: "../horizon-mod-sdk/wit", world: "gui-workstation-host" });
+}
+pub use gui_workstation_bindings::exports::horizon::mods::gui_workstation_events::{
+    Output as GuiWorkstationOutput, Plan as GuiWorkstationPlan,
+};
+pub use gui_workstation_bindings::horizon::mods::workstation_events::Input as GuiWorkstationInput;
 pub use workstation_bindings::exports::horizon::mods::workstation_events::{
     Input as WorkstationInput, Plan as WorkstationPlan,
 };
@@ -61,6 +68,7 @@ pub struct WorkstationRegistration {
     pub title: String,
     pub path: Vec<String>,
     pub ingredient_tags: Vec<String>,
+    pub gui: Option<crate::gui::Gui>,
 }
 /// Capability `ui`'s world beyond `horizon-mod` (docs/mods.md): a second
 /// world, so mods built before it (no `ui-events` export) still instantiate
@@ -375,6 +383,7 @@ struct Running {
     mining: Option<mining_bindings::MiningHost>,
     melee: Option<melee_bindings::MeleeHost>,
     workstation: Option<workstation_bindings::WorkstationHost>,
+    gui_workstation: Option<gui_workstation_bindings::GuiWorkstationHost>,
     hooks: Hooks,
     /// It imports `game.raycast`.
     raycasts: bool,
@@ -496,10 +505,47 @@ struct State {
     command_actor: Option<String>,
     registering_workstations: bool,
     workstations: Vec<WorkstationRegistration>,
+    gui_progress: GuiProgress,
     mining_enabled: bool,
     melee_enabled: bool,
     limits: StoreLimits,
     world: WorldSlot,
+}
+
+type GuiProgressKey = (String, String, i32, i32, i32, String);
+
+/// One mod's transient GUI progress, shared with the world's block lifecycle.
+#[derive(Clone, Default)]
+pub struct GuiProgress(Arc<Mutex<std::collections::HashMap<GuiProgressKey, u8>>>);
+
+impl GuiProgress {
+    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<GuiProgressKey, u8>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+    fn set(&self, key: GuiProgressKey, value: u8) -> Result<(), String> {
+        let mut progress = self.lock();
+        if progress.len() >= 4096 && !progress.contains_key(&key) {
+            return Err("too many workstation progress entries".into());
+        }
+        progress.insert(key, value);
+        Ok(())
+    }
+    /// Invalidate only entries for the removed block in this dimension.
+    pub fn remove_block(&self, block: &str, dimension: &str, pos: [i32; 3]) {
+        self.lock()
+            .retain(|(b, d, x, y, z, _), _| !(b == block && d == dimension && [*x, *y, *z] == pos));
+    }
+    /// End a world's lifetime, including all its dimensions.
+    pub fn clear(&self) {
+        self.lock().clear();
+    }
+    /// Discard entries whose positions the host confirms no longer contain their block.
+    pub fn retain_blocks(&self, mut valid: impl FnMut(&str, &str, [i32; 3]) -> bool) {
+        self.lock()
+            .retain(|(b, d, x, y, z, _), _| valid(b, d, [*x, *y, *z]));
+    }
 }
 
 /// The installed mods and the engine running them. `Mods::default()` is
@@ -517,16 +563,41 @@ pub struct Mods {
 }
 
 impl Mods {
+    /// The progress stores currently owned by running mods.
+    pub fn gui_progress_stores(&self) -> Vec<GuiProgress> {
+        self.entries
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .run
+                    .as_ref()
+                    .map(|run| run.store.data().gui_progress.clone())
+            })
+            .collect()
+    }
+
     /// Resolve the handler explicitly authorized by the block owner.
     pub fn workstation(&self, block: &str, owner: &str) -> Option<WorkstationRegistration> {
         let mut matches = self.entries.iter().filter_map(|entry| {
             let run = entry.run.as_ref()?;
-            run.workstation.as_ref()?;
-            run.store
-                .data()
-                .workstations
-                .iter()
-                .find(|r| r.block == block && r.owner == owner)
+            run.store.data().workstations.iter().find(|r| {
+                r.block == block
+                    && r.owner == owner
+                    && match &r.gui {
+                        None => run.workstation.is_some(),
+                        Some(gui) => {
+                            run.gui_workstation.is_some()
+                                || gui
+                                    .slots
+                                    .iter()
+                                    .all(|s| s.role == crate::gui::SlotRole::Storage)
+                                    && !gui
+                                        .elements
+                                        .iter()
+                                        .any(|e| matches!(e, crate::gui::Element::Button { .. }))
+                        }
+                    }
+            })
         });
         let first = matches.next()?.clone();
         matches.next().is_none().then_some(first)
@@ -574,6 +645,182 @@ impl Mods {
                 .into_iter()
                 .filter(|o| matches!(o, Output::Stopped { .. })),
         );
+        result.ok_or("workstation mod trapped")?
+    }
+
+    /// Query the owning mod for a declarative workstation preview. The host
+    /// must validate the returned plan against its complete stack snapshots.
+    pub fn gui_workstation_preview(
+        &mut self,
+        registration: &WorkstationRegistration,
+        inputs: &[Option<GuiWorkstationInput>],
+        selection: Option<&str>,
+    ) -> Result<Option<GuiWorkstationPlan>, String> {
+        let gui = registration.gui.as_ref().ok_or("no GUI definition")?;
+        if self
+            .workstation(&registration.block, &registration.owner)
+            .as_ref()
+            != Some(registration)
+            || inputs.len() != gui.slots.len()
+            || selection.is_some_and(|id| {
+                !gui.elements.iter().any(|element| {
+                matches!(element, crate::gui::Element::Button { id: button, .. } if button == id)
+            })
+            })
+        {
+            return Err("invalid GUI workstation preview".into());
+        }
+        let i = self
+            .entries
+            .iter()
+            .position(|entry| {
+                entry
+                    .manifest
+                    .as_ref()
+                    .is_some_and(|m| m.id == registration.owner)
+            })
+            .ok_or("workstation mod stopped")?;
+        if self.entries[i]
+            .run
+            .as_ref()
+            .and_then(|run| run.gui_workstation.as_ref())
+            .is_none()
+        {
+            return Err("missing GUI workstation callback".into());
+        }
+        let start = self.out.len();
+        let result = self.call(i, FUEL_EVENT, |run| {
+            run.store.data_mut().previewing_workstation = true;
+            let result = run
+                .gui_workstation
+                .as_ref()
+                .expect("checked")
+                .horizon_mods_gui_workstation_events()
+                .call_preview(&mut run.store, &registration.block, inputs, selection);
+            run.store.data_mut().previewing_workstation = false;
+            result
+        });
+        let discarded = self.out.split_off(start);
+        self.out.extend(
+            discarded
+                .into_iter()
+                .filter(|o| matches!(o, Output::Stopped { .. })),
+        );
+        result.ok_or("workstation mod trapped")?
+    }
+
+    /// Current transient progress values, in GUI declaration order.
+    pub fn gui_progress(
+        &self,
+        registration: &WorkstationRegistration,
+        dimension: &str,
+        pos: [i32; 3],
+    ) -> Option<Vec<u8>> {
+        if self
+            .workstation(&registration.block, &registration.owner)
+            .as_ref()
+            != Some(registration)
+        {
+            return None;
+        }
+        let state = self
+            .entries
+            .iter()
+            .find(|entry| {
+                entry
+                    .manifest
+                    .as_ref()
+                    .is_some_and(|m| m.id == registration.owner)
+            })?
+            .run
+            .as_ref()?
+            .store
+            .data();
+        let gui = registration.gui.as_ref()?;
+        Some(
+            gui.elements
+                .iter()
+                .filter_map(|element| match element {
+                    crate::gui::Element::Progress { id, value, .. } => {
+                        let key = (
+                            registration.block.clone(),
+                            dimension.to_owned(),
+                            pos[0],
+                            pos[1],
+                            pos[2],
+                            id.clone(),
+                        );
+                        Some(*state.gui_progress.lock().get(&key).unwrap_or(value))
+                    }
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
+
+    /// Deliver one validated button event to its registered owner.
+    pub fn gui_button(
+        &mut self,
+        registration: &WorkstationRegistration,
+        player: &str,
+        dimension: &str,
+        pos: [i32; 3],
+        id: &str,
+    ) -> Result<(), String> {
+        if self
+            .workstation(&registration.block, &registration.owner)
+            .as_ref()
+            != Some(registration)
+            || !registration.gui.as_ref().is_some_and(|gui| {
+                gui.elements.iter().any(
+                    |e| matches!(e, crate::gui::Element::Button { id: button, .. } if button == id),
+                )
+            })
+        {
+            return Err("invalid GUI button event".into());
+        }
+        let i = self
+            .entries
+            .iter()
+            .position(|e| {
+                e.manifest
+                    .as_ref()
+                    .is_some_and(|m| m.id == registration.owner)
+            })
+            .ok_or("workstation mod stopped")?;
+        if self.entries[i]
+            .run
+            .as_ref()
+            .and_then(|r| r.gui_workstation.as_ref())
+            .is_none()
+        {
+            return Err("missing GUI button callback".into());
+        }
+        let start = self.out.len();
+        let result = self.call(i, FUEL_EVENT, |run| {
+            run.gui_workstation
+                .as_ref()
+                .expect("checked")
+                .horizon_mods_gui_workstation_events()
+                .call_button(
+                    &mut run.store,
+                    &registration.block,
+                    player,
+                    dimension,
+                    pos[0],
+                    pos[1],
+                    pos[2],
+                    id,
+                )
+        });
+        if !matches!(result, Some(Ok(()))) {
+            let discarded = self.out.split_off(start);
+            self.out.extend(
+                discarded
+                    .into_iter()
+                    .filter(|o| matches!(o, Output::Stopped { .. })),
+            );
+        }
         result.ok_or("workstation mod trapped")?
     }
 
@@ -788,6 +1035,7 @@ impl Mods {
             command_actor: None,
             registering_workstations: true,
             workstations: Vec::new(),
+            gui_progress: Default::default(),
             mining_enabled: false,
             melee_enabled: false,
             limits: StoreLimitsBuilder::new()
@@ -814,6 +1062,11 @@ impl Mods {
         };
         let workstation = if server {
             workstation_bindings::WorkstationHost::new(&mut store, &instance).ok()
+        } else {
+            None
+        };
+        let gui_workstation = if server {
+            gui_workstation_bindings::GuiWorkstationHost::new(&mut store, &instance).ok()
         } else {
             None
         };
@@ -867,6 +1120,7 @@ impl Mods {
             mining,
             melee,
             workstation,
+            gui_workstation,
             hooks,
             raycasts: functions.iter().any(|f| f == "game.raycast"),
             item_reads: functions.iter().any(|f| {
@@ -2312,4 +2566,60 @@ fn storage_key_ok(key: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b));
     chars_ok && key != "." && key != ".."
+}
+
+#[cfg(test)]
+mod gui_progress_tests {
+    use super::GuiProgress;
+    fn key(block: &str, dim: &str, x: i32) -> (String, String, i32, i32, i32, String) {
+        (block.into(), dim.into(), x, 64, 0, "work".into())
+    }
+    #[test]
+    fn removal_reclaims_capacity_and_isolates_other_mods_blocks_and_dimensions() {
+        let a = GuiProgress::default();
+        let b = GuiProgress::default();
+        for x in 0..4096 {
+            a.set(key("fixture:machine", "overworld", x), 80).unwrap();
+        }
+        assert!(
+            a.set(key("fixture:machine", "overworld", 4096), 50)
+                .is_err()
+        );
+        b.set(key("fixture:machine", "overworld", 7), 20).unwrap();
+        a.remove_block("fixture:machine", "overworld", [7, 64, 0]);
+        assert!(
+            !a.lock()
+                .contains_key(&key("fixture:machine", "overworld", 7))
+        );
+        assert!(
+            b.lock()
+                .contains_key(&key("fixture:machine", "overworld", 7))
+        );
+        a.set(key("fixture:machine", "overworld", 4096), 50)
+            .unwrap();
+        a.remove_block("fixture:other", "overworld", [8, 64, 0]);
+        a.remove_block("fixture:machine", "nether", [8, 64, 0]);
+        assert_eq!(
+            a.lock().get(&key("fixture:machine", "overworld", 8)),
+            Some(&80)
+        );
+        a.clear();
+        assert!(a.lock().is_empty());
+        assert!(!b.lock().is_empty());
+    }
+    #[test]
+    fn prune_preserves_unconfirmed_positions_and_reclaims_invalid_ones() {
+        let p = GuiProgress::default();
+        p.set(key("fixture:machine", "overworld", 1), 10).unwrap();
+        p.set(key("fixture:machine", "overworld", 2), 20).unwrap();
+        p.retain_blocks(|_, _, pos| pos[0] != 1);
+        assert!(
+            !p.lock()
+                .contains_key(&key("fixture:machine", "overworld", 1))
+        );
+        assert!(
+            p.lock()
+                .contains_key(&key("fixture:machine", "overworld", 2))
+        );
+    }
 }

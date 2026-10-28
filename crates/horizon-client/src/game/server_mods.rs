@@ -57,6 +57,33 @@ impl Game<'_> {
     ) -> Option<(horizon_client::items::ItemStack, u32)> {
         None
     }
+    pub(super) fn mod_gui_workstation_plan(
+        &mut self,
+        _registration: &super::stations::ModRegistration,
+        _player: &str,
+        _inputs: &[Option<horizon_client::items::ItemStack>],
+        _selection: Option<&str>,
+    ) -> Option<(Vec<horizon_client::items::ItemStack>, Vec<u32>)> {
+        None
+    }
+    pub(super) fn mod_gui_progress(
+        &self,
+        _registration: &super::stations::ModRegistration,
+        _pos: [i32; 3],
+    ) -> Option<Vec<u8>> {
+        None
+    }
+    pub(super) fn mod_gui_button(
+        &mut self,
+        _registration: &super::stations::ModRegistration,
+        _player: &str,
+        _pos: [i32; 3],
+        _id: &str,
+    ) -> bool {
+        false
+    }
+    pub(super) fn mod_configure_gui_progress(&mut self) {}
+    pub(super) fn mod_reset_gui_progress(&mut self) {}
     pub(super) fn tick_server_mods(&mut self) {}
     pub(super) fn mod_block_event(&mut self, _pos: [i32; 3], _state: BlockStateId, _placed: bool) {}
     pub(super) fn mod_mined(
@@ -242,13 +269,127 @@ mod run {
         ) -> Option<super::super::stations::ModRegistration> {
             let owner = self.mods.workstation_handlers.get(block)?;
             let r = self.mods.mods.workstation(block, owner)?;
+            if let Some(gui) = &r.gui {
+                let inputs = gui
+                    .slots
+                    .iter()
+                    .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
+                    .count();
+                let outputs = gui
+                    .slots
+                    .iter()
+                    .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
+                    .count();
+                let storage_only = outputs == 0
+                    && gui
+                        .slots
+                        .iter()
+                        .all(|s| s.role == horizon_mods::gui::SlotRole::Storage);
+                if !((storage_only && (0..=50).contains(&inputs))
+                    || ((1..=36).contains(&inputs) && (1..=8).contains(&outputs)))
+                {
+                    return None;
+                }
+            }
             Some(super::super::stations::ModRegistration {
                 owner: r.owner,
                 block: r.block,
                 title: r.title,
                 path: r.path,
                 ingredient_tags: r.ingredient_tags,
+                gui: r.gui,
             })
+        }
+
+        pub(in crate::game) fn mod_gui_progress(
+            &self,
+            registration: &super::super::stations::ModRegistration,
+            pos: [i32; 3],
+        ) -> Option<Vec<u8>> {
+            if self.mods.workstation_handlers.get(&registration.block) != Some(&registration.owner)
+            {
+                return None;
+            }
+            let reg = self
+                .mods
+                .mods
+                .workstation(&registration.block, &registration.owner)?;
+            if reg.gui != registration.gui {
+                return None;
+            }
+            self.mods.mods.gui_progress(&reg, self.dim.id(), pos)
+        }
+
+        /// Bind progress invalidation to this dimension's block writes.
+        pub(in crate::game) fn mod_configure_gui_progress(&mut self) {
+            let n = self.pack.assets.registry.len();
+            self.world.gui_progress_states = (0..n)
+                .map(|i| {
+                    let name = &self
+                        .res
+                        .facts()
+                        .get(horizon_world::registry::BlockStateId(i as u32))
+                        .name;
+                    self.mods
+                        .workstation_handlers
+                        .contains_key(&**name)
+                        .then(|| name.clone())
+                })
+                .collect();
+            self.world.gui_progress = self.mods.mods.gui_progress_stores();
+            self.world.gui_progress_dimension = self.dim.id().to_owned();
+        }
+
+        pub(in crate::game) fn mod_reset_gui_progress(&mut self) {
+            for progress in self.mods.mods.gui_progress_stores() {
+                progress.clear();
+            }
+        }
+
+        /// The guest may write progress for a position that has already gone.
+        /// Reclaim those entries when the position is loaded; unloaded chunks
+        /// and other dimensions cannot be judged from this level.
+        fn mod_prune_gui_progress(&self) {
+            let dimension = self.dim.id();
+            let world = &self.world;
+            let facts = self.res.facts();
+            for progress in &world.gui_progress {
+                progress.retain_blocks(|block, dim, pos| {
+                    dim != dimension
+                        || !world.loaded(pos[0], pos[2])
+                        || &*facts.get(world.block(pos[0], pos[1], pos[2])).name == block
+                });
+            }
+        }
+
+        pub(in crate::game) fn mod_gui_button(
+            &mut self,
+            registration: &super::super::stations::ModRegistration,
+            player: &str,
+            pos: [i32; 3],
+            id: &str,
+        ) -> bool {
+            if self.mods.workstation_handlers.get(&registration.block) != Some(&registration.owner)
+            {
+                return false;
+            }
+            let Some(reg) = self
+                .mods
+                .mods
+                .workstation(&registration.block, &registration.owner)
+            else {
+                return false;
+            };
+            if reg.gui != registration.gui {
+                return false;
+            }
+            let ok = self
+                .mods
+                .mods
+                .gui_button(&reg, player, self.dim.id(), pos, id)
+                .is_ok();
+            self.mod_prune_gui_progress();
+            ok
         }
 
         /// Rebuild a checked result from the complete input snapshots. The mod
@@ -372,6 +513,247 @@ mod run {
             let mut result = Some(tool.clone());
             view.apply(0, &mut result, &edit).ok()?;
             Some((result?, plan.consume))
+        }
+
+        /// Build a generic preview from complete snapshots; no input is
+        /// consumed until the menu rechecks and commits the returned plan.
+        pub(in crate::game) fn mod_gui_workstation_plan(
+            &mut self,
+            registration: &super::super::stations::ModRegistration,
+            player: &str,
+            inputs: &[Option<horizon_client::items::ItemStack>],
+            selection: Option<&str>,
+        ) -> Option<(Vec<horizon_client::items::ItemStack>, Vec<u32>)> {
+            use horizon_mods::ItemReader;
+            use horizon_world::nbt::Tag;
+            let gui = registration.gui.as_ref()?;
+            if self.mods.workstation_handlers.get(&registration.block) != Some(&registration.owner)
+            {
+                return None;
+            }
+            let reg = self
+                .mods
+                .mods
+                .workstation(&registration.block, &registration.owner)?;
+            if reg.gui.as_ref() != Some(gui)
+                || reg.path != registration.path
+                || reg.ingredient_tags != registration.ingredient_tags
+            {
+                return None;
+            }
+            let input_slots: Vec<_> = gui
+                .slots
+                .iter()
+                .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
+                .collect();
+            if input_slots.len() != inputs.len()
+                || !(1..=8).contains(
+                    &gui.slots
+                        .iter()
+                        .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
+                        .count(),
+                )
+            {
+                return None;
+            }
+            let mut views = Vec::with_capacity(gui.slots.len());
+            let mut n = 0;
+            for slot in &gui.slots {
+                if slot.role == horizon_mods::gui::SlotRole::Output {
+                    views.push(None);
+                    continue;
+                }
+                let stack = inputs[n].as_ref();
+                n += 1;
+                let view = if let Some(stack) = stack {
+                    if !slot.accepts.is_empty()
+                        && !slot.accepts.iter().any(|selector| {
+                            if let Some(tag) = selector.strip_prefix('#') {
+                                self.res
+                                    .items()
+                                    .item_tags
+                                    .get(tag)
+                                    .is_some_and(|items| items.contains(&*stack.item))
+                            } else {
+                                selector == &*stack.item
+                            }
+                        })
+                    {
+                        return None;
+                    }
+                    let read = horizon_client::mod_items::ServerItems(vec![(
+                        player.into(),
+                        0,
+                        stack.clone(),
+                    )]);
+                    let held = read.main_hand(player, &reg.path).ok()??;
+                    let tags = reg
+                        .ingredient_tags
+                        .iter()
+                        .filter(|tag| {
+                            self.res
+                                .items()
+                                .item_tags
+                                .get(tag.as_str())
+                                .is_some_and(|items| items.contains(&*stack.item))
+                        })
+                        .cloned()
+                        .collect();
+                    Some(horizon_mods::GuiWorkstationInput {
+                        item: held.item,
+                        count: held.count,
+                        damage: held.damage,
+                        custom_text: held.custom_text,
+                        tags,
+                    })
+                } else {
+                    None
+                };
+                views.push(view);
+            }
+            let plan = self
+                .mods
+                .mods
+                .gui_workstation_preview(&reg, &views, selection)
+                .ok()??;
+            if plan.consume.len() != gui.slots.len()
+                || plan.outputs.len()
+                    != gui
+                        .slots
+                        .iter()
+                        .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
+                        .count()
+            {
+                return None;
+            }
+            let mut counts = Vec::with_capacity(inputs.len());
+            let mut n = 0;
+            for (slot, count) in gui.slots.iter().zip(&plan.consume) {
+                if slot.role == horizon_mods::gui::SlotRole::Output {
+                    if *count != 0 {
+                        return None;
+                    }
+                    continue;
+                }
+                if *count > inputs[n].as_ref().map_or(0, |s| s.count) {
+                    return None;
+                }
+                counts.push(*count);
+                n += 1;
+            }
+            if !counts.iter().any(|c| *c > 0) {
+                return None;
+            }
+            let mut results = Vec::new();
+            let mut used_sources = std::collections::HashSet::new();
+            for output in plan.outputs {
+                let item = self.res.items().get(&output.item)?;
+                if output.count == 0 || output.count > item.max_stack.min(99) {
+                    return None;
+                }
+                let mut result = if let Some(source) = output.source_slot {
+                    let source = usize::try_from(source).ok()?;
+                    if !used_sources.insert(source) {
+                        return None;
+                    }
+                    let slot = gui.slots.get(source)?;
+                    if slot.role == horizon_mods::gui::SlotRole::Output || plan.consume[source] != 1
+                    {
+                        return None;
+                    }
+                    let index = gui.slots[..source]
+                        .iter()
+                        .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
+                        .count();
+                    let stack = inputs.get(index)?.as_ref()?;
+                    if stack.count != 1 || output.count != 1 || *stack.item != output.item {
+                        return None;
+                    }
+                    stack.clone()
+                } else {
+                    let mut stack =
+                        horizon_client::items::ItemStack::new(&output.item, output.count);
+                    if output.text.is_some() {
+                        let mut leaf = Tag::String("".into());
+                        for key in reg.path.iter().rev() {
+                            leaf = Tag::compound([(key.as_str(), leaf)]);
+                        }
+                        stack
+                            .data_mut()
+                            .set_other("minecraft:custom_data", Some(leaf));
+                    }
+                    stack
+                };
+                if output.tool.is_some() != output.durability.is_some()
+                    || output.tool.is_some() != output.melee.is_some()
+                {
+                    return None;
+                }
+                if let Some(text) = output.text {
+                    let view = std::sync::Arc::new(horizon_client::mod_items::ServerItems(vec![(
+                        player.into(),
+                        0,
+                        result.clone(),
+                    )]));
+                    let profile = output.tool.map(|tool| horizon_mods::ServerToolProfile {
+                        rules: tool
+                            .rules
+                            .into_iter()
+                            .map(|r| horizon_mods::ServerToolRule {
+                                blocks: r.blocks,
+                                speed: r.speed,
+                                correct_for_drops: r.correct_for_drops,
+                            })
+                            .collect(),
+                        default_speed: tool.default_speed,
+                        damage_per_block: tool.damage_per_block,
+                        can_destroy_in_creative: tool.can_destroy_in_creative,
+                        mining_enabled: tool.mining_enabled,
+                        unbreakable: tool.unbreakable,
+                    });
+                    if let Some(profile) = &profile {
+                        horizon_mods::validate_tool_profile(profile).ok()?;
+                        if profile
+                            .rules
+                            .iter()
+                            .flat_map(|r| &r.blocks)
+                            .any(|selector| {
+                                if let Some(tag) = selector.strip_prefix('#') {
+                                    !self.res.items().has_block_tag(tag)
+                                } else {
+                                    self.pack.assets.registry.default_state(selector).is_none()
+                                }
+                            })
+                        {
+                            return None;
+                        }
+                    }
+                    let melee = output.melee.map(|m| horizon_mods::ServerMeleeProfile {
+                        damage_bonus: m.damage_bonus,
+                        damage_multiplier: m.damage_multiplier,
+                        attack_speed: m.attack_speed,
+                        enabled: m.enabled,
+                    });
+                    let edit = horizon_mods::ItemEdit {
+                        owner: reg.owner.clone(),
+                        player: player.into(),
+                        path: reg.path.clone(),
+                        text,
+                        profile,
+                        durability: output.durability,
+                        melee,
+                        consumption: None,
+                        snapshot: view.clone(),
+                    };
+                    let mut cell = Some(result);
+                    view.apply(0, &mut cell, &edit).ok()?;
+                    result = cell?;
+                } else if output.tool.is_some() {
+                    return None;
+                }
+                results.push(result);
+            }
+            Some((results, counts))
         }
 
         /// Called while the acting player's inventory is swapped into Game.
@@ -736,6 +1118,7 @@ mod run {
             }
             self.mods.mods.server_tick(self.ticks);
             self.return_world();
+            self.mod_prune_gui_progress();
             self.mods.players = players;
             self.show_mod_output();
             self.apply_mod_block_writes();
@@ -871,6 +1254,7 @@ mod run {
             self.lend_world();
             let owned = self.mods.mods.server_command(&me, line);
             self.return_world();
+            self.mod_prune_gui_progress();
             self.show_mod_output();
             self.apply_mod_block_writes();
             owned
@@ -901,6 +1285,7 @@ mod run {
             self.lend_world();
             let owned = self.mods.mods.server_command(&me, line);
             self.return_world();
+            self.mod_prune_gui_progress();
             if !owned {
                 return false;
             }

@@ -1,6 +1,7 @@
 use horizon_mod_sdk::server::{
-    Args, Player, Registration, ServerMod, WorkstationInput, WorkstationPlan,
-    inventory_transactions, items_edit, items_tools, players, workstations,
+    Args, GuiWorkstationOutput, GuiWorkstationPlan, Player, Registration, ServerMod,
+    WorkstationInput, WorkstationPlan, inventory_transactions, items_edit, items_tools, players,
+    workstations,
 };
 
 struct MiningGuest;
@@ -14,6 +15,13 @@ impl ServerMod for MiningGuest {
             &["example".into(), "state".into()],
             &["example:ingredient".into()],
         )?;
+        workstations::register_gui(
+            "example:gui_station",
+            "GUI Fixture",
+            &["example".into(), "state".into()],
+            &[],
+            r#"{"width":176,"height":166,"slots":[{"id":"pattern","x":8,"y":18,"role":"input"},{"id":"material","x":26,"y":18,"role":"input"},{"id":"result","x":134,"y":18,"role":"output"}],"elements":[{"type":"button","id":"choose","x":60,"y":18,"width":24,"height":12,"text":"Pick"},{"type":"progress","id":"work","x":80,"y":40,"width":24,"height":8,"value":10}]}"#,
+        )?;
         Ok((
             Self,
             Registration::new()
@@ -21,6 +29,56 @@ impl ServerMod for MiningGuest {
                 .command("miner-only")
                 .command("consume-fixture"),
         ))
+    }
+
+    fn gui_workstation_preview(
+        &mut self,
+        _: &str,
+        inputs: &[Option<WorkstationInput>],
+        selection: Option<&str>,
+    ) -> Result<Option<GuiWorkstationPlan>, String> {
+        assert!(horizon_mod_sdk::storage::set("preview-write", b"no").is_err());
+        assert!(
+            workstations::set_progress(
+                "example:gui_station",
+                "minecraft:overworld",
+                0,
+                71,
+                2,
+                "work",
+                99
+            )
+            .is_err()
+        );
+        if inputs.len() != 3 || selection != Some("choose") {
+            return Ok(None);
+        }
+        Ok(Some(GuiWorkstationPlan {
+            consume: vec![0, 1, 0],
+            outputs: vec![GuiWorkstationOutput {
+                item: "example:part".into(),
+                count: 1,
+                source_slot: None,
+                text: None,
+                tool: None,
+                durability: None,
+                melee: None,
+            }],
+        }))
+    }
+
+    fn gui_button(
+        &mut self,
+        block: &str,
+        _player: &str,
+        dimension: &str,
+        pos: [i32; 3],
+        id: &str,
+    ) -> Result<(), String> {
+        if id == "choose" {
+            workstations::set_progress(block, dimension, pos[0], pos[1], pos[2], "work", 42)?;
+        }
+        Ok(())
     }
 
     fn workstation_preview(
@@ -78,6 +136,15 @@ impl ServerMod for MiningGuest {
     ) -> Result<Option<String>, String> {
         if name == "online" && args.text() == "storage-write" {
             horizon_mod_sdk::storage::set("normal", b"ok")?;
+            workstations::set_progress(
+                "example:gui_station",
+                "minecraft:overworld",
+                0,
+                71,
+                2,
+                "work",
+                73,
+            )?;
         }
         if name == "consume-fixture" {
             let target = if args.text() == "other" {

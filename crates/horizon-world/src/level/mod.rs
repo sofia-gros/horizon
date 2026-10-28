@@ -435,6 +435,11 @@ pub trait LevelAccess {
     /// after the storage write, before `affectNeighborsAfterRemoval`. Returns
     /// how many times the side effects called `updateNeighborsAt(pos, block)`
     /// (a jukebox whose song changed), which the caller then runs.
+    /// A host may attach a dynamic block entity to a block without a static
+    /// BLOCK_ENTITY flag (for example, a mod-defined storage GUI).
+    fn has_extra_block_entity(&self, _pos: BlockPos) -> bool {
+        false
+    }
     fn remove_block_entity(
         &mut self,
         _pos: BlockPos,
