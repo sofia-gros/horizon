@@ -596,7 +596,7 @@ impl Game<'_> {
             None => String::new(),
         }
     }
-    /// Refresh an open local viewer after another player changes a shared selection.
+    /// Refresh an open local viewer after another player changes shared state.
     pub(super) fn sync_local_mod_selection(&mut self) -> bool {
         if self.remote.is_some() {
             return false;
@@ -615,16 +615,66 @@ impl Game<'_> {
                     .map(str::to_owned),
             )
         });
-        let Some(selection) = selection else {
-            return false;
-        };
+        let storage = self.station.as_ref().and_then(|station| {
+            let gui = station.mod_gui.as_ref()?;
+            let ids: Vec<_> = gui
+                .slots
+                .iter()
+                .filter(|slot| slot.role == horizon_mods::gui::SlotRole::Storage)
+                .map(|slot| slot.id.clone())
+                .collect();
+            if ids.is_empty() {
+                return None;
+            }
+            let [x, y, z] = station.pos;
+            let registration = station.mod_registration.as_ref()?;
+            if self
+                .res
+                .facts()
+                .get(self.world.block(x, y, z))
+                .name
+                .as_ref()
+                != registration.block
+            {
+                return None;
+            }
+            let BlockEntity::ModStorage(saved_ids, stacks) =
+                self.world.block_entities.get(&(x, y, z))?
+            else {
+                return None;
+            };
+            if *saved_ids != ids || stacks.len() != ids.len() {
+                return None;
+            }
+            Some(
+                station
+                    .mod_storage_indices()
+                    .into_iter()
+                    .zip(stacks.iter().cloned())
+                    .collect::<Vec<_>>(),
+            )
+        });
         let Some(station) = self.station.as_mut() else {
             return false;
         };
-        if station.mod_selection == selection {
+        let mut changed = false;
+        if let Some(selection) = selection
+            && station.mod_selection != selection
+        {
+            station.mod_selection = selection;
+            changed = true;
+        }
+        if let Some(storage) = storage {
+            for (index, stack) in storage {
+                if station.inputs[index] != stack {
+                    station.inputs[index] = stack;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
             return false;
         }
-        station.mod_selection = selection;
         self.station_changed();
         true
     }
