@@ -432,6 +432,134 @@ mod tests {
     }
 
     #[test]
+    fn rejected_takeover_keeps_both_callbacks_with_original_mod() {
+        use horizon_mods::{
+            GameMode, Mods, Package, ServerPlayer, Snapshot, manifest::componentize,
+        };
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let target = root.join("target/mods-test");
+        assert!(
+            std::process::Command::new(env!("CARGO"))
+                .current_dir(&root)
+                .args([
+                    "build",
+                    "--release",
+                    "--target",
+                    "wasm32-unknown-unknown",
+                    "-p",
+                    "horizon-mods-test-mining-guest",
+                    "--target-dir"
+                ])
+                .arg(&target)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let wasm = componentize(
+            &std::fs::read(
+                target.join("wasm32-unknown-unknown/release/horizon_mods_test_mining_guest.wasm"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-owner-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let paths: Vec<_> = ["miner_a", "miner_b"].iter().map(|id| {
+            let manifest = format!("id = \"{id}\"\nname = \"{id}\"\nversion = \"1\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\n");
+            let path = dir.join(format!("{id}.hmod"));
+            std::fs::write(&path, Package::write(&manifest, &wasm).unwrap()).unwrap();
+            path
+        }).collect();
+        let player = ServerPlayer {
+            id: "alice".into(),
+            name: "Alice".into(),
+            x: 0.0,
+            y: 64.0,
+            z: 0.0,
+            dimension: "minecraft:overworld".into(),
+            game_mode: GameMode::Survival,
+            health: 20.0,
+        };
+        let mut tool = ItemStack::new("example:tool", 1);
+        tool.data_mut().set_other(
+            "minecraft:custom_data",
+            Some(Tag::compound([(
+                "example",
+                Tag::compound([("state", Tag::String("original".into()))]),
+            )])),
+        );
+        let view = std::sync::Arc::new(ServerItems(vec![(player.id.clone(), 0, tool.clone())]));
+        let mut edit = horizon_mods::ItemEdit {
+            owner: "miner_a".into(),
+            player: player.id.clone(),
+            path: vec!["example".into(), "state".into()],
+            text: "original".into(),
+            snapshot: view.clone(),
+            durability: None,
+            melee: None,
+            consumption: None,
+            profile: Some(horizon_mods::ServerToolProfile {
+                rules: vec![],
+                default_speed: 1.0,
+                damage_per_block: 0,
+                can_destroy_in_creative: true,
+                mining_enabled: true,
+                unbreakable: false,
+            }),
+        };
+        let mut cell = Some(tool);
+        view.apply(0, &mut cell, &edit).unwrap();
+        let view = std::sync::Arc::new(ServerItems(vec![(
+            player.id.clone(),
+            0,
+            cell.clone().unwrap(),
+        )]));
+        edit.owner = "miner_b".into();
+        edit.snapshot = view.clone();
+        assert!(view.apply(0, &mut cell, &edit).is_err());
+        let owner = view
+            .main_hand(&player.id, &["horizon:tool_control".into(), "owner".into()])
+            .unwrap()
+            .unwrap()
+            .custom_text
+            .unwrap();
+        assert_eq!(owner, "miner_a");
+        let mut mods = Mods::load(&paths, |_| true, |_| false);
+        mods.set_snapshot(Snapshot {
+            items: Some(view),
+            players: vec![player.clone()],
+            ..Snapshot::default()
+        });
+        let mined = mods.server_mined(
+            &owner,
+            &player.id,
+            "minecraft:overworld",
+            [0, 64, 0],
+            "example:stone",
+            1.0,
+        );
+        let hit = mods.server_melee_hit(
+            &owner,
+            &player.id,
+            "minecraft:overworld",
+            1,
+            "example:mob",
+            1.0,
+        );
+        assert_eq!(mined.len(), 1);
+        assert_eq!(hit.len(), 1);
+        assert_eq!((&mined[0].owner, &hit[0].owner), (&owner, &owner));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn consuming_edit_checks_both_stacks_before_committing() {
         let mut tool = ItemStack::new("example:tool", 1);
         tool.data_mut().set_other(

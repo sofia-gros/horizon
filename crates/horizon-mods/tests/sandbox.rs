@@ -1629,19 +1629,17 @@ fn mining_callbacks_isolate_distinct_mods_and_failures() {
         .unwrap();
     assert_eq!(edit.consumption, Some((1, 1)));
     assert!(mods.server_command(&player, "consume-fixture other"));
-    assert!(
-        !mods
-            .drain()
-            .iter()
-            .any(|o| matches!(o, Output::ItemEdit(_)))
-    );
+    let out = mods.drain();
+    assert!(!out.iter().any(|o| matches!(o, Output::ItemEdit(_))));
+    assert!(out.iter().any(
+        |o| matches!(o, Output::Reply { error: true, text, .. } if text.contains("invoking player"))
+    ));
     assert!(mods.server_command(&player, "consume-fixture error"));
-    assert!(
-        !mods
-            .drain()
-            .iter()
-            .any(|o| matches!(o, Output::ItemEdit(_)))
-    );
+    let out = mods.drain();
+    assert!(!out.iter().any(|o| matches!(o, Output::ItemEdit(_))));
+    assert!(out.iter().any(
+        |o| matches!(o, Output::Reply { error: true, text, .. } if text == "fixture rollback")
+    ));
     for owner in ["miner_a", "miner_b"] {
         let edits = mods.server_mined(
             owner,
