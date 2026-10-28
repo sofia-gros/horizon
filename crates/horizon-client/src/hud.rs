@@ -487,6 +487,32 @@ impl HudAtlas {
             images.push(image);
         }
         if full {
+            // Content mod GUI textures are packed under their namespaced resource IDs.
+            for namespace in horizon_items::content_namespaces::namespaces(root) {
+                let base = root.join("assets").join(&namespace).join("textures");
+                let mut paths = Vec::new();
+                walk(&base.join("gui"), &mut paths);
+                paths.sort();
+                for path in paths {
+                    let Ok(relative) = path.strip_prefix(&base) else {
+                        continue;
+                    };
+                    let name = format!(
+                        "{}:{}",
+                        namespace,
+                        relative
+                            .with_extension("")
+                            .to_string_lossy()
+                            .replace('\\', "/")
+                    );
+                    if let Ok((w, h, pixels)) = decode(&path)
+                        && w <= 1024
+                        && h <= 512
+                    {
+                        images.push((name, w, h, pixels));
+                    }
+                }
+            }
             images.extend(atlas_sprites(root, &images));
         }
         // The title screen's "JAVA EDITION" banner reads "RUST EDITION".
@@ -1686,6 +1712,24 @@ mod tests {
             .unwrap()
             .write_image_data(&pixels)
             .unwrap();
+    }
+    #[test]
+    fn content_mod_gui_textures_are_packed_with_their_namespace() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-mod-gui-atlas-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("horizon-mod-content.json"), r#"["example"]"#).unwrap();
+        write_png(&root, "gui/example", 4, 4);
+        let source = root.join("assets/minecraft/textures/gui/example.png");
+        let target = root.join("assets/example/textures/gui/example.png");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::rename(source, target).unwrap();
+        let atlas = HudAtlas::build(&root).unwrap();
+        let rect = atlas.sprites["example:gui/example"];
+        assert_eq!(rect.texels((atlas.width, atlas.height)), (4, 4));
+        assert_eq!(texel_at(&atlas, rect, 0, 0), [255, 255, 255, 255]);
+        let _ = fs::remove_dir_all(root);
     }
     #[test]
     fn a_pack_texture_keeps_the_default_textures_gui_size() {

@@ -6288,8 +6288,8 @@ impl Game<'_> {
     /// InventoryMenu / CraftingMenu slot layouts.
     fn slot_position(&self, i: usize) -> (f32, f32) {
         if let Some(gui) = self.station.as_ref().and_then(|s| s.mod_gui.as_ref()) {
-            let x = (f32::from(gui.width) - 176.0) / 2.0 + 8.0;
-            let y = f32::from(gui.height) - 82.0;
+            let (x, y) = gui.player_inventory_origin();
+            let (x, y) = (f32::from(x), f32::from(y));
             match i {
                 0..9 => return (x + i as f32 * 18.0, y + 58.0),
                 9..36 => {

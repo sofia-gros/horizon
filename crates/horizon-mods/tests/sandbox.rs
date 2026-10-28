@@ -1593,6 +1593,20 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
         )
         .is_err()
     );
+    assert!(
+        mods.gui_button(
+            &generic,
+            &player.id,
+            "minecraft:overworld",
+            [0, 71, 2],
+            "disabled"
+        )
+        .is_err()
+    );
+    assert!(
+        mods.gui_workstation_preview(&generic, &[None, None, None], Some("disabled"))
+            .is_err()
+    );
     mods.gui_button(
         &generic,
         &player.id,
