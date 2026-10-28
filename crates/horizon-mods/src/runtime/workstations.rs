@@ -63,4 +63,32 @@ impl super::server_bindings::horizon::mods::workstations::Host for State {
         self.workstations.last_mut().expect("registered").gui = Some(gui);
         Ok(())
     }
+
+    fn set_progress(
+        &mut self,
+        block: String,
+        dimension: String,
+        x: i32,
+        y: i32,
+        z: i32,
+        id: String,
+        value: u8,
+    ) -> Result<(), String> {
+        if self.previewing_workstation {
+            return Err("progress updates are forbidden during workstation preview".into());
+        }
+        if value > 100 || dimension.is_empty() || dimension.len() > 128 {
+            return Err("invalid progress value or dimension".into());
+        }
+        let registered = self.workstations.iter().find(|r| r.block == block).and_then(|r| r.gui.as_ref()).is_some_and(|gui| gui.elements.iter().any(|element| matches!(element, crate::gui::Element::Progress { id: progress, .. } if progress == &id)));
+        if !registered {
+            return Err("unknown workstation progress element".into());
+        }
+        let key = (block, dimension, x, y, z, id);
+        if self.gui_progress.len() >= 4096 && !self.gui_progress.contains_key(&key) {
+            return Err("too many workstation progress entries".into());
+        }
+        self.gui_progress.insert(key, value);
+        Ok(())
+    }
 }

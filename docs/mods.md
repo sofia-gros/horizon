@@ -718,3 +718,11 @@ Modpacks ([modpacks.md](modpacks.md)) move data-driven `registries` first:
 API 0.2 is content-only `.hmod`s (blocks, items, recipes, loot, models and
 textures), then server hooks (0.3) and block entities, menus, capabilities and
 `net` (0.4), in the order the ATM10 inventory needs them.
+
+### Declarative server workstations (experimental fork API 18)
+
+`workstations.register-gui` accepts a bounded JSON definition: width and height (176–512 pixels), up to 50 persistent storage slots or up to 36 processing inputs plus eight outputs, slot IDs, coordinates, input/storage/output roles and item IDs or `#item_tag` acceptance selectors. Text, buttons and percentage progress elements have named IDs. The block-owning content mod must explicitly delegate the block's `workstation_handler` to the registering server mod. Registration happens during init; old two-input `register` and its callback remain supported.
+
+The server checks current block, owner, player reach, complete input snapshots and the returned item/profile before accepting a preview. Preview callbacks cannot persist storage writes, set progress or emit host actions; guest memory itself is not rolled back. A zero consumption count preserves an input. Taking any output commits all input consumption once and moves other outputs to the player's inventory; the host first reserves space for all outputs, so an inventory without sufficient space rejects the operation. On multi-output results, normal pickup and quick-move are supported; swap, throw and creative clone are refused. The preview describes one item per output.
+
+Storage slots are attached to the block and saved in the world; transient input slots return on close. Other viewers receive changed storage snapshots, and stale clicks are rejected. A removed block's stored items follow normal container spill behavior. Layout or slot count changes for an existing stored block require an explicit migration: a mismatched saved size is refused rather than truncated. The `set-progress` value is a transient per-mod, per-block-position percentage, synchronized to open Horizon clients; the mod must persist machine state and restore it after reload. At most 4096 position/element values are retained per mod. Client/host GUI definitions travel with the open menu; vanilla clients do not implement this custom layout.

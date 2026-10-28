@@ -1579,6 +1579,10 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
     let generic = mods
         .workstation("example:gui_station", "preview_storage")
         .unwrap();
+    assert_eq!(
+        mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
+        Some(vec![10])
+    );
     let generic_inputs = [None, None, None];
     let planned = mods
         .gui_workstation_preview(&generic, &generic_inputs, Some("choose"))
@@ -1621,6 +1625,10 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
     }
     assert!(mods.server_command(&player, "online storage-write"));
     assert_eq!(std::fs::read(storage.join("normal")).unwrap(), b"ok");
+    assert_eq!(
+        mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
+        Some(vec![73])
+    );
     ingredient.item = "storage-trap".into();
     assert!(
         mods.workstation_preview(&registration, &tool, &ingredient)

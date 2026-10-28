@@ -4188,6 +4188,19 @@ impl Game<'_> {
         if !(sneaking && hands_full)
             && let Some(hit) = block_hit
         {
+            if self.hand == Hand::Main {
+                let name = self
+                    .res
+                    .facts()
+                    .get(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]))
+                    .name
+                    .clone();
+                if self.mod_workstation(&name).is_some() {
+                    self.open_menu(hit.pos);
+                    self.swing_arm();
+                    return Ok(true);
+                }
+            }
             let held = self.held().cloned();
             if self.use_lectern(hit.pos, held.as_ref()) {
                 self.swing_arm();
@@ -6203,7 +6216,12 @@ impl Game<'_> {
         if self.screen == Screen::Creative {
             return Self::creative_origin(batch);
         }
-        let (x, y) = batch.centered_origin(176.0, self.screen_height());
+        let width = self
+            .station
+            .as_ref()
+            .and_then(|s| s.mod_gui.as_ref())
+            .map_or(176.0, |gui| f32::from(gui.width));
+        let (x, y) = batch.centered_origin(width, self.screen_height());
         (x + self.recipe_book_shift(batch.width), y)
     }
     /// Slot ids: 0..36 player inventory, 100..109 crafting grid, 200 result.
@@ -6259,6 +6277,20 @@ impl Game<'_> {
     }
     /// InventoryMenu / CraftingMenu slot layouts.
     fn slot_position(&self, i: usize) -> (f32, f32) {
+        if let Some(gui) = self.station.as_ref().and_then(|s| s.mod_gui.as_ref()) {
+            let x = (f32::from(gui.width) - 176.0) / 2.0 + 8.0;
+            let y = f32::from(gui.height) - 82.0;
+            match i {
+                0..9 => return (x + i as f32 * 18.0, y + 58.0),
+                9..36 => {
+                    return (
+                        x + ((i - 9) % 9) as f32 * 18.0,
+                        y + ((i - 9) / 9) as f32 * 18.0,
+                    );
+                }
+                _ => {}
+            }
+        }
         if self.creative_inventory_open()
             && let Some(position) = Creative::inventory_slot_position(i)
         {
@@ -6669,21 +6701,84 @@ impl Game<'_> {
     fn menu_ops(&mut self, ops: &[(Option<usize>, i32, horizon_client::menu::Input)]) -> bool {
         use horizon_client::menu::Input;
         if self.remote.is_none()
-            && ops
+            && self
+                .station
+                .as_ref()
+                .is_some_and(|s| !s.mod_storage_indices().is_empty())
+        {
+            let station = self.station.as_ref().expect("checked");
+            let key = (station.pos[0], station.pos[1], station.pos[2]);
+            let Some(registration) = station.mod_registration.as_ref() else {
+                return true;
+            };
+            let block = &self
+                .res
+                .facts()
+                .get(self.world.block(key.0, key.1, key.2))
+                .name;
+            let range = if self.creative { 9.0 } else { 8.5 };
+            if &**block != registration.block
+                || self.mod_workstation(&registration.block).as_ref() != Some(registration)
+                || !self.eye_position().is_some_and(|eye| {
+                    horizon_client::lan::guest::within_block_range(eye, range, station.pos)
+                })
+            {
+                return true;
+            }
+            let Some(horizon_client::containers::BlockEntity::Chest(current)) =
+                self.world.block_entities.get(&key)
+            else {
+                return true;
+            };
+            let indices = station.mod_storage_indices();
+            let shown = indices
                 .iter()
-                .any(|(slot, _, _)| *slot == Some(stations::RESULT))
+                .map(|&i| station.inputs[i].clone())
+                .collect::<Vec<_>>();
+            if current != &shown {
+                let current = current.clone();
+                for (index, stack) in indices.into_iter().zip(current) {
+                    self.station.as_mut().expect("checked").inputs[index] = stack;
+                }
+                self.station_changed();
+                return true;
+            }
+        }
+        if self.remote.is_none()
+            && ops.iter().any(|(slot, _, _)| {
+                slot.is_some_and(|i| {
+                    i >= stations::RESULT
+                        && i < stations::RESULT
+                            + 1
+                            + self
+                                .station
+                                .as_ref()
+                                .map_or(0, |s| s.mod_extra_results.len())
+                })
+            })
         {
             let previous = self
                 .station
                 .as_ref()
                 .filter(|s| s.kind == stations::Kind::Mod)
-                .map(|s| (s.result.clone(), s.mod_cost, s.mod_counts.clone()));
+                .map(|s| {
+                    (
+                        s.result.clone(),
+                        s.mod_extra_results.clone(),
+                        s.mod_cost,
+                        s.mod_counts.clone(),
+                    )
+                });
             if let Some(previous) = previous {
                 self.station_changed();
-                let current = self
-                    .station
-                    .as_ref()
-                    .map(|s| (s.result.clone(), s.mod_cost, s.mod_counts.clone()));
+                let current = self.station.as_ref().map(|s| {
+                    (
+                        s.result.clone(),
+                        s.mod_extra_results.clone(),
+                        s.mod_cost,
+                        s.mod_counts.clone(),
+                    )
+                });
                 if current.as_ref() != Some(&previous) {
                     return true;
                 }
@@ -6703,7 +6798,7 @@ impl Game<'_> {
             self.crafter_slot_clicked(*slot, *button, *input);
         }
         let ops = ops.to_vec();
-        self.menu_session(move |menu, env, to_menu| {
+        let handled = self.menu_session(move |menu, env, to_menu| {
             let mut clicks = Vec::new();
             for &(slot, button, input) in &ops {
                 let menu_slot = match slot {
@@ -6727,7 +6822,30 @@ impl Game<'_> {
                 }
             }
             Some(true)
-        })
+        });
+        if handled
+            && self.remote.is_none()
+            && let Some(station) = self
+                .station
+                .as_ref()
+                .filter(|s| !s.mod_storage_indices().is_empty())
+        {
+            let key = (station.pos[0], station.pos[1], station.pos[2]);
+            if let Some(horizon_client::containers::BlockEntity::Chest(slots)) =
+                self.world.block_entities.get_mut(&key)
+            {
+                let current = station
+                    .mod_storage_indices()
+                    .into_iter()
+                    .map(|i| station.inputs[i].clone())
+                    .collect::<Vec<_>>();
+                if slots != &current {
+                    *slots = current;
+                    self.world.modified.insert((key.0 >> 4, key.2 >> 4));
+                }
+            }
+        }
+        handled
     }
     /// A sound a menu click made the player play (a bundle's insert or
     /// remove): `Entity.playSound` at the player.
@@ -6914,11 +7032,30 @@ impl Game<'_> {
             };
             let mut v: Vec<Option<usize>> =
                 (0..inputs).map(|i| Some(stations::INPUT + i)).collect();
-            v.push(Some(stations::RESULT));
+            if !self.station.as_ref().is_some_and(|s| s.is_mod_storage()) {
+                v.push(Some(stations::RESULT));
+                if let Some(s) = &self.station {
+                    v.extend(
+                        (0..s.mod_extra_results.len()).map(|i| Some(stations::RESULT + 1 + i)),
+                    );
+                }
+            }
             v.extend((9..36).chain(0..9).map(Some));
             (
-                if mod_station_open && self.station.as_ref().is_some_and(|s| s.mod_gui.is_some()) {
-                    Kind::ModWorkstationSlots(inputs)
+                if mod_station_open && self.station.as_ref().is_some_and(|s| s.is_mod_storage()) {
+                    Kind::ModStorageSlots(inputs)
+                } else if mod_station_open
+                    && self.station.as_ref().is_some_and(|s| s.mod_gui.is_some())
+                {
+                    let outputs = 1 + self
+                        .station
+                        .as_ref()
+                        .map_or(0, |s| s.mod_extra_results.len());
+                    if outputs == 1 {
+                        Kind::ModWorkstationSlots(inputs)
+                    } else {
+                        Kind::ModWorkstationMulti(inputs, outputs)
+                    }
                 } else if mod_station_open {
                     Kind::ModWorkstation
                 } else if anvil_open {
@@ -7062,7 +7199,9 @@ impl Game<'_> {
             };
         let mod_transaction = self.station.as_ref().and_then(|s| {
             let gui = s.mod_gui.as_ref()?;
-            let result = s.result.clone()?;
+            let results = std::iter::once(s.result.clone())
+                .chain(s.mod_extra_results.iter().cloned())
+                .collect::<Option<Vec<_>>>()?;
             let counts = if self.remote.is_some() {
                 let mut counts = vec![0; s.inputs.len()];
                 let first = s.inputs.iter().position(Option::is_some)?;
@@ -7078,7 +7217,7 @@ impl Game<'_> {
                 .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
                 .map(|s| s.accepts.clone())
                 .collect::<Vec<_>>();
-            Some((inputs, result, filters))
+            Some((inputs, results, filters))
         });
         let tag = |t: &str| self.structure_tag(t);
         let maps = trading::GameMaps {
@@ -7118,7 +7257,12 @@ impl Game<'_> {
         if let Some((tool, ingredient, result, count)) = mod_plan {
             let _ = menu.set_workstation_plan(&tool, &ingredient, count, result);
         }
-        if let Kind::ModWorkstationSlots(_) = kind {
+        if matches!(
+            kind,
+            Kind::ModWorkstationSlots(_)
+                | Kind::ModWorkstationMulti(_, _)
+                | Kind::ModStorageSlots(_)
+        ) {
             if let Some(gui) = self.station.as_ref().and_then(|s| s.mod_gui.as_ref()) {
                 let filters = gui
                     .slots
@@ -7128,8 +7272,8 @@ impl Game<'_> {
                     .collect();
                 let _ = menu.set_workstation_filters(filters);
             }
-            if let Some((inputs, result, _)) = mod_transaction {
-                let _ = menu.set_workstation_transaction(&inputs, result);
+            if let Some((inputs, results, _)) = mod_transaction {
+                let _ = menu.set_workstation_transaction_multi(&inputs, results);
             }
         }
         // The off hand is part of the inventory even when the menu has no slot for it.
@@ -7274,7 +7418,11 @@ impl Game<'_> {
         if kind == Kind::Anvil || kind == Kind::Smithing {
             self.combiner_session_end(&menu, predicting);
         }
-        if matches!(kind, Kind::ModWorkstation | Kind::ModWorkstationSlots(_)) && !predicting {
+        if matches!(
+            kind,
+            Kind::ModWorkstation | Kind::ModWorkstationSlots(_) | Kind::ModWorkstationMulti(_, _)
+        ) && !predicting
+        {
             self.station_changed();
         }
         if kind == Kind::Enchanting && (menu.enchant_changed || before[0] != menu.slot(0).cloned())

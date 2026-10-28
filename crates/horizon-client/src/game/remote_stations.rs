@@ -78,6 +78,20 @@ impl Game<'_> {
             return;
         };
         match (s.kind, id) {
+            (Kind::Mod, _) => {
+                if let Some(gui) = s.mod_gui.as_mut()
+                    && let Some(horizon_mods::gui::Element::Progress {
+                        value: progress, ..
+                    }) = gui
+                        .elements
+                        .iter_mut()
+                        .filter(|e| matches!(e, horizon_mods::gui::Element::Progress { .. }))
+                        .nth(id)
+                    && (0..=100).contains(&value)
+                {
+                    *progress = value as u8;
+                }
+            }
             // LoomMenu.selectedBannerPatternIndex.
             (Kind::Loom, 0) => s.loom.selected = usize::try_from(value).ok(),
             // StonecutterMenu.selectedRecipeIndex.

@@ -54,6 +54,8 @@ pub enum Element {
         y: u16,
         width: u16,
         height: u16,
+        #[serde(default)]
+        value: u8,
     },
 }
 
@@ -88,8 +90,8 @@ impl Gui {
         Ok(gui)
     }
     pub fn validate(&self) -> Result<(), String> {
-        if !(64..=512).contains(&self.width)
-            || !(64..=512).contains(&self.height)
+        if !(176..=512).contains(&self.width)
+            || !(166..=512).contains(&self.height)
             || self.slots.len() > 54
             || self.elements.len() > 64
         {
@@ -141,7 +143,13 @@ impl Gui {
                     y,
                     width,
                     height,
-                } => id_valid(id) && ids.insert(id) && inside(*x, *y, *width, *height),
+                    value,
+                } => {
+                    id_valid(id)
+                        && ids.insert(id)
+                        && inside(*x, *y, *width, *height)
+                        && *value <= 100
+                }
             };
             if !ok {
                 return Err("invalid GUI element".into());

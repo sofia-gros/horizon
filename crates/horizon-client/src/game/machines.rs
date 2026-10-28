@@ -1073,6 +1073,9 @@ impl Game<'_> {
     }
     /// `imageHeight` of the open screen (HopperScreen is 133 tall).
     pub(super) fn screen_height(&self) -> f32 {
+        if let Some(gui) = self.station.as_ref().and_then(|s| s.mod_gui.as_ref()) {
+            return f32::from(gui.height);
+        }
         if self
             .station
             .as_ref()

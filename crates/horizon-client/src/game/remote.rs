@@ -1551,14 +1551,27 @@ impl Game<'_> {
     fn menu_slot(menu: &str, slot: i32) -> Option<usize> {
         let s = usize::try_from(slot).ok()?;
         if let Some(n) = menu
-            .strip_prefix("horizon:gui:")
+            .strip_prefix("horizon:storage:")
             .and_then(|n| n.parse::<usize>().ok())
-            .filter(|n| (1..=36).contains(n))
+            .filter(|n| (1..=50).contains(n))
         {
-            let own = n + 1;
             return match s {
                 _ if s < n => Some(super::stations::INPUT + s),
-                _ if s == n => Some(super::stations::RESULT),
+                _ if s < n + 27 => Some(9 + s - n),
+                _ if s < n + 36 => Some(s - n - 27),
+                _ => None,
+            };
+        }
+        if let Some((n, outputs)) = menu
+            .strip_prefix("horizon:gui:")
+            .and_then(|n| n.split_once(':'))
+            .and_then(|(n, m)| Some((n.parse::<usize>().ok()?, m.parse::<usize>().ok()?)))
+            .filter(|(n, m)| (1..=36).contains(n) && (1..=8).contains(m))
+        {
+            let own = n + outputs;
+            return match s {
+                _ if s < n => Some(super::stations::INPUT + s),
+                _ if s < own => Some(super::stations::RESULT + s - n),
                 _ if s < own + 27 => Some(9 + s - own),
                 _ if s < own + 36 => Some(s - own - 27),
                 _ => None,
@@ -1656,9 +1669,17 @@ impl Game<'_> {
     pub(super) fn remote_station_kind(menu: &str) -> Option<super::stations::Kind> {
         use super::stations::Kind;
         if menu
-            .strip_prefix("horizon:gui:")
+            .strip_prefix("horizon:storage:")
             .and_then(|n| n.parse::<usize>().ok())
-            .is_some_and(|n| (1..=36).contains(&n))
+            .is_some_and(|n| (1..=50).contains(&n))
+        {
+            return Some(Kind::Mod);
+        }
+        if menu
+            .strip_prefix("horizon:gui:")
+            .and_then(|n| n.split_once(':'))
+            .and_then(|(n, m)| Some((n.parse::<usize>().ok()?, m.parse::<usize>().ok()?)))
+            .is_some_and(|(n, m)| (1..=36).contains(&n) && (1..=8).contains(&m))
         {
             return Some(Kind::Mod);
         }
@@ -5792,24 +5813,39 @@ impl Game<'_> {
                     .iter()
                     .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
                     .count();
-                if (1..=36).contains(&count)
-                    && gui
-                        .slots
-                        .iter()
-                        .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
-                        .count()
-                        == 1
+                let storage_only = gui
+                    .slots
+                    .iter()
+                    .all(|s| s.role == horizon_mods::gui::SlotRole::Storage);
+                let outputs = gui
+                    .slots
+                    .iter()
+                    .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
+                    .count();
+                if (if storage_only { 1..=50 } else { 1..=36 }).contains(&count)
+                    && (if storage_only {
+                        outputs == 0
+                    } else {
+                        (1..=8).contains(&outputs)
+                    })
                 {
                     let pos = target.map_or([0, 0, 0], |t| [t.0, t.1, t.2]);
                     self.remote_open_station(
                         p.container,
-                        format!("horizon:gui:{count}"),
+                        if storage_only {
+                            format!("horizon:storage:{count}")
+                        } else {
+                            format!("horizon:gui:{count}:{outputs}")
+                        },
                         super::stations::Kind::Mod,
                         horizon_client::text::Text::literal(label),
                         pos,
                     );
                     if let Some(station) = self.station.as_mut() {
                         station.inputs.resize(count, None);
+                        station
+                            .mod_extra_results
+                            .resize(outputs.saturating_sub(1), None);
                         station.mod_gui = Some(gui);
                     }
                     return;

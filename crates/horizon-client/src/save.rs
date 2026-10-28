@@ -393,6 +393,9 @@ pub use horizon_items::item_nbt::{
 /// is a chest, trapped chest or barrel).
 fn block_entity_id(e: &crate::containers::BlockEntity, block: &str) -> String {
     match (e, block) {
+        (crate::containers::BlockEntity::Chest(_), b) if !b.starts_with("minecraft:") => {
+            "horizon:mod_storage".to_owned()
+        }
         (
             crate::containers::BlockEntity::Chest(_),
             "minecraft:trapped_chest" | "minecraft:barrel" | "minecraft:dropper",
@@ -422,7 +425,12 @@ pub fn encode_block_entity(
         ("components", Tag::Compound(components)),
     ];
     match e {
-        BlockEntity::Chest(items) => entries.push(("Items", encode_items(items))),
+        BlockEntity::Chest(items) => {
+            entries.push(("Items", encode_items(items)));
+            if !block.starts_with("minecraft:") {
+                entries.push(("horizon:slot_count", Tag::Int(items.len() as i32)));
+            }
+        }
         BlockEntity::Furnace(f) => {
             entries.push(("Items", encode_items(&f.items)));
             entries.push(("lit_time_remaining", Tag::Int(f.lit_remaining)));
@@ -601,6 +609,16 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
     let id = text(tag.get("id"))?;
     let pos = (int("x")?, int("y")?, int("z")?);
+    if id == "horizon:mod_storage" {
+        let count = usize::try_from(int("horizon:slot_count")?).ok()?;
+        if !(1..=50).contains(&count) {
+            return None;
+        }
+        return Some((
+            pos,
+            BlockEntity::Chest(decode_items(tag.get("Items"), count)),
+        ));
+    }
     if id == "minecraft:end_gateway" {
         return Some((pos, BlockEntity::EndGateway(decode_end_gateway(tag))));
     }
@@ -3776,6 +3794,27 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mod_storage_preserves_variable_size_and_item_components() {
+        let mut stack = crate::items::ItemStack::new("minecraft:stone", 3);
+        stack
+            .data_mut()
+            .set_other("example:foreign", Some(horizon_world::nbt::Tag::Int(7)));
+        let mut slots = vec![None; 42];
+        slots[41] = Some(stack);
+        let pos = (3, 64, 7);
+        let tag = super::encode_block_entity(
+            pos,
+            &crate::containers::BlockEntity::Chest(slots.clone()),
+            "example:machine",
+        );
+        let (decoded_pos, decoded) = super::decode_block_entity(&tag).unwrap();
+        assert_eq!(decoded_pos, pos);
+        let crate::containers::BlockEntity::Chest(decoded) = decoded else {
+            panic!("expected storage");
+        };
+        assert_eq!(decoded, slots);
+    }
     #[test]
     fn points_of_interest_save_as_poi_sections() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {

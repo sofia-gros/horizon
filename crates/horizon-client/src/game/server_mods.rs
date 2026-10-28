@@ -63,7 +63,14 @@ impl Game<'_> {
         _player: &str,
         _inputs: &[Option<horizon_client::items::ItemStack>],
         _selection: Option<&str>,
-    ) -> Option<(horizon_client::items::ItemStack, Vec<u32>)> {
+    ) -> Option<(Vec<horizon_client::items::ItemStack>, Vec<u32>)> {
+        None
+    }
+    pub(super) fn mod_gui_progress(
+        &self,
+        _registration: &super::stations::ModRegistration,
+        _pos: [i32; 3],
+    ) -> Option<Vec<u8>> {
         None
     }
     pub(super) fn tick_server_mods(&mut self) {}
@@ -262,7 +269,14 @@ mod run {
                     .iter()
                     .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
                     .count();
-                if !(1..=36).contains(&inputs) || outputs != 1 {
+                let storage_only = outputs == 0
+                    && gui
+                        .slots
+                        .iter()
+                        .all(|s| s.role == horizon_mods::gui::SlotRole::Storage);
+                if !((storage_only && (1..=50).contains(&inputs))
+                    || ((1..=36).contains(&inputs) && (1..=8).contains(&outputs)))
+                {
                     return None;
                 }
             }
@@ -274,6 +288,25 @@ mod run {
                 ingredient_tags: r.ingredient_tags,
                 gui: r.gui,
             })
+        }
+
+        pub(in crate::game) fn mod_gui_progress(
+            &self,
+            registration: &super::super::stations::ModRegistration,
+            pos: [i32; 3],
+        ) -> Option<Vec<u8>> {
+            if self.mods.workstation_handlers.get(&registration.block) != Some(&registration.owner)
+            {
+                return None;
+            }
+            let reg = self
+                .mods
+                .mods
+                .workstation(&registration.block, &registration.owner)?;
+            if reg.gui != registration.gui {
+                return None;
+            }
+            self.mods.mods.gui_progress(&reg, self.dim.id(), pos)
         }
 
         /// Rebuild a checked result from the complete input snapshots. The mod
@@ -407,7 +440,7 @@ mod run {
             player: &str,
             inputs: &[Option<horizon_client::items::ItemStack>],
             selection: Option<&str>,
-        ) -> Option<(horizon_client::items::ItemStack, Vec<u32>)> {
+        ) -> Option<(Vec<horizon_client::items::ItemStack>, Vec<u32>)> {
             use horizon_mods::ItemReader;
             use horizon_world::nbt::Tag;
             let gui = registration.gui.as_ref()?;
@@ -431,12 +464,12 @@ mod run {
                 .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
                 .collect();
             if input_slots.len() != inputs.len()
-                || gui
-                    .slots
-                    .iter()
-                    .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
-                    .count()
-                    != 1
+                || !(1..=8).contains(
+                    &gui.slots
+                        .iter()
+                        .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
+                        .count(),
+                )
             {
                 return None;
             }
@@ -485,7 +518,14 @@ mod run {
                 .mods
                 .gui_workstation_preview(&reg, &views, selection)
                 .ok()??;
-            if plan.consume.len() != gui.slots.len() || plan.outputs.len() != 1 {
+            if plan.consume.len() != gui.slots.len()
+                || plan.outputs.len()
+                    != gui
+                        .slots
+                        .iter()
+                        .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
+                        .count()
+            {
                 return None;
             }
             let mut counts = Vec::with_capacity(inputs.len());
@@ -506,106 +546,114 @@ mod run {
             if !counts.iter().any(|c| *c > 0) {
                 return None;
             }
-            let output = plan.outputs.into_iter().next()?;
-            if self.res.items().get(&output.item).is_none() {
-                return None;
-            }
-            let mut result = if let Some(source) = output.source_slot {
-                let source = usize::try_from(source).ok()?;
-                let slot = gui.slots.get(source)?;
-                if slot.role == horizon_mods::gui::SlotRole::Output || plan.consume[source] != 1 {
+            let mut results = Vec::new();
+            let mut used_sources = std::collections::HashSet::new();
+            for output in plan.outputs {
+                if self.res.items().get(&output.item).is_none() {
                     return None;
                 }
-                let index = gui.slots[..source]
-                    .iter()
-                    .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
-                    .count();
-                let stack = inputs.get(index)?.as_ref()?;
-                if stack.count != 1 || &*stack.item != output.item {
-                    return None;
-                }
-                stack.clone()
-            } else {
-                let mut stack = horizon_client::items::ItemStack::new(&output.item, 1);
-                if output.text.is_some() {
-                    let mut leaf = Tag::String("".into());
-                    for key in reg.path.iter().rev() {
-                        leaf = Tag::compound([(key.as_str(), leaf)]);
+                let mut result = if let Some(source) = output.source_slot {
+                    let source = usize::try_from(source).ok()?;
+                    if !used_sources.insert(source) {
+                        return None;
                     }
-                    stack
-                        .data_mut()
-                        .set_other("minecraft:custom_data", Some(leaf));
-                }
-                stack
-            };
-            if output.tool.is_some() != output.durability.is_some()
-                || output.tool.is_some() != output.melee.is_some()
-            {
-                return None;
-            }
-            if let Some(text) = output.text {
-                let view = std::sync::Arc::new(horizon_client::mod_items::ServerItems(vec![(
-                    player.into(),
-                    0,
-                    result.clone(),
-                )]));
-                let profile = output.tool.map(|tool| horizon_mods::ServerToolProfile {
-                    rules: tool
-                        .rules
-                        .into_iter()
-                        .map(|r| horizon_mods::ServerToolRule {
-                            blocks: r.blocks,
-                            speed: r.speed,
-                            correct_for_drops: r.correct_for_drops,
-                        })
-                        .collect(),
-                    default_speed: tool.default_speed,
-                    damage_per_block: tool.damage_per_block,
-                    can_destroy_in_creative: tool.can_destroy_in_creative,
-                    mining_enabled: tool.mining_enabled,
-                    unbreakable: tool.unbreakable,
-                });
-                if let Some(profile) = &profile {
-                    horizon_mods::validate_tool_profile(profile).ok()?;
-                    if profile
-                        .rules
-                        .iter()
-                        .flat_map(|r| &r.blocks)
-                        .any(|selector| {
-                            if let Some(tag) = selector.strip_prefix('#') {
-                                !self.res.items().has_block_tag(tag)
-                            } else {
-                                self.pack.assets.registry.default_state(selector).is_none()
-                            }
-                        })
+                    let slot = gui.slots.get(source)?;
+                    if slot.role == horizon_mods::gui::SlotRole::Output || plan.consume[source] != 1
                     {
                         return None;
                     }
-                }
-                let melee = output.melee.map(|m| horizon_mods::ServerMeleeProfile {
-                    damage_bonus: m.damage_bonus,
-                    damage_multiplier: m.damage_multiplier,
-                    attack_speed: m.attack_speed,
-                    enabled: m.enabled,
-                });
-                let edit = horizon_mods::ItemEdit {
-                    owner: reg.owner,
-                    player: player.into(),
-                    path: reg.path,
-                    text,
-                    profile,
-                    durability: output.durability,
-                    melee,
-                    consumption: None,
-                    snapshot: view.clone(),
+                    let index = gui.slots[..source]
+                        .iter()
+                        .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
+                        .count();
+                    let stack = inputs.get(index)?.as_ref()?;
+                    if stack.count != 1 || &*stack.item != output.item {
+                        return None;
+                    }
+                    stack.clone()
+                } else {
+                    let mut stack = horizon_client::items::ItemStack::new(&output.item, 1);
+                    if output.text.is_some() {
+                        let mut leaf = Tag::String("".into());
+                        for key in reg.path.iter().rev() {
+                            leaf = Tag::compound([(key.as_str(), leaf)]);
+                        }
+                        stack
+                            .data_mut()
+                            .set_other("minecraft:custom_data", Some(leaf));
+                    }
+                    stack
                 };
-                let mut cell = Some(result);
-                view.apply(0, &mut cell, &edit).ok()?;
-                result = cell?;
-            } else if output.tool.is_some() {
-                return None;
+                if output.tool.is_some() != output.durability.is_some()
+                    || output.tool.is_some() != output.melee.is_some()
+                {
+                    return None;
+                }
+                if let Some(text) = output.text {
+                    let view = std::sync::Arc::new(horizon_client::mod_items::ServerItems(vec![(
+                        player.into(),
+                        0,
+                        result.clone(),
+                    )]));
+                    let profile = output.tool.map(|tool| horizon_mods::ServerToolProfile {
+                        rules: tool
+                            .rules
+                            .into_iter()
+                            .map(|r| horizon_mods::ServerToolRule {
+                                blocks: r.blocks,
+                                speed: r.speed,
+                                correct_for_drops: r.correct_for_drops,
+                            })
+                            .collect(),
+                        default_speed: tool.default_speed,
+                        damage_per_block: tool.damage_per_block,
+                        can_destroy_in_creative: tool.can_destroy_in_creative,
+                        mining_enabled: tool.mining_enabled,
+                        unbreakable: tool.unbreakable,
+                    });
+                    if let Some(profile) = &profile {
+                        horizon_mods::validate_tool_profile(profile).ok()?;
+                        if profile
+                            .rules
+                            .iter()
+                            .flat_map(|r| &r.blocks)
+                            .any(|selector| {
+                                if let Some(tag) = selector.strip_prefix('#') {
+                                    !self.res.items().has_block_tag(tag)
+                                } else {
+                                    self.pack.assets.registry.default_state(selector).is_none()
+                                }
+                            })
+                        {
+                            return None;
+                        }
+                    }
+                    let melee = output.melee.map(|m| horizon_mods::ServerMeleeProfile {
+                        damage_bonus: m.damage_bonus,
+                        damage_multiplier: m.damage_multiplier,
+                        attack_speed: m.attack_speed,
+                        enabled: m.enabled,
+                    });
+                    let edit = horizon_mods::ItemEdit {
+                        owner: reg.owner.clone(),
+                        player: player.into(),
+                        path: reg.path.clone(),
+                        text,
+                        profile,
+                        durability: output.durability,
+                        melee,
+                        consumption: None,
+                        snapshot: view.clone(),
+                    };
+                    let mut cell = Some(result);
+                    view.apply(0, &mut cell, &edit).ok()?;
+                    result = cell?;
+                } else if output.tool.is_some() {
+                    return None;
+                }
+                results.push(result);
             }
-            Some((result, counts))
+            Some((results, counts))
         }
 
         /// Called while the acting player's inventory is swapped into Game.

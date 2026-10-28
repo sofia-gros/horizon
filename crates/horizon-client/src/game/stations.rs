@@ -149,6 +149,7 @@ pub(super) struct Station {
     pub(super) pos: [i32; 3],
     pub(super) inputs: Vec<Option<ItemStack>>,
     pub(super) result: Option<ItemStack>,
+    pub(super) mod_extra_results: Vec<Option<ItemStack>>,
     pub(super) offers: EnchantOffers,
     bookcases: i32,
     pub(super) anvil: AnvilResult,
@@ -181,12 +182,34 @@ pub(super) struct Station {
     pub(super) mod_selection: Option<String>,
 }
 impl Station {
+    pub(super) fn mod_storage_indices(&self) -> Vec<usize> {
+        self.mod_gui.as_ref().map_or_else(Vec::new, |gui| {
+            gui.slots
+                .iter()
+                .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
+                .enumerate()
+                .filter_map(|(i, slot)| {
+                    (slot.role == horizon_mods::gui::SlotRole::Storage).then_some(i)
+                })
+                .collect()
+        })
+    }
+    pub(super) fn is_mod_storage(&self) -> bool {
+        self.mod_gui.as_ref().is_some_and(|gui| {
+            !gui.slots.is_empty()
+                && gui
+                    .slots
+                    .iter()
+                    .all(|s| s.role == horizon_mods::gui::SlotRole::Storage)
+        })
+    }
     fn new(kind: Kind, pos: [i32; 3]) -> Self {
         Self {
             kind,
             pos,
             inputs: vec![None; kind.inputs()],
             result: None,
+            mod_extra_results: Vec::new(),
             offers: EnchantOffers::default(),
             bookcases: 0,
             anvil: AnvilResult::default(),
@@ -340,6 +363,37 @@ impl Game<'_> {
                 None,
             );
             station.mod_gui = Some(gui.clone());
+            let outputs = gui
+                .slots
+                .iter()
+                .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
+                .count();
+            station
+                .mod_extra_results
+                .resize(outputs.saturating_sub(1), None);
+        }
+        let storage_indices = station.mod_storage_indices();
+        if !storage_indices.is_empty() {
+            let key = (pos[0], pos[1], pos[2]);
+            let count = storage_indices.len();
+            let created = !self.world.block_entities.contains_key(&key);
+            if created {
+                self.world
+                    .block_entities
+                    .insert(key, BlockEntity::Chest(vec![None; count]));
+            }
+            let Some(BlockEntity::Chest(slots)) = self.world.block_entities.get(&key) else {
+                return false;
+            };
+            if slots.len() != count {
+                return false;
+            }
+            for (index, stack) in storage_indices.into_iter().zip(slots) {
+                station.inputs[index] = stack.clone();
+            }
+            if created {
+                self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
+            }
         }
         station.mod_registration = registration;
         self.station = Some(station);
@@ -389,7 +443,13 @@ impl Game<'_> {
         if let Some(m) = station.merchant.as_mut() {
             self.merchant_closed(m);
         }
-        for stack in station.inputs.into_iter().flatten() {
+        let storage_indices = station.mod_storage_indices();
+        for stack in station
+            .inputs
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, stack)| (!storage_indices.contains(&i)).then_some(stack).flatten())
+        {
             self.give_or_drop(stack);
         }
     }
@@ -401,8 +461,9 @@ impl Game<'_> {
         }
         let s = self.station.as_ref()?;
         v.extend((0..s.inputs.len()).map(|i| INPUT + i));
-        if s.kind.result_pos().is_some() {
+        if s.kind.result_pos().is_some() && !s.is_mod_storage() {
             v.push(RESULT);
+            v.extend((0..s.mod_extra_results.len()).map(|i| RESULT + 1 + i));
         }
         Some(v)
     }
@@ -420,10 +481,11 @@ impl Game<'_> {
         }
         let s = self.station.as_ref()?;
         if let Some(gui) = &s.mod_gui {
-            let slot = if i == RESULT {
+            let slot = if i >= RESULT {
                 gui.slots
                     .iter()
-                    .find(|slot| slot.role == horizon_mods::gui::SlotRole::Output)
+                    .filter(|slot| slot.role == horizon_mods::gui::SlotRole::Output)
+                    .nth(i - RESULT)
             } else if i >= INPUT {
                 gui.slots
                     .iter()
@@ -451,6 +513,9 @@ impl Game<'_> {
     pub(super) fn station_slot_mut(&mut self, i: usize) -> &mut Option<ItemStack> {
         match self.station.as_mut() {
             Some(s) if i == RESULT => &mut s.result,
+            Some(s) if i > RESULT && i - RESULT - 1 < s.mod_extra_results.len() => {
+                &mut s.mod_extra_results[i - RESULT - 1]
+            }
             Some(s) if i >= INPUT && i < INPUT + s.inputs.len() => &mut s.inputs[i - INPUT],
             _ => &mut self.scratch_slot,
         }
@@ -497,6 +562,10 @@ impl Game<'_> {
             return;
         };
         if s.kind == Kind::Mod {
+            if s.is_mod_storage() {
+                self.station = Some(s);
+                return;
+            }
             if self.remote.is_none() {
                 let plan = s.mod_registration.as_ref().and_then(|r| {
                     let [x, y, z] = s.pos;
@@ -541,7 +610,17 @@ impl Game<'_> {
                         None
                     };
                     s.mod_counts = plan.as_ref().map(|(_, counts)| counts.clone());
-                    s.result = plan.map(|(result, _)| result);
+                    let results = plan.map(|(results, _)| results).unwrap_or_default();
+                    s.result = results.first().cloned();
+                    for (cell, result) in s.mod_extra_results.iter_mut().zip(
+                        results
+                            .into_iter()
+                            .skip(1)
+                            .map(Some)
+                            .chain(std::iter::repeat(None)),
+                    ) {
+                        *cell = result;
+                    }
                 }
             }
             self.station = Some(s);
@@ -1443,17 +1522,49 @@ impl Game<'_> {
             });
             {
                 let atlas = &self.gui.atlas;
-                Self::part(
-                    batch,
-                    atlas,
-                    kind.texture(),
-                    (0.0, 0.0),
-                    (176.0, 166.0),
-                    (ox, oy),
-                );
-                let (tx, ty) = kind.title_pos();
-                batch.text_styled(atlas, &title, ox + tx, oy + ty, GREY, false);
-                batch.text(atlas, &inventory_label, ox + 8.0, oy + 72.0, GREY, false);
+                if let Some(gui) = self.station.as_ref().and_then(|s| s.mod_gui.as_ref()) {
+                    let width = f32::from(gui.width);
+                    let height = f32::from(gui.height);
+                    batch.fill(atlas, ox, oy, width, height, rgba(198, 198, 198, 255));
+                    let inventory_x = (width - 176.0) / 2.0;
+                    Self::part(
+                        batch,
+                        atlas,
+                        kind.texture(),
+                        (0.0, 0.0),
+                        (176.0, 166.0),
+                        (ox + inventory_x, oy + height - 166.0),
+                    );
+                    batch.fill(
+                        atlas,
+                        ox + inventory_x + 7.0,
+                        oy + height - 150.0,
+                        162.0,
+                        54.0,
+                        rgba(198, 198, 198, 255),
+                    );
+                    batch.text_styled(atlas, &title, ox + 8.0, oy + 6.0, GREY, false);
+                    batch.text(
+                        atlas,
+                        &inventory_label,
+                        ox + inventory_x + 8.0,
+                        oy + height - 94.0,
+                        GREY,
+                        false,
+                    );
+                } else {
+                    Self::part(
+                        batch,
+                        atlas,
+                        kind.texture(),
+                        (0.0, 0.0),
+                        (176.0, 166.0),
+                        (ox, oy),
+                    );
+                    let (tx, ty) = kind.title_pos();
+                    batch.text_styled(atlas, &title, ox + tx, oy + ty, GREY, false);
+                    batch.text(atlas, &inventory_label, ox + 8.0, oy + 72.0, GREY, false);
+                }
             }
             if kind == Kind::Cartography {
                 self.draw_cartography(batch, ox, oy);
@@ -1467,6 +1578,11 @@ impl Game<'_> {
             match kind {
                 Kind::Mod => {
                     if let Some(gui) = &s.mod_gui {
+                        let progress = s
+                            .mod_registration
+                            .as_ref()
+                            .and_then(|r| self.mod_gui_progress(r, s.pos));
+                        let mut progress_index = 0;
                         for slot in &gui.slots {
                             batch.fill(
                                 atlas,
@@ -1475,6 +1591,14 @@ impl Game<'_> {
                                 18.0,
                                 18.0,
                                 rgba(100, 100, 100, 255),
+                            );
+                            batch.fill(
+                                atlas,
+                                ox + f32::from(slot.x) + 1.0,
+                                oy + f32::from(slot.y) + 1.0,
+                                16.0,
+                                16.0,
+                                rgba(150, 150, 150, 255),
                             );
                         }
                         for element in &gui.elements {
@@ -1519,15 +1643,32 @@ impl Game<'_> {
                                     y,
                                     width,
                                     height,
+                                    value,
                                     ..
-                                } => batch.fill(
-                                    atlas,
-                                    ox + f32::from(*x),
-                                    oy + f32::from(*y),
-                                    f32::from(*width),
-                                    f32::from(*height),
-                                    rgba(65, 65, 65, 255),
-                                ),
+                                } => {
+                                    let shown = progress
+                                        .as_ref()
+                                        .and_then(|v| v.get(progress_index))
+                                        .copied()
+                                        .unwrap_or(*value);
+                                    progress_index += 1;
+                                    batch.fill(
+                                        atlas,
+                                        ox + f32::from(*x),
+                                        oy + f32::from(*y),
+                                        f32::from(*width),
+                                        f32::from(*height),
+                                        rgba(65, 65, 65, 255),
+                                    );
+                                    batch.fill(
+                                        atlas,
+                                        ox + f32::from(*x),
+                                        oy + f32::from(*y),
+                                        f32::from(*width) * f32::from(shown) / 100.0,
+                                        f32::from(*height),
+                                        rgba(75, 185, 75, 255),
+                                    );
+                                }
                             }
                         }
                     } else {
@@ -2362,7 +2503,23 @@ impl Game<'_> {
             };
         };
         let recipes = &self.res.stations().recipes.stonecutting;
+        let mod_progress = s
+            .mod_registration
+            .as_ref()
+            .and_then(|r| self.mod_gui_progress(r, s.pos))
+            .or_else(|| {
+                s.mod_gui.as_ref().map(|gui| {
+                    gui.elements
+                        .iter()
+                        .filter_map(|e| match e {
+                            horizon_mods::gui::Element::Progress { value, .. } => Some(*value),
+                            _ => None,
+                        })
+                        .collect()
+                })
+            });
         serde_json::json!({
+            "mod_progress": mod_progress,
             "costs": s.offers.costs,
             "clues": s.offers.clues.iter().map(|c| c.as_ref().map(|(e, l)| format!("{e} {l}"))).collect::<Vec<_>>(),
             "bookcases": s.bookcases,

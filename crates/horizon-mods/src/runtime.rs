@@ -505,6 +505,7 @@ struct State {
     command_actor: Option<String>,
     registering_workstations: bool,
     workstations: Vec<WorkstationRegistration>,
+    gui_progress: std::collections::HashMap<(String, String, i32, i32, i32, String), u8>,
     mining_enabled: bool,
     melee_enabled: bool,
     limits: StoreLimits,
@@ -645,6 +646,55 @@ impl Mods {
                 .filter(|o| matches!(o, Output::Stopped { .. })),
         );
         result.ok_or("workstation mod trapped")?
+    }
+
+    /// Current transient progress values, in GUI declaration order.
+    pub fn gui_progress(
+        &self,
+        registration: &WorkstationRegistration,
+        dimension: &str,
+        pos: [i32; 3],
+    ) -> Option<Vec<u8>> {
+        if self
+            .workstation(&registration.block, &registration.owner)
+            .as_ref()
+            != Some(registration)
+        {
+            return None;
+        }
+        let state = self
+            .entries
+            .iter()
+            .find(|entry| {
+                entry
+                    .manifest
+                    .as_ref()
+                    .is_some_and(|m| m.id == registration.owner)
+            })?
+            .run
+            .as_ref()?
+            .store
+            .data();
+        let gui = registration.gui.as_ref()?;
+        Some(
+            gui.elements
+                .iter()
+                .filter_map(|element| match element {
+                    crate::gui::Element::Progress { id, value, .. } => {
+                        let key = (
+                            registration.block.clone(),
+                            dimension.to_owned(),
+                            pos[0],
+                            pos[1],
+                            pos[2],
+                            id.clone(),
+                        );
+                        Some(*state.gui_progress.get(&key).unwrap_or(value))
+                    }
+                    _ => None,
+                })
+                .collect(),
+        )
     }
 
     /// Changes whenever the running mods (so their commands) change.
@@ -858,6 +908,7 @@ impl Mods {
             command_actor: None,
             registering_workstations: true,
             workstations: Vec::new(),
+            gui_progress: Default::default(),
             mining_enabled: false,
             melee_enabled: false,
             limits: StoreLimitsBuilder::new()

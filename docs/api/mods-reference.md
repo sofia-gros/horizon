@@ -835,6 +835,7 @@ Experimental server workstation registration. A block opens a menu only for the 
 | --- | --- | --- |
 | `register` | `func(block: string, title: string, custom-path: list<string>, ingredient-tags: list<string>) -> result<_, string>` | Register a block, visible title and state path during initialization. The handler receives only this bounded custom string, and the host retains all other components. At most 32 registrations per mod. `ingredient-tags` requests at most 16 tag memberships for each preview. |
 | `register-gui` | `func(block: string, title: string, custom-path: list<string>, tags: list<string>, definition: string) -> result<_, string>` | Register a bounded declarative GUI definition for a block. The JSON provides slot coordinates, roles, acceptance selectors and elements. |
+| `set-progress` | `func(block: string, dimension: string, x: s32, y: s32, z: s32, id: string, value: u8) -> result<_, string>` | Set one registered progress element for a block instance, from 0 to 100. Updates are transient and must not be issued during a preview. |
 
 ## `workstation-events`
 
@@ -879,7 +880,7 @@ A workstation preview. The host discards queued host outputs and blocks storage 
 
 Access: exported by the mod: the game calls it.
 
-Generic workstation recipe planning. The host checks each complete input snapshot and output before committing any consumption.
+Generic workstation recipe planning. The host checks each complete input snapshot and output before committing any consumption. Taking an output delivers the other outputs to the player's inventory in the same commit; insufficient inventory space rejects the take without changing inputs.
 
 ### type `input`
 
