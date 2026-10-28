@@ -1,11 +1,18 @@
-use horizon_mod_sdk::server::{Registration, ServerMod, items_edit, items_tools};
+use horizon_mod_sdk::server::{Args, Player, Registration, ServerMod, items_edit, items_tools};
 
 struct MiningGuest;
 impl ServerMod for MiningGuest {
     fn init() -> Result<(Self, Registration), String> {
         items_tools::enable_mining_events();
         items_tools::enable_melee_events();
-        Ok((Self, Registration::new()))
+        Ok((
+            Self,
+            Registration::new().command("online").command("miner-only"),
+        ))
+    }
+
+    fn command(&mut self, _: &Player, _: &str, _: &Args) -> Result<Option<String>, String> {
+        Ok(Some("mining fixture".into()))
     }
 
     fn melee_hit(

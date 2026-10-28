@@ -1236,6 +1236,73 @@ fn a_server_mod_runs_only_where_the_world_does() {
     );
 }
 
+#[test]
+fn server_command_collision_keeps_first_owner_in_both_load_orders() {
+    let dir = mods_dir().join("command-collision");
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let core = std::fs::read(root.join(
+        "target/mods-test/wasm32-unknown-unknown/release/horizon_mods_test_mining_guest.wasm",
+    ))
+    .unwrap();
+    let manifest = "id = \"miner_fixture\"\nname = \"Miner Fixture\"\nversion = \"0.1.0\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\"]\n";
+    let miner = dir.join("miner.hmod");
+    std::fs::write(
+        &miner,
+        Package::write(manifest, &componentize(&core).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let welcome = mods_dir().join("welcome.hmod");
+    let player = alex();
+    for miner_first in [false, true] {
+        let paths = if miner_first {
+            [miner.clone(), welcome.clone()]
+        } else {
+            [welcome.clone(), miner.clone()]
+        };
+        let mut mods = Mods::load_for(Runs::Server, &paths, |_| true, |_| false);
+        assert!(
+            mods.entries().iter().all(|e| e.status == Status::Running),
+            "{:?}",
+            mods.entries().iter().map(|e| &e.status).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            mods.server_commands()
+                .filter(|c| c.name == "online")
+                .count(),
+            1
+        );
+        assert!(mods.server_commands().any(|c| c.name == "miner-only"));
+        mods.set_snapshot(Snapshot {
+            players: vec![player.clone()],
+            ..Snapshot::default()
+        });
+        assert!(mods.server_command(&player, "online"));
+        let expected = if miner_first {
+            "mining fixture"
+        } else {
+            "Alex (the_nether)"
+        };
+        assert_eq!(
+            mods.drain(),
+            [Output::Reply {
+                player: player.id.clone(),
+                text: expected.into(),
+                error: false
+            }]
+        );
+        assert!(mods.server_command(&player, "miner-only"));
+        assert_eq!(
+            mods.drain(),
+            [Output::Reply {
+                player: player.id.clone(),
+                text: "mining fixture".into(),
+                error: false
+            }]
+        );
+    }
+}
+
 /// Capability `recipes`: the guest reads tables as big as vanilla's (1,500
 /// items, 1,600 recipes of nine five-item slots) within one command's fuel.
 #[test]
