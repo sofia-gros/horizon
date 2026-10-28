@@ -73,7 +73,7 @@ New SDK server mods export this optional interface as well. Older server mods co
 
 ## World `gui-workstation-host`
 
-- Imports (what the game offers): `items-tools`, `workstation-events`
+- Imports (what the game offers): `workstation-events`
 - Exports (what the mod provides): `gui-workstation-events`
 
 ## World `horizon-ui-mod`
