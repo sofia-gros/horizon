@@ -831,10 +831,43 @@ Access: capability `workstations`.
 
 Experimental server workstation registration. A block opens a menu only for the handler explicitly named in its owning content mod's declaration.
 
+### record `storage-slot`
+
+A storage slot from an immutable snapshot; custom-text is the registered path only.
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` |  |
+| `item` | `option<string>` |  |
+| `count` | `u32` |  |
+| `custom-text` | `option<string>` |  |
+
+### record `storage-view`
+
+An opaque call-scoped snapshot and its complete ordered slots.
+
+| Field | Type | |
+| --- | --- | --- |
+| `token` | `u64` |  |
+| `slots` | `list<storage-slot>` |  |
+
+### record `storage-change`
+
+Consume and then insert an optional plain item into one storage slot.
+
+| Field | Type | |
+| --- | --- | --- |
+| `slot` | `string` |  |
+| `consume` | `u32` |  |
+| `item` | `option<string>` |  |
+| `count` | `u32` |  |
+
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `register` | `func(block: string, title: string, custom-path: list<string>, ingredient-tags: list<string>) -> result<_, string>` | Register a block, visible title and state path during initialization. The handler receives only this bounded custom string, and the host retains all other components. At most 32 registrations per mod. `ingredient-tags` requests at most 16 tag memberships for each preview. |
 | `register-gui` | `func(block: string, title: string, custom-path: list<string>, tags: list<string>, definition: string) -> result<_, string>` | Register a bounded declarative GUI definition for a block. The JSON provides slot coordinates, roles, acceptance selectors and elements. |
+| `storage-snapshot` | `func(block: string, dimension: string, x: s32, y: s32, z: s32) -> result<storage-view, string>` | Snapshot a loaded, explicitly delegated workstation's persistent storage. |
+| `storage-commit` | `func(token: u64, changes: list<storage-change>) -> result<_, string>` | Queue an atomic storage transaction based on this call's snapshot. Ok means queued; the host rechecks authorization, complete stacks and slot filters before applying. |
 | `set-progress` | `func(block: string, dimension: string, x: s32, y: s32, z: s32, id: string, value: u8) -> result<_, string>` | Set one registered progress element for a block instance, from 0 to 100. Updates are transient and must not be issued during a preview. |
 
 ## `workstation-events`

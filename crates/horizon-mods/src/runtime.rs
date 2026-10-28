@@ -238,6 +238,7 @@ impl Runs {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Output {
     ItemEdit(ItemEdit),
+    MachineTransaction(MachineTransaction),
     /// `chat.show`: a line after the mod's name.
     Chat {
         name: String,
@@ -316,12 +317,69 @@ pub enum Output {
     },
 }
 
+/// Immutable native capture retained by the host for complete-stack revalidation.
+pub trait MachineCapture: std::any::Any + std::fmt::Debug + Send + Sync {}
+impl<T: std::any::Any + std::fmt::Debug + Send + Sync> MachineCapture for T {}
+
+#[derive(Clone, Debug)]
+pub struct MachineSlotView {
+    pub id: String,
+    pub item: Option<String>,
+    pub count: u32,
+    pub custom_text: Option<String>,
+}
+#[derive(Clone, Debug)]
+pub struct MachineView {
+    pub slots: Vec<MachineSlotView>,
+    pub capture: Arc<dyn MachineCapture>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MachineChange {
+    pub slot: String,
+    pub consume: u32,
+    pub item: Option<String>,
+    pub count: u32,
+}
+#[derive(Clone, Debug)]
+pub struct MachineTransaction {
+    pub registration: WorkstationRegistration,
+    pub dimension: String,
+    pub pos: [i32; 3],
+    pub capture: Arc<dyn MachineCapture>,
+    pub changes: Vec<MachineChange>,
+}
+impl PartialEq for MachineTransaction {
+    fn eq(&self, other: &Self) -> bool {
+        self.registration == other.registration
+            && self.dimension == other.dimension
+            && self.pos == other.pos
+            && Arc::ptr_eq(&self.capture, &other.capture)
+            && self.changes == other.changes
+    }
+}
+#[derive(Clone, Debug)]
+struct MachineRead {
+    registration: WorkstationRegistration,
+    dimension: String,
+    pos: [i32; 3],
+    view: MachineView,
+}
+
 /// The game's world as capability `world` reads it during a call: the
 /// game lends one with [`Mods::lend_world`] and takes it back after.
 pub trait WorldView: std::any::Any + Send {
     /// The block state at a position, `minecraft:oak_log[axis=y]`; `None`
     /// where no chunk of that dimension is loaded.
     fn block(&self, dimension: &str, x: i32, y: i32, z: i32) -> Option<String>;
+    /// Capture owned storage at a loaded block; implementations enforce delegation.
+    fn machine_snapshot(
+        &self,
+        _registration: &WorkstationRegistration,
+        _dimension: &str,
+        _pos: [i32; 3],
+    ) -> Result<MachineView, String> {
+        Err("machine snapshots are unavailable".into())
+    }
     /// The biome at a position, `minecraft:plains`; `None` as for blocks.
     fn biome(&self, dimension: &str, x: i32, y: i32, z: i32) -> Option<String>;
     /// Whether `dimension` is one the server has.
@@ -506,6 +564,8 @@ struct State {
     registering_workstations: bool,
     workstations: Vec<WorkstationRegistration>,
     gui_progress: GuiProgress,
+    machine_reads: Vec<(u64, MachineRead)>,
+    machine_token: u64,
     mining_enabled: bool,
     melee_enabled: bool,
     limits: StoreLimits,
@@ -563,6 +623,19 @@ pub struct Mods {
 }
 
 impl Mods {
+    /// Whether a running mod registered persistent workstation storage.
+    pub fn wants_machine_storage(&self) -> bool {
+        self.entries.iter().filter_map(|e| e.run.as_ref()).any(|r| {
+            r.store.data().workstations.iter().any(|w| {
+                w.gui.as_ref().is_some_and(|g| {
+                    g.slots
+                        .iter()
+                        .any(|s| s.role == crate::gui::SlotRole::Storage)
+                })
+            })
+        })
+    }
+
     /// The progress stores currently owned by running mods.
     pub fn gui_progress_stores(&self) -> Vec<GuiProgress> {
         self.entries
@@ -1036,6 +1109,8 @@ impl Mods {
             registering_workstations: true,
             workstations: Vec::new(),
             gui_progress: Default::default(),
+            machine_reads: Vec::new(),
+            machine_token: 0,
             mining_enabled: false,
             melee_enabled: false,
             limits: StoreLimitsBuilder::new()
@@ -1216,14 +1291,16 @@ impl Mods {
         run.store.data_mut().item_edits.clear();
         run.store.data_mut().item_edits_left = 8;
         run.store.data_mut().command_actor = None;
+        run.store.data_mut().machine_reads.clear();
         let started = Instant::now();
         let result = run.store.set_fuel(fuel).and_then(|()| f(run));
         // An average over about the last 64 calls.
         entry.cost = (entry.cost * 63 + started.elapsed()) / 64;
         let data = run.store.data_mut();
         if result.is_err() {
-            data.out
-                .retain(|output| !matches!(output, Output::ItemEdit(_)));
+            data.out.retain(|output| {
+                !matches!(output, Output::ItemEdit(_) | Output::MachineTransaction(_))
+            });
         }
         let (open, close) = (
             std::mem::take(&mut data.ui.open),

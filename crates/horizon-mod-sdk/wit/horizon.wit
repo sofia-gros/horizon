@@ -801,6 +801,17 @@ interface workstations {
     /// Register a bounded declarative GUI definition for a block. The JSON
     /// provides slot coordinates, roles, acceptance selectors and elements.
     register-gui: func(block: string, title: string, custom-path: list<string>, tags: list<string>, definition: string) -> result<_, string>;
+    /// A storage slot from an immutable snapshot; custom-text is the registered path only.
+    record storage-slot { id: string, item: option<string>, count: u32, custom-text: option<string> }
+    /// An opaque call-scoped snapshot and its complete ordered slots.
+    record storage-view { token: u64, slots: list<storage-slot> }
+    /// Consume and then insert an optional plain item into one storage slot.
+    record storage-change { slot: string, consume: u32, item: option<string>, count: u32 }
+    /// Snapshot a loaded, explicitly delegated workstation's persistent storage.
+    storage-snapshot: func(block: string, dimension: string, x: s32, y: s32, z: s32) -> result<storage-view, string>;
+    /// Queue an atomic storage transaction based on this call's snapshot. Ok means queued;
+    /// the host rechecks authorization, complete stacks and slot filters before applying.
+    storage-commit: func(token: u64, changes: list<storage-change>) -> result<_, string>;
     /// Set one registered progress element for a block instance, from 0 to 100.
     /// Updates are transient and must not be issued during a preview.
     set-progress: func(block: string, dimension: string, x: s32, y: s32, z: s32, id: string, value: u8) -> result<_, string>;

@@ -64,6 +64,105 @@ impl super::server_bindings::horizon::mods::workstations::Host for State {
         Ok(())
     }
 
+    fn storage_snapshot(
+        &mut self,
+        block: String,
+        dimension: String,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> Result<super::server_bindings::horizon::mods::workstations::StorageView, String> {
+        use super::server_bindings::horizon::mods::workstations::{StorageSlot, StorageView};
+        if self.previewing_workstation || self.machine_reads.len() >= 16 {
+            return Err(
+                "storage snapshots unavailable during preview or read limit reached".into(),
+            );
+        }
+        let registration = self
+            .workstations
+            .iter()
+            .find(|r| r.block == block && r.gui.is_some())
+            .cloned()
+            .ok_or("workstation not registered by this mod")?;
+        let guard = self.world.lock().map_err(|_| "world unavailable")?;
+        let world = guard.as_ref().ok_or("world unavailable")?;
+        let pos = [x, y, z];
+        let view = world.machine_snapshot(&registration, &dimension, pos)?;
+        let slots = view
+            .slots
+            .iter()
+            .map(|slot| StorageSlot {
+                id: slot.id.clone(),
+                item: slot.item.clone(),
+                count: slot.count,
+                custom_text: slot.custom_text.clone(),
+            })
+            .collect();
+        drop(guard);
+        self.machine_token = self
+            .machine_token
+            .checked_add(1)
+            .ok_or("snapshot token exhausted")?;
+        let token = self.machine_token;
+        self.machine_reads.push((
+            token,
+            super::MachineRead {
+                registration,
+                dimension,
+                pos,
+                view,
+            },
+        ));
+        Ok(StorageView { token, slots })
+    }
+
+    fn storage_commit(
+        &mut self,
+        token: u64,
+        changes: Vec<super::server_bindings::horizon::mods::workstations::StorageChange>,
+    ) -> Result<(), String> {
+        if self.previewing_workstation || changes.is_empty() || changes.len() > 50 {
+            return Err("invalid storage transaction".into());
+        }
+        let read = self
+            .machine_reads
+            .iter()
+            .find(|(id, _)| *id == token)
+            .map(|(_, read)| read)
+            .ok_or("invalid snapshot")?
+            .clone();
+        let mut seen = std::collections::HashSet::new();
+        let mut requested = Vec::with_capacity(changes.len());
+        for change in changes {
+            if !seen.insert(change.slot.clone())
+                || !read.view.slots.iter().any(|s| s.id == change.slot)
+                || change.item.is_some() != (change.count > 0)
+                || (change.consume == 0 && change.count == 0)
+            {
+                return Err("invalid storage change".into());
+            }
+            requested.push(super::MachineChange {
+                slot: change.slot,
+                consume: change.consume,
+                item: change.item,
+                count: change.count,
+            });
+        }
+        if self.out.iter().any(|o| matches!(o, super::Output::MachineTransaction(t) if std::sync::Arc::ptr_eq(&t.capture, &read.view.capture))) {
+            return Err("snapshot already committed".into());
+        }
+        self.out.push(super::Output::MachineTransaction(
+            super::MachineTransaction {
+                registration: read.registration,
+                dimension: read.dimension,
+                pos: read.pos,
+                capture: read.view.capture,
+                changes: requested,
+            },
+        ));
+        Ok(())
+    }
+
     fn set_progress(
         &mut self,
         block: String,
