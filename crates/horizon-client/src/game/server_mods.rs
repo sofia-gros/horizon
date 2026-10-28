@@ -600,9 +600,7 @@ mod run {
             let mut results = Vec::new();
             let mut used_sources = std::collections::HashSet::new();
             for output in plan.outputs {
-                let Some(item) = self.res.items().get(&output.item) else {
-                    return None;
-                };
+                let item = self.res.items().get(&output.item)?;
                 if output.count == 0 || output.count > item.max_stack.min(99) {
                     return None;
                 }
@@ -621,7 +619,7 @@ mod run {
                         .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
                         .count();
                     let stack = inputs.get(index)?.as_ref()?;
-                    if stack.count != 1 || output.count != 1 || &*stack.item != output.item {
+                    if stack.count != 1 || output.count != 1 || *stack.item != output.item {
                         return None;
                     }
                     stack.clone()

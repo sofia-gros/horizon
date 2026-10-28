@@ -6726,7 +6726,7 @@ impl Game<'_> {
             let [x, y, z] = station.pos;
             let block = &self.res.facts().get(self.world.block(x, y, z)).name;
             let range = if self.creative { 9.0 } else { 8.5 };
-            if &**block != registration.block
+            if **block != registration.block
                 || self.mod_workstation(&registration.block).as_ref() != Some(registration)
                 || !self.eye_position().is_some_and(|eye| {
                     horizon_client::lan::guest::within_block_range(eye, range, station.pos)
@@ -6752,7 +6752,7 @@ impl Game<'_> {
                 .get(self.world.block(key.0, key.1, key.2))
                 .name;
             let range = if self.creative { 9.0 } else { 8.5 };
-            if &**block != registration.block
+            if **block != registration.block
                 || self.mod_workstation(&registration.block).as_ref() != Some(registration)
                 || !self.eye_position().is_some_and(|eye| {
                     horizon_client::lan::guest::within_block_range(eye, range, station.pos)

@@ -232,7 +232,7 @@ impl Game<'_> {
                 let valid = gs.mod_registration.as_ref().is_some_and(|r| {
                     let [x, y, z] = gs.pos;
                     let block = &self.res.facts().get(self.world.block(x, y, z)).name;
-                    &**block == r.block && self.mod_workstation(&r.block).as_ref() == Some(r)
+                    **block == r.block && self.mod_workstation(&r.block).as_ref() == Some(r)
                 }) && host.hub.guests[gi].within_block_range(gs.pos, 4.0);
                 if !valid {
                     host.play.entry(conn).or_default().station = Some(gs);
@@ -247,7 +247,7 @@ impl Game<'_> {
                         .facts()
                         .get(self.world.block(key.0, key.1, key.2))
                         .name;
-                    &**block == r.block && self.mod_workstation(&r.block).as_ref() == Some(r)
+                    **block == r.block && self.mod_workstation(&r.block).as_ref() == Some(r)
                 }) && host.hub.guests[gi].within_block_range(gs.pos, 4.0);
                 if !valid {
                     host.play.entry(conn).or_default().station = Some(gs);
@@ -304,11 +304,10 @@ impl Game<'_> {
                     .collect();
                 if let Some(BlockEntity::ModStorage(_, slots)) =
                     self.world.block_entities.get_mut(&key)
+                    && slots != snapshot
                 {
-                    if slots != snapshot {
-                        slots.clone_from(snapshot);
-                        self.world.modified.insert((key.0 >> 4, key.2 >> 4));
-                    }
+                    slots.clone_from(snapshot);
+                    self.world.modified.insert((key.0 >> 4, key.2 >> 4));
                 }
             }
             if gs.kind == StationKind::Mod && mod_counts(&gs).1 > 0 {
@@ -682,7 +681,7 @@ impl Game<'_> {
                     .facts()
                     .get(self.world.block(pos[0], pos[1], pos[2]))
                     .name;
-                if &**actual != registration.block
+                if **actual != registration.block
                     || self.mod_workstation(&registration.block).as_ref() != Some(&registration)
                     || !guest.within_block_range(pos, 4.0)
                 {
