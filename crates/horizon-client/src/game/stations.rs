@@ -180,6 +180,7 @@ pub(super) struct Station {
     pub(super) mod_cost: Option<u32>,
     pub(super) mod_counts: Option<Vec<u32>>,
     pub(super) mod_selection: Option<String>,
+    pub(super) mod_scroll_dragging: bool,
 }
 impl Station {
     pub(super) fn is_mod_display(&self) -> bool {
@@ -235,6 +236,7 @@ impl Station {
             mod_cost: None,
             mod_counts: None,
             mod_selection: None,
+            mod_scroll_dragging: false,
         }
     }
     pub(super) fn new_kind(kind: Kind, pos: [i32; 3]) -> Self {
@@ -426,6 +428,14 @@ impl Game<'_> {
             }
         }
         station.mod_registration = registration;
+        if let (Some(reg), Some(gui)) = (&station.mod_registration, &station.mod_gui)
+            && gui.shared_selection
+        {
+            station.mod_selection = self
+                .mod_gui_progress(reg, pos)
+                .and_then(|values| values.last().copied())
+                .and_then(|code| gui.selection_from_code(code).map(str::to_owned));
+        }
         self.station = Some(station);
         self.station_changed();
         self.beacon_opened();
@@ -586,12 +596,105 @@ impl Game<'_> {
             None => String::new(),
         }
     }
+    /// Refresh an open local viewer after another player changes shared state.
+    pub(super) fn sync_local_mod_selection(&mut self) -> bool {
+        if self.remote.is_some() {
+            return false;
+        }
+        let selection = self.station.as_ref().and_then(|station| {
+            let gui = station
+                .mod_gui
+                .as_ref()
+                .filter(|gui| gui.shared_selection)?;
+            let registration = station.mod_registration.as_ref()?;
+            let values = self.mod_gui_progress(registration, station.pos)?;
+            Some(
+                values
+                    .last()
+                    .and_then(|code| gui.selection_from_code(*code))
+                    .map(str::to_owned),
+            )
+        });
+        let storage = self.station.as_ref().and_then(|station| {
+            let gui = station.mod_gui.as_ref()?;
+            let ids: Vec<_> = gui
+                .slots
+                .iter()
+                .filter(|slot| slot.role == horizon_mods::gui::SlotRole::Storage)
+                .map(|slot| slot.id.clone())
+                .collect();
+            if ids.is_empty() {
+                return None;
+            }
+            let [x, y, z] = station.pos;
+            let registration = station.mod_registration.as_ref()?;
+            if self
+                .res
+                .facts()
+                .get(self.world.block(x, y, z))
+                .name
+                .as_ref()
+                != registration.block
+            {
+                return None;
+            }
+            let BlockEntity::ModStorage(saved_ids, stacks) =
+                self.world.block_entities.get(&(x, y, z))?
+            else {
+                return None;
+            };
+            if *saved_ids != ids || stacks.len() != ids.len() {
+                return None;
+            }
+            Some(
+                station
+                    .mod_storage_indices()
+                    .into_iter()
+                    .zip(stacks.iter().cloned())
+                    .collect::<Vec<_>>(),
+            )
+        });
+        let Some(station) = self.station.as_mut() else {
+            return false;
+        };
+        let mut changed = false;
+        if let Some(selection) = selection
+            && station.mod_selection != selection
+        {
+            station.mod_selection = selection;
+            changed = true;
+        }
+        if let Some(storage) = storage {
+            for (index, stack) in storage {
+                if station.inputs[index] != stack {
+                    station.inputs[index] = stack;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return false;
+        }
+        self.station_changed();
+        true
+    }
+
     /// `slotsChanged` / `createResult` for the open station.
     pub(super) fn station_changed(&mut self) {
         let Some(mut s) = self.station.take() else {
             return;
         };
         if s.kind == Kind::Mod {
+            if self.remote.is_none()
+                && let (Some(gui), Some(registration)) = (&s.mod_gui, &s.mod_registration)
+                && gui.shared_selection
+                && let Some(values) = self.mod_gui_progress(registration, s.pos)
+            {
+                s.mod_selection = values
+                    .last()
+                    .and_then(|code| gui.selection_from_code(*code))
+                    .map(str::to_owned);
+            }
             if s.is_mod_storage() || s.is_mod_display() {
                 self.station = Some(s);
                 return;
@@ -1036,18 +1139,22 @@ impl Game<'_> {
                 .iter()
                 .filter_map(|element| match element {
                     horizon_mods::gui::Element::Button {
+                        id,
                         x,
                         y,
                         width,
                         height,
                         enabled: true,
                         ..
-                    } => Some([
-                        f32::from(*x),
-                        f32::from(*y),
-                        f32::from(*width),
-                        f32::from(*height),
-                    ]),
+                    } => {
+                        let (x, y) = gui.button_position(id, *x, *y, s.start)?;
+                        Some([
+                            f32::from(x),
+                            f32::from(y),
+                            f32::from(*width),
+                            f32::from(*height),
+                        ])
+                    }
                     _ => None,
                 })
                 .collect();
@@ -1094,14 +1201,38 @@ impl Game<'_> {
         let local = (self.cursor.0 - ox, self.cursor.1 - oy);
         let shift = self.has_shift_down();
         if !right {
+            if let Some(s) = self.station.as_mut()
+                && let Some(scroll) = s.mod_gui.as_ref().and_then(|gui| gui.scroll.as_ref())
+                && scroll.max_row() > 0
+                && inside(
+                    local,
+                    f32::from(scroll.bar_x),
+                    f32::from(scroll.bar_y),
+                    f32::from(scroll.handle_width),
+                    f32::from(scroll.bar_height),
+                )
+            {
+                s.mod_scroll_dragging = true;
+                let travel = f32::from(scroll.bar_height - scroll.handle_height);
+                let ratio = if travel > 0.0 {
+                    ((local.1 - f32::from(scroll.bar_y) - f32::from(scroll.handle_height) / 2.0)
+                        / travel)
+                        .clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                s.start = (ratio * scroll.max_row() as f32).round() as usize;
+                return true;
+            }
             let selected = self
                 .station
                 .as_ref()
-                .and_then(|s| s.mod_gui.as_ref())
-                .and_then(|gui| {
-                    gui.button_at(local.0, local.1)
-                        .map(|(index, id)| (index, id.to_owned()))
-                });
+                .and_then(|s| {
+                    s.mod_gui
+                        .as_ref()
+                        .and_then(|gui| gui.button_at_row(local.0, local.1, s.start))
+                })
+                .map(|(index, id)| (index, id.to_owned()));
             if let Some((index, id)) = selected {
                 if self.remote.is_some() {
                     if let Some(s) = self.station.as_mut() {
@@ -1247,12 +1378,49 @@ impl Game<'_> {
         let Some(s) = self.station.as_mut() else {
             return;
         };
+        if let Some(scroll) = s.mod_gui.as_ref().and_then(|gui| gui.scroll.as_ref()) {
+            s.start = scroll.row_after_scroll(s.start, d);
+            return;
+        }
         if s.kind != Kind::Stonecutter || s.stone.recipes.len() <= 12 {
             return;
         }
         let rows = s.stone.recipes.len().div_ceil(4) - 3;
         let first_row = (s.start / 4) as i32 - d.signum() as i32;
         s.start = first_row.clamp(0, rows as i32) as usize * 4;
+    }
+    pub(super) fn mod_scroll_drag(&mut self) {
+        let Some(size) = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+        else {
+            return;
+        };
+        let (_, oy) = self.inventory_origin(&HudBatch::new(size));
+        let Some(s) = self.station.as_mut() else {
+            return;
+        };
+        if !s.mod_scroll_dragging {
+            return;
+        }
+        let Some(scroll) = s.mod_gui.as_ref().and_then(|gui| gui.scroll.as_ref()) else {
+            return;
+        };
+        let travel = f32::from(scroll.bar_height - scroll.handle_height);
+        let ratio = if travel > 0.0 {
+            ((self.cursor.1 - oy - f32::from(scroll.bar_y) - f32::from(scroll.handle_height) / 2.0)
+                / travel)
+                .clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        s.start = (ratio * scroll.max_row() as f32).round() as usize;
+    }
+    pub(super) fn mod_scroll_release(&mut self) {
+        if let Some(station) = self.station.as_mut() {
+            station.mod_scroll_dragging = false;
+        }
     }
     /// Whether keyboard text goes to the anvil rename box.
     pub(super) fn station_typing(&self) -> bool {
@@ -1706,6 +1874,44 @@ impl Game<'_> {
                             .as_ref()
                             .and_then(|r| self.mod_gui_progress(r, s.pos));
                         let mut progress_index = 0;
+                        if let Some(scroll) = &gui.scroll {
+                            let enabled = scroll.max_row() > 0;
+                            let hovered = enabled
+                                && inside(
+                                    local,
+                                    f32::from(scroll.bar_x),
+                                    f32::from(scroll.bar_y),
+                                    f32::from(scroll.handle_width),
+                                    f32::from(scroll.bar_height),
+                                );
+                            let name = scroll.handle.texture(enabled, false, hovered);
+                            let region = scroll
+                                .handle
+                                .regions
+                                .as_ref()
+                                .map(|regions| regions.region(enabled, false, hovered));
+                            if let Some(rect) = atlas
+                                .sprites
+                                .get(name.strip_prefix("minecraft:").unwrap_or(name))
+                                .and_then(|rect| Self::gui_region(*rect, region))
+                            {
+                                let travel = f32::from(scroll.bar_height - scroll.handle_height);
+                                let offset = if enabled {
+                                    travel * s.start.min(scroll.max_row()) as f32
+                                        / scroll.max_row() as f32
+                                } else {
+                                    0.0
+                                };
+                                batch.rect_uv(
+                                    ox + f32::from(scroll.bar_x),
+                                    oy + f32::from(scroll.bar_y) + offset,
+                                    f32::from(scroll.handle_width),
+                                    f32::from(scroll.handle_height),
+                                    rect,
+                                    u32::MAX,
+                                );
+                            }
+                        }
                         for slot in &gui.slots {
                             if !slot.background {
                                 continue;
@@ -1729,15 +1935,79 @@ impl Game<'_> {
                         }
                         for element in &gui.elements {
                             match element {
-                                horizon_mods::gui::Element::Label { x, y, text } => {
+                                horizon_mods::gui::Element::Label {
+                                    x,
+                                    y,
+                                    text,
+                                    color,
+                                    when_selected,
+                                    slot,
+                                    matches,
+                                    excludes,
+                                    scale,
+                                } => {
+                                    if when_selected
+                                        .as_deref()
+                                        .is_some_and(|id| s.mod_selection.as_deref() != Some(id))
+                                    {
+                                        continue;
+                                    }
+                                    let value = slot
+                                        .as_ref()
+                                        .and_then(|id| {
+                                            gui.slots
+                                                .iter()
+                                                .filter(|slot| {
+                                                    slot.role != horizon_mods::gui::SlotRole::Output
+                                                })
+                                                .position(|slot| slot.id == *id)
+                                        })
+                                        .and_then(|index| s.inputs.get(index))
+                                        .and_then(Option::as_ref);
+                                    if slot.is_some() && value.is_none() {
+                                        continue;
+                                    }
+                                    let has_selector = |selector: &str, item: &horizon_client::items::ItemStack| {
+                                        if let Some(tag) = selector.strip_prefix('#') {
+                                            self.res.items().item_tags.get(tag).is_some_and(|items| items.contains(&*item.item))
+                                        } else { &*item.item == selector }
+                                    };
+                                    if value.is_some_and(|item| {
+                                        matches
+                                            .as_deref()
+                                            .is_some_and(|filter| !has_selector(filter, item))
+                                            || excludes
+                                                .as_deref()
+                                                .is_some_and(|filter| has_selector(filter, item))
+                                    }) {
+                                        continue;
+                                    }
+                                    let label = value.map_or_else(
+                                        || text.clone(),
+                                        |item| {
+                                            text.replace(
+                                                "{item}",
+                                                item.item.rsplit(':').next().unwrap_or(&item.item),
+                                            )
+                                            .replace("{count}", &item.count.to_string())
+                                        },
+                                    );
+                                    let x = ox + f32::from(*x);
+                                    let y = oy + f32::from(*y);
+                                    let start = batch.vertices.len();
                                     batch.text(
                                         atlas,
-                                        text,
-                                        ox + f32::from(*x),
-                                        oy + f32::from(*y),
-                                        GREY,
+                                        &label,
+                                        x,
+                                        y,
+                                        color.map_or(GREY, |[r, g, b]| rgba(r, g, b, 255)),
                                         false,
                                     );
+                                    let scale = f32::from(scale.unwrap_or(100)) / 100.0;
+                                    for vertex in &mut batch.vertices[start..] {
+                                        vertex.pos[0] = x + (vertex.pos[0] - x) * scale;
+                                        vertex.pos[1] = y + (vertex.pos[1] - y) * scale;
+                                    }
                                 }
                                 horizon_mods::gui::Element::Image { .. } => {}
                                 horizon_mods::gui::Element::Button {
@@ -1749,10 +2019,16 @@ impl Game<'_> {
                                     text,
                                     enabled,
                                     images,
+                                    icon,
                                 } => {
+                                    let Some((button_x, button_y)) =
+                                        gui.button_position(id, *x, *y, s.start)
+                                    else {
+                                        continue;
+                                    };
                                     let (x, y, w, h) = (
-                                        f32::from(*x),
-                                        f32::from(*y),
+                                        f32::from(button_x),
+                                        f32::from(button_y),
                                         f32::from(*width),
                                         f32::from(*height),
                                     );
@@ -1791,6 +2067,21 @@ impl Game<'_> {
                                             w,
                                             h,
                                             rgba(105, 105, 105, 255),
+                                        );
+                                    }
+                                    if let Some(rect) = icon.as_ref().and_then(|name| {
+                                        atlas
+                                            .sprites
+                                            .get(name.strip_prefix("minecraft:").unwrap_or(name))
+                                    }) {
+                                        let side = (w - 2.0).min(h - 2.0).clamp(0.0, 16.0);
+                                        batch.rect_uv(
+                                            ox + x + (w - side) / 2.0,
+                                            oy + y + (h - side) / 2.0,
+                                            side,
+                                            side,
+                                            *rect,
+                                            u32::MAX,
                                         );
                                     }
                                     batch.text(

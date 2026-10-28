@@ -6792,6 +6792,9 @@ impl Game<'_> {
                 })
             })
         {
+            if self.sync_local_mod_selection() {
+                return true;
+            }
             let previous = self
                 .station
                 .as_ref()
@@ -13085,6 +13088,7 @@ impl ApplicationHandler for Game<'_> {
                             self.creative_screen.drag_scrollbar(self.cursor.1 - oy);
                         }
                         if self.screen == Screen::Inventory {
+                            self.mod_scroll_drag();
                             self.loom_drag();
                         }
                         if matches!(self.screen, Screen::Inventory | Screen::Creative) {
@@ -13361,6 +13365,7 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Inventory => {
                             self.inventory_mouse_release(button == MouseButton::Right);
                             self.loom_release();
+                            self.mod_scroll_release();
                         }
                         Screen::Chat if pressed && button == MouseButton::Left => self.chat_click(),
                         Screen::Creative if pressed => {

@@ -1581,7 +1581,7 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
         .unwrap();
     assert_eq!(
         mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
-        Some(vec![10])
+        Some(vec![10, 0])
     );
     assert!(
         mods.gui_button(
@@ -1617,7 +1617,25 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
     .unwrap();
     assert_eq!(
         mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
-        Some(vec![42])
+        Some(vec![42, 1])
+    );
+    assert!(
+        mods.gui_button(
+            &generic,
+            &player.id,
+            "minecraft:overworld",
+            [0, 71, 2],
+            "fail"
+        )
+        .is_err()
+    );
+    assert_eq!(
+        mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
+        Some(vec![42, 1])
+    );
+    assert_eq!(
+        mods.gui_progress(&generic, "minecraft:overworld", [1, 71, 2]),
+        Some(vec![10, 0])
     );
     let generic_inputs = [None, None, None];
     let planned = mods
@@ -1633,7 +1651,7 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
     assert!(!storage.join("preview-write").exists());
     assert_eq!(
         mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
-        Some(vec![42])
+        Some(vec![42, 1])
     );
     let tool = horizon_mods::WorkstationInput {
         item: "example:tool".into(),
@@ -1667,7 +1685,7 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
     assert_eq!(std::fs::read(storage.join("normal")).unwrap(), b"ok");
     assert_eq!(
         mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
-        Some(vec![73])
+        Some(vec![73, 1])
     );
     ingredient.item = "storage-trap".into();
     assert!(
@@ -1679,6 +1697,115 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
         b"original"
     );
     assert!(!storage.join("created").exists());
+}
+
+#[test]
+fn failed_gui_buttons_do_not_exhaust_selection_capacity() {
+    let dir = mods_dir().join("gui-button-rollback");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let wasm = std::fs::read(root.join(
+        "target/mods-test/wasm32-unknown-unknown/release/horizon_mods_test_mining_guest.wasm",
+    ))
+    .unwrap();
+    let path = dir.join("fixture.hmod");
+    let manifest = "id = \"rollback_fixture\"\nname = \"Rollback\"\nversion = \"0.1.0\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\", \"workstations\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\", \"workstations\"]\n";
+    std::fs::write(
+        &path,
+        Package::write(manifest, &componentize(&wasm).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let other_path = dir.join("other.hmod");
+    let mut other_wasm = wasm.clone();
+    let from = b"example:gui_station";
+    let to = b"example:alt_station";
+    for i in 0..=other_wasm.len() - from.len() {
+        if &other_wasm[i..i + from.len()] == from {
+            other_wasm[i..i + from.len()].copy_from_slice(to);
+        }
+    }
+    let other_manifest = manifest.replace("rollback_fixture", "rollback_other");
+    std::fs::write(
+        &other_path,
+        Package::write(&other_manifest, &componentize(&other_wasm).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let mut mods = Mods::load(&[path, other_path], |_| true, |_| false);
+    let registration = mods
+        .workstation("example:gui_station", "rollback_fixture")
+        .unwrap();
+    let other = mods
+        .workstation("example:alt_station", "rollback_other")
+        .unwrap();
+    mods.gui_button(
+        &other,
+        "player",
+        "minecraft:overworld",
+        [7, 71, 2],
+        "choose",
+    )
+    .unwrap();
+    for x in 0..4096 {
+        assert!(
+            mods.gui_button(
+                &registration,
+                "player",
+                "minecraft:overworld",
+                [x, 71, 2],
+                "fail"
+            )
+            .is_err()
+        );
+    }
+    mods.gui_button(
+        &registration,
+        "player",
+        "minecraft:overworld",
+        [4097, 71, 2],
+        "choose",
+    )
+    .unwrap();
+    assert_eq!(
+        mods.gui_progress(&registration, "minecraft:overworld", [4097, 71, 2]),
+        Some(vec![42, 1])
+    );
+    assert_eq!(
+        mods.gui_progress(&other, "minecraft:overworld", [7, 71, 2]),
+        Some(vec![42, 1])
+    );
+    assert!(
+        mods.gui_button(
+            &registration,
+            "player",
+            "minecraft:overworld",
+            [4097, 71, 2],
+            "fail"
+        )
+        .is_err()
+    );
+    assert_eq!(
+        mods.gui_progress(&registration, "minecraft:overworld", [4097, 71, 2]),
+        Some(vec![42, 1])
+    );
+    let store = mods.gui_progress_stores().remove(0);
+    assert!(
+        mods.gui_button(
+            &registration,
+            "player",
+            "minecraft:overworld",
+            [4098, 71, 2],
+            "trap"
+        )
+        .is_err()
+    );
+    let mut locations = Vec::new();
+    store.retain_blocks(|_, _, pos| {
+        locations.push(pos);
+        true
+    });
+    assert!(locations.iter().all(|p| *p == [4097, 71, 2]));
+    assert_eq!(locations.len(), 2);
 }
 
 #[test]

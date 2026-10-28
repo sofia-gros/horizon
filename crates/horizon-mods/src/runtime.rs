@@ -806,25 +806,36 @@ impl Mods {
             .store
             .data();
         let gui = registration.gui.as_ref()?;
-        Some(
-            gui.elements
-                .iter()
-                .filter_map(|element| match element {
-                    crate::gui::Element::Progress { id, value, .. } => {
-                        let key = (
-                            registration.block.clone(),
-                            dimension.to_owned(),
-                            pos[0],
-                            pos[1],
-                            pos[2],
-                            id.clone(),
-                        );
-                        Some(*state.gui_progress.lock().get(&key).unwrap_or(value))
-                    }
-                    _ => None,
-                })
-                .collect(),
-        )
+        let mut values: Vec<u8> = gui
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                crate::gui::Element::Progress { id, value, .. } => {
+                    let key = (
+                        registration.block.clone(),
+                        dimension.to_owned(),
+                        pos[0],
+                        pos[1],
+                        pos[2],
+                        id.clone(),
+                    );
+                    Some(*state.gui_progress.lock().get(&key).unwrap_or(value))
+                }
+                _ => None,
+            })
+            .collect();
+        if gui.shared_selection {
+            let key = (
+                registration.block.clone(),
+                dimension.to_owned(),
+                pos[0],
+                pos[1],
+                pos[2],
+                "$selection".to_owned(),
+            );
+            values.push(*state.gui_progress.lock().get(&key).unwrap_or(&0));
+        }
+        Some(values)
     }
 
     /// Deliver one validated button event to its registered owner.
@@ -865,6 +876,44 @@ impl Mods {
         {
             return Err("missing GUI button callback".into());
         }
+        let selection = registration
+            .gui
+            .as_ref()
+            .filter(|gui| gui.shared_selection)
+            .and_then(|gui| gui.selection_code(id));
+        let selection_key = (
+            registration.block.clone(),
+            dimension.to_owned(),
+            pos[0],
+            pos[1],
+            pos[2],
+            "$selection".to_owned(),
+        );
+        let reservation = if selection.is_some() {
+            let progress = self.entries[i]
+                .run
+                .as_ref()
+                .expect("checked")
+                .store
+                .data()
+                .gui_progress
+                .clone();
+            let inserted = {
+                let mut entries = progress.lock();
+                if entries.contains_key(&selection_key) {
+                    false
+                } else {
+                    if entries.len() >= 4096 {
+                        return Err("too many workstation progress entries".into());
+                    }
+                    entries.insert(selection_key.clone(), 0);
+                    true
+                }
+            };
+            Some((progress, inserted))
+        } else {
+            None
+        };
         let start = self.out.len();
         let result = self.call(i, FUEL_EVENT, |run| {
             run.gui_workstation
@@ -883,6 +932,9 @@ impl Mods {
                 )
         });
         if !matches!(result, Some(Ok(()))) {
+            if let Some((progress, true)) = &reservation {
+                progress.lock().remove(&selection_key);
+            }
             let discarded = self.out.split_off(start);
             self.out.extend(
                 discarded
@@ -890,7 +942,18 @@ impl Mods {
                     .filter(|o| matches!(o, Output::Stopped { .. })),
             );
         }
-        result.ok_or("workstation mod trapped")?
+        result.ok_or("workstation mod trapped")??;
+        if let Some(selection) = selection {
+            self.entries[i]
+                .run
+                .as_ref()
+                .ok_or("workstation mod stopped")?
+                .store
+                .data()
+                .gui_progress
+                .set(selection_key, selection)?;
+        }
+        Ok(())
     }
 
     /// Changes whenever the running mods (so their commands) change.
