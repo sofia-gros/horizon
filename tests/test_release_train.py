@@ -1,5 +1,8 @@
 import datetime as dt
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -231,11 +234,23 @@ class ReleaseTrainTests(unittest.TestCase):
         # GitHub's latest is a game release: whoever lands on it is sent to the launcher first (#1647).
         _, body = train.notes("game", "v0.2.50", [pr(1)], ["- Sound cuts out after an hour."])
         self.assertTrue(body.startswith('<h3>Want to play? Download the <a href="https://playhorizon.dev">Horizon launcher'))
-        self.assertIn('href="https://github.com/horizon-rust/horizon/releases?q=launcher&amp;expanded=true"', body)
+        self.assertIn(f'href="https://github.com/{train.REPO}/releases?q=launcher&amp;expanded=true"', body)
         self.assertNotIn("\n", train.PLAYERS, "one line: one HTML block, which ends at the blank line after it")
         self.assertEqual(body.count("playhorizon.dev"), 1, "said once, at the top")
         _, body = train.notes("game", "v0.2.51", [], [])
         self.assertTrue(body.startswith(train.PLAYERS + "\n\nRebuilt from the latest main."))
+
+    def test_launcher_release_link_uses_the_active_repository(self):
+        # REPO and PLAYERS are initialized at import time, so use a fresh
+        # interpreter for each repository instead of modifying the live module.
+        for repo in ("horizon-rust/horizon", "sofia-gros/horizon"):
+            with self.subTest(repo=repo):
+                env = dict(os.environ, GITHUB_REPOSITORY=repo)
+                body = subprocess.check_output(
+                    [sys.executable, "-c", "from tools.release_train import PLAYERS; print(PLAYERS)"],
+                    env=env, text=True,
+                )
+                self.assertIn(f'href="https://github.com/{repo}/releases?q=launcher&amp;expanded=true"', body)
 
     def test_known_issues_are_the_bullets_of_the_file(self):
         with tempfile.TemporaryDirectory() as temp:

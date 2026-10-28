@@ -208,7 +208,7 @@ impl Game<'_> {
         if let Some((per_attack, max)) = weapon
             && max > 0
             && !self.creative
-            && !horizon_client::item_tool::unbreakable(&stack)
+            && !horizon_client::item_tool::unbreakable(stack)
         {
             let loss = self.durability_loss(stack, per_attack);
             let cell = self.held_mut();
