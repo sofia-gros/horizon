@@ -47,6 +47,41 @@ impl ItemReader for ServerItems {
 }
 
 impl ServerItems {
+    /// Stage a checked main-hand edit and consumption from another inventory
+    /// slot, then commit both together. The caller must serialize all access to
+    /// this inventory from snapshot capture through commit, and capture
+    /// `ingredient` at the same time as `self`. This function does not track
+    /// revisions and must not be used with a preview that can outlive a write.
+    /// This does not authorize a recipe, select a player, or validate a menu.
+    pub fn apply_consuming(
+        &self,
+        selected: usize,
+        inventory: &mut [Option<ItemStack>],
+        ingredient_slot: usize,
+        ingredient: &ItemStack,
+        count: u32,
+        edit: &horizon_mods::ItemEdit,
+    ) -> Result<(), String> {
+        if selected == ingredient_slot || count == 0 || count > ingredient.count {
+            return Err("invalid ingredient consumption".into());
+        }
+        let held = inventory.get(selected).ok_or("invalid selected slot")?;
+        let input = inventory
+            .get(ingredient_slot)
+            .ok_or("invalid ingredient slot")?;
+        if input.as_ref() != Some(ingredient) {
+            return Err("ingredient changed; edit rejected".into());
+        }
+        let mut changed = held.clone();
+        self.apply(selected, &mut changed, edit)?;
+        let mut remainder = ingredient.clone();
+        remainder.count -= count;
+        // All checks and fallible transformations are complete before writes.
+        inventory[selected] = changed;
+        inventory[ingredient_slot] = (remainder.count != 0).then_some(remainder);
+        Ok(())
+    }
+
     /// Apply associated text and mining settings as one checked stack replacement.
     pub fn apply(
         &self,
@@ -233,6 +268,109 @@ impl ServerItems {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn consuming_edit_checks_both_stacks_before_committing() {
+        let mut tool = ItemStack::new("example:tool", 1);
+        tool.data_mut().set_other(
+            "minecraft:custom_data",
+            Some(Tag::compound([
+                ("state", Tag::String("old".into())),
+                ("foreign", Tag::Int(91)),
+            ])),
+        );
+        let mut material = ItemStack::new("example:material", 3);
+        material
+            .data_mut()
+            .set_other("example:foreign", Some(Tag::Int(42)));
+        let snapshot = std::sync::Arc::new(ServerItems(vec![("alice".into(), 0, tool.clone())]));
+        let edit = horizon_mods::ItemEdit {
+            owner: "example_mod".into(),
+            player: "alice".into(),
+            path: vec!["state".into()],
+            text: "new".into(),
+            snapshot: snapshot.clone(),
+            durability: None,
+            melee: None,
+            profile: None,
+        };
+        let original = vec![Some(tool), Some(material.clone())];
+        for (slot, count) in [(0, 1), (1, 0), (1, 4), (2, 1)] {
+            let mut inventory = original.clone();
+            assert!(
+                snapshot
+                    .apply_consuming(0, &mut inventory, slot, &material, count, &edit)
+                    .is_err()
+            );
+            assert_eq!(inventory, original);
+        }
+        let mut inventory = original.clone();
+        inventory[1].as_mut().unwrap().damage = 1;
+        let before = inventory.clone();
+        assert!(
+            snapshot
+                .apply_consuming(0, &mut inventory, 1, &material, 2, &edit)
+                .is_err()
+        );
+        assert_eq!(inventory, before);
+        inventory = original.clone();
+        inventory[0].as_mut().unwrap().damage = 1;
+        let before = inventory.clone();
+        assert!(
+            snapshot
+                .apply_consuming(0, &mut inventory, 1, &material, 2, &edit)
+                .is_err()
+        );
+        assert_eq!(inventory, before);
+        let mut exhausted = original.clone();
+        snapshot
+            .apply_consuming(0, &mut exhausted, 1, &material, 3, &edit)
+            .unwrap();
+        assert_eq!(exhausted[1], None);
+        inventory = original;
+        snapshot
+            .apply_consuming(0, &mut inventory, 1, &material, 2, &edit)
+            .unwrap();
+        assert_eq!(inventory[1].as_ref().unwrap().count, 1);
+        assert_eq!(
+            inventory[1]
+                .as_ref()
+                .unwrap()
+                .data()
+                .unwrap()
+                .other("example:foreign"),
+            Some(&Tag::Int(42))
+        );
+        assert_eq!(
+            inventory[0]
+                .as_ref()
+                .unwrap()
+                .data()
+                .unwrap()
+                .other("minecraft:custom_data")
+                .unwrap()
+                .get("foreign"),
+            Some(&Tag::Int(91))
+        );
+        assert_eq!(
+            inventory[0]
+                .as_ref()
+                .unwrap()
+                .data()
+                .unwrap()
+                .other("minecraft:custom_data")
+                .unwrap()
+                .get("state"),
+            Some(&Tag::String("new".into()))
+        );
+        let after = inventory.clone();
+        assert!(
+            snapshot
+                .apply_consuming(0, &mut inventory, 1, &material, 2, &edit)
+                .is_err()
+        );
+        assert_eq!(inventory, after);
+    }
 
     #[test]
     fn profiles_update_text_and_controls_atomically_and_keep_foreign_data() {
