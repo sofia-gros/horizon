@@ -1245,7 +1245,7 @@ fn server_command_collision_keeps_first_owner_in_both_load_orders() {
         "target/mods-test/wasm32-unknown-unknown/release/horizon_mods_test_mining_guest.wasm",
     ))
     .unwrap();
-    let manifest = "id = \"miner_fixture\"\nname = \"Miner Fixture\"\nversion = \"0.1.0\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\"]\n";
+    let manifest = "id = \"miner_fixture\"\nname = \"Miner Fixture\"\nversion = \"0.1.0\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\n";
     let miner = dir.join("miner.hmod");
     std::fs::write(
         &miner,
@@ -1568,6 +1568,21 @@ fn mining_callbacks_isolate_distinct_mods_and_failures() {
                 }),
             )
         }
+        fn inventory_slot(
+            &self,
+            player: &str,
+            slot: u32,
+            _: &[String],
+        ) -> Result<Option<horizon_mods::ServerHeldStack>, String> {
+            Ok(
+                (player == alex().id && slot == 1).then(|| horizon_mods::ServerHeldStack {
+                    item: "example:ingredient".into(),
+                    count: 2,
+                    damage: 0,
+                    custom_text: None,
+                }),
+            )
+        }
     }
     let dir = mods_dir().join("mining-isolation");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -1578,7 +1593,7 @@ fn mining_callbacks_isolate_distinct_mods_and_failures() {
     let wasm = componentize(&core).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
     let paths: Vec<_> = ["miner_a", "miner_b"].iter().map(|id| {
-        let manifest = format!("id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\"]\n");
+        let manifest = format!("id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\n");
         let path = dir.join(format!("{id}.hmod"));
         std::fs::write(&path, Package::write(&manifest, &wasm).unwrap()).unwrap();
         path
@@ -1600,6 +1615,31 @@ fn mining_callbacks_isolate_distinct_mods_and_failures() {
         players: vec![player.clone()],
         ..Snapshot::default()
     });
+    assert!(mods.server_command(&player, "consume-fixture"));
+    let out = mods.drain();
+    let edit = out
+        .iter()
+        .find_map(|o| {
+            if let Output::ItemEdit(edit) = o {
+                Some(edit)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(edit.consumption, Some((1, 1)));
+    assert!(mods.server_command(&player, "consume-fixture other"));
+    let out = mods.drain();
+    assert!(!out.iter().any(|o| matches!(o, Output::ItemEdit(_))));
+    assert!(out.iter().any(
+        |o| matches!(o, Output::Reply { error: true, text, .. } if text.contains("invoking player"))
+    ));
+    assert!(mods.server_command(&player, "consume-fixture error"));
+    let out = mods.drain();
+    assert!(!out.iter().any(|o| matches!(o, Output::ItemEdit(_))));
+    assert!(out.iter().any(
+        |o| matches!(o, Output::Reply { error: true, text, .. } if text == "fixture rollback")
+    ));
     for owner in ["miner_a", "miner_b"] {
         let edits = mods.server_mined(
             owner,

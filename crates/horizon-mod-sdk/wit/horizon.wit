@@ -680,6 +680,7 @@ interface items-read {
     /// keys, each at most 128 UTF-8 bytes. At most 16 reads per hook call.
     /// No arbitrary NBT parsing or command execution is exposed.
     main-hand: func(player: string, custom-path: list<string>) -> result<option<held-stack>, string>;
+
 }
 
 /// Experimental server-only capability `items-edit`: compare and replace one
@@ -772,6 +773,21 @@ interface items-tools {
     }
     /// Atomically replace state, tool, vanilla durability and melee settings.
     replace-main-hand-combat-profile: func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32, melee: melee-profile) -> result<_, string>;
+
+}
+
+/// Experimental server-only inventory capability; command actor only.
+interface inventory-transactions {
+    use items-read.{held-stack};
+    use items-tools.{profile, melee-profile};
+    /// Read a slot 0..35 of the invoking player's inventory during a command.
+    /// Shares main-hand's bounds and read budget. Other hooks cannot read slots.
+    inventory-slot: func(player: string, slot: u32, custom-path: list<string>) -> result<option<held-stack>, string>;
+    /// During a player command, atomically apply the checked combat profile
+    /// edit and consume `count` from a distinct slot 0..35 captured in the same
+    /// snapshot. The invoking player must be the target. The server rechecks
+    /// both complete stacks; ok means queued, not committed.
+    replace-main-hand-combat-profile-consuming: func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32, melee: melee-profile, slot: u32, count: u32) -> result<_, string>;
 }
 
 /// What the server calls in a server mod (manifest `api = "0.3"`,
@@ -905,6 +921,7 @@ world horizon-server-mod {
     import items-edit;
     import %world;
     import items-tools;
+    import inventory-transactions;
     export server-events;
 }
 

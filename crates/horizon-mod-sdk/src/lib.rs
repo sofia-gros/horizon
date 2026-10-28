@@ -200,6 +200,7 @@ pub mod server {
         Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,
         ServerCommand,
     };
+    pub use horizon::mods::inventory_transactions;
     pub use horizon::mods::items_edit;
     pub use horizon::mods::items_read::{self, HeldStack};
     pub use horizon::mods::items_tools;

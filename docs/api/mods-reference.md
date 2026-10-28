@@ -22,6 +22,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `world` | [`world`](#world) | read and change the world's blocks |
 | `recipes` | [`recipes`](#recipes) | read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items |
 | `items-tools` | [`items-tools`](#items-tools) | change held items' mining settings, unbreakable setting and associated custom-data strings on the server |
+| `inventory-transactions` | [`inventory-transactions`](#inventory-transactions) | read and consume the invoking player's inventory while changing their held tool on the server |
 
 ## World `horizon-mod`
 
@@ -34,14 +35,14 @@ A client mod: runs in the player's game.
 
 A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
 
-- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`
+- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`, `inventory-transactions`
 - Exports (what the mod provides): `server-events`
 
 ## World `horizon-server-mining-mod`
 
 New SDK server mods export this optional interface as well. Older server mods continue to load through horizon-server-mod without receiving it.
 
-- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`
+- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`, `inventory-transactions`
 - Exports (what the mod provides): `mining-events`, `server-events`
 
 ## World `mining-host`
@@ -51,7 +52,7 @@ New SDK server mods export this optional interface as well. Older server mods co
 
 ## World `horizon-server-melee-mod`
 
-- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`
+- Imports (what the game offers): `log`, `storage`, `players`, `items-read`, `items-edit`, `world`, `items-tools`, `inventory-transactions`
 - Exports (what the mod provides): `melee-events`, `mining-events`, `server-events`
 
 ## World `melee-host`
@@ -784,6 +785,29 @@ Generic main-hand combat settings resolved by the mod for this stack.
 | `replace-main-hand-profile` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile) -> result<_, string>` | Same comparison, text limits and shared attempt budget as items-edit. On success the existing custom string, Tool component, unbreakable setting and host-owned mining control data are applied together. Other data stays. Selectors must exist in the server's block/tag catalog at application time. The reserved custom_data root horizon:tool_control cannot be a text target. The first profile edit claims the stack for the calling mod. A later profile edit by a different mod, or a malformed existing owner, is rejected without changing the stack. No ownership transfer is provided. |
 | `replace-main-hand-profile-durability` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32) -> result<_, string>` | Atomically update the same checked state and profile, plus vanilla damage and max-damage components. Maximum is positive and damage must not exceed it. This does not itself prevent vanilla destruction. |
 | `replace-main-hand-combat-profile` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32, melee: melee-profile) -> result<_, string>` | Atomically replace state, tool, vanilla durability and melee settings. |
+
+## `inventory-transactions`
+
+Access: capability `inventory-transactions`.
+
+Experimental server-only inventory capability; command actor only.
+
+### type `held-stack`
+
+`type held-stack = held-stack`
+
+### type `profile`
+
+`type profile = profile`
+
+### type `melee-profile`
+
+`type melee-profile = melee-profile`
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `inventory-slot` | `func(player: string, slot: u32, custom-path: list<string>) -> result<option<held-stack>, string>` | Read a slot 0..35 of the invoking player's inventory during a command. Shares main-hand's bounds and read budget. Other hooks cannot read slots. |
+| `replace-main-hand-combat-profile-consuming` | `func(player: string, custom-path: list<string>, expected: string, replacement: string, tool: profile, damage: u32, max-damage: u32, melee: melee-profile, slot: u32, count: u32) -> result<_, string>` | During a player command, atomically apply the checked combat profile edit and consume `count` from a distinct slot 0..35 captured in the same snapshot. The invoking player must be the target. The server rechecks both complete stacks; ok means queued, not committed. |
 
 ## `server-events`
 

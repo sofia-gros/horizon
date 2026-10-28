@@ -6,6 +6,61 @@ use horizon_world::nbt::Tag;
 #[derive(Debug)]
 pub struct ServerItems(pub Vec<(String, usize, ItemStack)>);
 
+/// A command snapshot of held stacks and player inventories.
+#[derive(Debug)]
+pub struct ServerInventories {
+    pub held: ServerItems,
+    pub slots: Vec<(String, Vec<Option<ItemStack>>)>,
+}
+
+impl ItemReader for ServerInventories {
+    fn main_hand(&self, player: &str, path: &[String]) -> Result<Option<ServerHeldStack>, String> {
+        self.held.main_hand(player, path)
+    }
+    fn inventory_slot(
+        &self,
+        player: &str,
+        slot: u32,
+        path: &[String],
+    ) -> Result<Option<ServerHeldStack>, String> {
+        let stack = self
+            .slots
+            .iter()
+            .find(|(id, _)| id == player)
+            .and_then(|(_, slots)| slots.get(slot as usize))
+            .and_then(Option::as_ref);
+        match stack {
+            Some(stack) => ServerItems(vec![(player.into(), slot as usize, stack.clone())])
+                .main_hand(player, path),
+            None => Ok(None),
+        }
+    }
+}
+
+impl ServerInventories {
+    pub fn apply(
+        &self,
+        selected: usize,
+        inventory: &mut [Option<ItemStack>],
+        edit: &horizon_mods::ItemEdit,
+    ) -> Result<(), String> {
+        if let Some((slot, count)) = edit.consumption {
+            let ingredient = self
+                .slots
+                .iter()
+                .find(|(id, _)| id == &edit.player)
+                .and_then(|(_, slots)| slots.get(slot as usize))
+                .and_then(Option::as_ref)
+                .ok_or("no captured ingredient")?;
+            self.held
+                .apply_consuming(selected, inventory, slot as usize, ingredient, count, edit)
+        } else {
+            let cell = inventory.get_mut(selected).ok_or("invalid selected slot")?;
+            self.held.apply(selected, cell, edit)
+        }
+    }
+}
+
 impl ItemReader for ServerItems {
     fn main_hand(&self, player: &str, path: &[String]) -> Result<Option<ServerHeldStack>, String> {
         let Some((_, _, stack)) = self.0.iter().find(|(id, _, _)| id == player) else {
@@ -274,6 +329,237 @@ mod tests {
     use super::*;
 
     #[test]
+    fn another_mod_cannot_take_over_an_existing_profile() {
+        let mut tool = ItemStack::new("example:tool", 1);
+        tool.data_mut().set_other(
+            "minecraft:custom_data",
+            Some(Tag::compound([
+                ("state", Tag::String("old".into())),
+                ("foreign", Tag::Int(7)),
+            ])),
+        );
+        let first = std::sync::Arc::new(ServerItems(vec![("alice".into(), 0, tool.clone())]));
+        let mut edit = horizon_mods::ItemEdit {
+            owner: "mod_a".into(),
+            player: "alice".into(),
+            path: vec!["state".into()],
+            text: "first".into(),
+            snapshot: first.clone(),
+            durability: None,
+            melee: None,
+            consumption: None,
+            profile: Some(horizon_mods::ServerToolProfile {
+                rules: vec![],
+                default_speed: 1.0,
+                damage_per_block: 0,
+                can_destroy_in_creative: true,
+                mining_enabled: true,
+                unbreakable: false,
+            }),
+        };
+        let mut cell = Some(tool);
+        first.apply(0, &mut cell, &edit).unwrap();
+        let captured = std::sync::Arc::new(ServerItems(vec![(
+            "alice".into(),
+            0,
+            cell.clone().unwrap(),
+        )]));
+        edit.owner = "mod_b".into();
+        edit.snapshot = captured.clone();
+        edit.text = "second".into();
+        let before = cell.clone();
+        assert!(captured.apply(0, &mut cell, &edit).is_err());
+        assert_eq!(cell, before);
+        let path = vec!["horizon:tool_control".into(), "owner".into()];
+        assert_eq!(
+            captured
+                .main_hand("alice", &path)
+                .unwrap()
+                .unwrap()
+                .custom_text
+                .as_deref(),
+            Some("mod_a")
+        );
+        edit.owner = "mod_a".into();
+        captured.apply(0, &mut cell, &edit).unwrap();
+        let updated = ServerItems(vec![("alice".into(), 0, cell.unwrap())]);
+        assert_eq!(
+            updated
+                .main_hand("alice", &path)
+                .unwrap()
+                .unwrap()
+                .custom_text
+                .as_deref(),
+            Some("mod_a")
+        );
+    }
+
+    #[test]
+    fn malformed_profile_owner_rejects_edit_without_changes() {
+        for control in [Tag::Int(1), Tag::compound([("owner", Tag::Int(5))])] {
+            let mut tool = ItemStack::new("example:tool", 1);
+            tool.data_mut().set_other(
+                "minecraft:custom_data",
+                Some(Tag::compound([
+                    ("state", Tag::String("old".into())),
+                    ("horizon:tool_control", control),
+                ])),
+            );
+            let snapshot =
+                std::sync::Arc::new(ServerItems(vec![("alice".into(), 0, tool.clone())]));
+            let edit = horizon_mods::ItemEdit {
+                owner: "mod_a".into(),
+                player: "alice".into(),
+                path: vec!["state".into()],
+                text: "new".into(),
+                snapshot: snapshot.clone(),
+                durability: None,
+                melee: None,
+                consumption: None,
+                profile: Some(horizon_mods::ServerToolProfile {
+                    rules: vec![],
+                    default_speed: 1.0,
+                    damage_per_block: 0,
+                    can_destroy_in_creative: true,
+                    mining_enabled: true,
+                    unbreakable: false,
+                }),
+            };
+            let mut cell = Some(tool.clone());
+            assert!(snapshot.apply(0, &mut cell, &edit).is_err());
+            assert_eq!(cell, Some(tool));
+        }
+    }
+
+    #[test]
+    fn rejected_takeover_keeps_both_callbacks_with_original_mod() {
+        use horizon_mods::{
+            GameMode, Mods, Package, ServerPlayer, Snapshot, manifest::componentize,
+        };
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let target = root.join("target/mods-test");
+        assert!(
+            std::process::Command::new(env!("CARGO"))
+                .current_dir(&root)
+                .args([
+                    "build",
+                    "--release",
+                    "--target",
+                    "wasm32-unknown-unknown",
+                    "-p",
+                    "horizon-mods-test-mining-guest",
+                    "--target-dir"
+                ])
+                .arg(&target)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let wasm = componentize(
+            &std::fs::read(
+                target.join("wasm32-unknown-unknown/release/horizon_mods_test_mining_guest.wasm"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-owner-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let paths: Vec<_> = ["miner_a", "miner_b"].iter().map(|id| {
+            let manifest = format!("id = \"{id}\"\nname = \"{id}\"\nversion = \"1\"\napi = \"0.3\"\nside = \"server\"\ncapabilities = [\"players\", \"storage\", \"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\nexperimental = [\"items-read\", \"items-edit\", \"items-tools\", \"inventory-transactions\"]\n");
+            let path = dir.join(format!("{id}.hmod"));
+            std::fs::write(&path, Package::write(&manifest, &wasm).unwrap()).unwrap();
+            path
+        }).collect();
+        let player = ServerPlayer {
+            id: "alice".into(),
+            name: "Alice".into(),
+            x: 0.0,
+            y: 64.0,
+            z: 0.0,
+            dimension: "minecraft:overworld".into(),
+            game_mode: GameMode::Survival,
+            health: 20.0,
+        };
+        let mut tool = ItemStack::new("example:tool", 1);
+        tool.data_mut().set_other(
+            "minecraft:custom_data",
+            Some(Tag::compound([(
+                "example",
+                Tag::compound([("state", Tag::String("original".into()))]),
+            )])),
+        );
+        let view = std::sync::Arc::new(ServerItems(vec![(player.id.clone(), 0, tool.clone())]));
+        let mut edit = horizon_mods::ItemEdit {
+            owner: "miner_a".into(),
+            player: player.id.clone(),
+            path: vec!["example".into(), "state".into()],
+            text: "original".into(),
+            snapshot: view.clone(),
+            durability: None,
+            melee: None,
+            consumption: None,
+            profile: Some(horizon_mods::ServerToolProfile {
+                rules: vec![],
+                default_speed: 1.0,
+                damage_per_block: 0,
+                can_destroy_in_creative: true,
+                mining_enabled: true,
+                unbreakable: false,
+            }),
+        };
+        let mut cell = Some(tool);
+        view.apply(0, &mut cell, &edit).unwrap();
+        let view = std::sync::Arc::new(ServerItems(vec![(
+            player.id.clone(),
+            0,
+            cell.clone().unwrap(),
+        )]));
+        edit.owner = "miner_b".into();
+        edit.snapshot = view.clone();
+        assert!(view.apply(0, &mut cell, &edit).is_err());
+        let owner = view
+            .main_hand(&player.id, &["horizon:tool_control".into(), "owner".into()])
+            .unwrap()
+            .unwrap()
+            .custom_text
+            .unwrap();
+        assert_eq!(owner, "miner_a");
+        let mut mods = Mods::load(&paths, |_| true, |_| false);
+        mods.set_snapshot(Snapshot {
+            items: Some(view),
+            players: vec![player.clone()],
+            ..Snapshot::default()
+        });
+        let mined = mods.server_mined(
+            &owner,
+            &player.id,
+            "minecraft:overworld",
+            [0, 64, 0],
+            "example:stone",
+            1.0,
+        );
+        let hit = mods.server_melee_hit(
+            &owner,
+            &player.id,
+            "minecraft:overworld",
+            1,
+            "example:mob",
+            1.0,
+        );
+        assert_eq!(mined.len(), 1);
+        assert_eq!(hit.len(), 1);
+        assert_eq!((&mined[0].owner, &hit[0].owner), (&owner, &owner));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn consuming_edit_checks_both_stacks_before_committing() {
         let mut tool = ItemStack::new("example:tool", 1);
         tool.data_mut().set_other(
@@ -296,6 +582,7 @@ mod tests {
             snapshot: snapshot.clone(),
             durability: None,
             melee: None,
+            consumption: None,
             profile: None,
         };
         let original = vec![Some(tool), Some(material.clone())];
@@ -377,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn another_mod_cannot_take_over_an_existing_profile() {
+    fn command_inventory_snapshot_applies_only_captured_player_and_slots() {
         let mut tool = ItemStack::new("example:tool", 1);
         tool.data_mut().set_other(
             "minecraft:custom_data",
@@ -386,95 +673,65 @@ mod tests {
                 ("foreign", Tag::Int(7)),
             ])),
         );
-        let first = std::sync::Arc::new(ServerItems(vec![("alice".into(), 0, tool.clone())]));
+        let mut material = ItemStack::new("example:flint", 2);
+        material
+            .data_mut()
+            .set_other("example:unknown", Some(Tag::Int(4)));
+        let original = vec![Some(tool.clone()), Some(material.clone())];
+        let view = std::sync::Arc::new(ServerInventories {
+            held: ServerItems(vec![("alice".into(), 0, tool)]),
+            slots: vec![("alice".into(), original.clone())],
+        });
         let mut edit = horizon_mods::ItemEdit {
             owner: "mod_a".into(),
             player: "alice".into(),
             path: vec!["state".into()],
-            text: "first".into(),
-            snapshot: first.clone(),
+            text: "new".into(),
+            snapshot: view.clone(),
+            profile: None,
             durability: None,
             melee: None,
-            profile: Some(horizon_mods::ServerToolProfile {
-                rules: vec![],
-                default_speed: 1.0,
-                damage_per_block: 0,
-                can_destroy_in_creative: true,
-                mining_enabled: true,
-                unbreakable: false,
-            }),
+            consumption: Some((1, 1)),
         };
-        let mut cell = Some(tool);
-        first.apply(0, &mut cell, &edit).unwrap();
-        let captured = std::sync::Arc::new(ServerItems(vec![(
-            "alice".into(),
-            0,
-            cell.clone().unwrap(),
-        )]));
-        edit.owner = "mod_b".into();
-        edit.snapshot = captured.clone();
-        edit.text = "second".into();
-        let before = cell.clone();
-        assert!(captured.apply(0, &mut cell, &edit).is_err());
-        assert_eq!(cell, before);
-        let path = vec!["horizon:tool_control".into(), "owner".into()];
+        let mut slots = original.clone();
+        edit.player = "bob".into();
+        assert!(view.apply(0, &mut slots, &edit).is_err());
+        assert_eq!(slots, original);
+        edit.player = "alice".into();
+        slots[1]
+            .as_mut()
+            .unwrap()
+            .data_mut()
+            .set_other("example:unknown", Some(Tag::Int(9)));
+        let before = slots.clone();
+        assert!(view.apply(0, &mut slots, &edit).is_err());
+        assert_eq!(slots, before);
+        slots = original.clone();
+        view.apply(0, &mut slots, &edit).unwrap();
+        assert_eq!(slots[1].as_ref().unwrap().count, 1);
         assert_eq!(
-            captured
-                .main_hand("alice", &path)
+            slots[1]
+                .as_ref()
                 .unwrap()
+                .data()
                 .unwrap()
-                .custom_text
-                .as_deref(),
-            Some("mod_a")
+                .other("example:unknown"),
+            Some(&Tag::Int(4))
         );
-        edit.owner = "mod_a".into();
-        captured.apply(0, &mut cell, &edit).unwrap();
-        let updated = ServerItems(vec![("alice".into(), 0, cell.unwrap())]);
         assert_eq!(
-            updated
-                .main_hand("alice", &path)
+            slots[0]
+                .as_ref()
                 .unwrap()
+                .data()
                 .unwrap()
-                .custom_text
-                .as_deref(),
-            Some("mod_a")
+                .other("minecraft:custom_data")
+                .unwrap()
+                .get("foreign"),
+            Some(&Tag::Int(7))
         );
-    }
-
-    #[test]
-    fn malformed_profile_owner_rejects_edit_without_changes() {
-        for control in [Tag::Int(1), Tag::compound([("owner", Tag::Int(5))])] {
-            let mut tool = ItemStack::new("example:tool", 1);
-            tool.data_mut().set_other(
-                "minecraft:custom_data",
-                Some(Tag::compound([
-                    ("state", Tag::String("old".into())),
-                    ("horizon:tool_control", control),
-                ])),
-            );
-            let snapshot =
-                std::sync::Arc::new(ServerItems(vec![("alice".into(), 0, tool.clone())]));
-            let edit = horizon_mods::ItemEdit {
-                owner: "mod_a".into(),
-                player: "alice".into(),
-                path: vec!["state".into()],
-                text: "new".into(),
-                snapshot: snapshot.clone(),
-                durability: None,
-                melee: None,
-                profile: Some(horizon_mods::ServerToolProfile {
-                    rules: vec![],
-                    default_speed: 1.0,
-                    damage_per_block: 0,
-                    can_destroy_in_creative: true,
-                    mining_enabled: true,
-                    unbreakable: false,
-                }),
-            };
-            let mut cell = Some(tool.clone());
-            assert!(snapshot.apply(0, &mut cell, &edit).is_err());
-            assert_eq!(cell, Some(tool));
-        }
+        let after = slots.clone();
+        assert!(view.apply(0, &mut slots, &edit).is_err());
+        assert_eq!(slots, after);
     }
 
     #[test]
@@ -498,6 +755,7 @@ mod tests {
             snapshot: snapshot.clone(),
             durability: None,
             melee: None,
+            consumption: None,
             profile: Some(horizon_mods::ServerToolProfile {
                 rules: vec![horizon_mods::ServerToolRule {
                     blocks: vec!["#minecraft:mineable/pickaxe".into()],
