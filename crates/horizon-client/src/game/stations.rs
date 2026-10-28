@@ -535,7 +535,8 @@ impl Game<'_> {
                 None
             };
             if let Some(slot) = slot {
-                return Some((f32::from(slot.x), f32::from(slot.y)));
+                let (x, y) = gui.slot_position(slot, s.mod_selection.as_deref());
+                return Some((f32::from(x), f32::from(y)));
             }
         }
         if s.kind == Kind::Merchant && i < 36 {
@@ -1823,18 +1824,19 @@ impl Game<'_> {
                             if !slot.background {
                                 continue;
                             }
+                            let (x, y) = gui.slot_position(slot, s.mod_selection.as_deref());
                             batch.fill(
                                 atlas,
-                                ox + f32::from(slot.x),
-                                oy + f32::from(slot.y),
+                                ox + f32::from(x),
+                                oy + f32::from(y),
                                 18.0,
                                 18.0,
                                 rgba(100, 100, 100, 255),
                             );
                             batch.fill(
                                 atlas,
-                                ox + f32::from(slot.x) + 1.0,
-                                oy + f32::from(slot.y) + 1.0,
+                                ox + f32::from(x) + 1.0,
+                                oy + f32::from(y) + 1.0,
                                 16.0,
                                 16.0,
                                 rgba(150, 150, 150, 255),

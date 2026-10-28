@@ -16,8 +16,27 @@ pub struct Gui {
     pub scroll: Option<ScrollGrid>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub shared_selection: bool,
+    /// Optional positions for slots under a selected button. Slot identities
+    /// and inventory contents remain unchanged when the selection changes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layouts: Vec<SlotLayout>,
     #[serde(default)]
     pub elements: Vec<Element>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlotLayout {
+    pub selection: String,
+    pub slots: Vec<SlotPosition>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlotPosition {
+    pub id: String,
+    pub x: u16,
+    pub y: u16,
 }
 
 /// A bounded row-scrolling viewport for existing buttons, in protocol order.
@@ -252,6 +271,12 @@ fn resource_valid(value: &str) -> bool {
     })
 }
 impl Gui {
+    pub fn slot_position(&self, slot: &Slot, selection: Option<&str>) -> (u16, u16) {
+        selection
+            .and_then(|id| self.layouts.iter().find(|layout| layout.selection == id))
+            .and_then(|layout| layout.slots.iter().find(|position| position.id == slot.id))
+            .map_or((slot.x, slot.y), |position| (position.x, position.y))
+    }
     /// Parse untrusted mod data with explicit memory, geometry and identity bounds.
     pub fn parse(source: &str) -> Result<Self, String> {
         if source.len() > 16384 {
@@ -407,6 +432,27 @@ impl Gui {
                 || (slot.role == SlotRole::Output && !slot.accepts.is_empty())
             {
                 return Err("invalid GUI slot".into());
+            }
+        }
+        if self.layouts.len() > 64 {
+            return Err("too many GUI layouts".into());
+        }
+        let mut selections = HashSet::new();
+        for layout in &self.layouts {
+            if !selections.insert(&layout.selection)
+                || !self.elements.iter().any(|element| matches!(element, Element::Button { id, enabled: true, .. } if id == &layout.selection))
+                || layout.slots.len() > self.slots.len()
+            {
+                return Err("invalid GUI layout selection".into());
+            }
+            let mut positions = HashSet::new();
+            for position in &layout.slots {
+                if !positions.insert(&position.id)
+                    || !self.slots.iter().any(|slot| slot.id == position.id)
+                    || !inside(position.x, position.y, 18, 18)
+                {
+                    return Err("invalid GUI layout slot".into());
+                }
             }
         }
         for element in &self.elements {
@@ -617,5 +663,25 @@ mod tests {
         let mut invalid = gui;
         invalid.slots[2].accepts.push("minecraft:stone".into());
         assert!(invalid.validate().is_err());
+    }
+    #[test]
+    fn selected_layout_repositions_only_known_slots_within_the_gui() {
+        let value = serde_json::json!({"width":176,"height":184,
+            "slots":[{"id":"first","x":53,"y":22,"role":"input"}],
+            "elements":[{"type":"button","id":"repair","x":1,"y":1,"width":10,"height":10,"text":""}],
+            "layouts":[{"selection":"repair","slots":[{"id":"first","x":53,"y":41}]}]});
+        let gui = Gui::parse(&value.to_string()).unwrap();
+        assert_eq!(gui.slot_position(&gui.slots[0], None), (53, 22));
+        assert_eq!(gui.slot_position(&gui.slots[0], Some("repair")), (53, 41));
+        assert_eq!(gui.slot_position(&gui.slots[0], Some("unknown")), (53, 22));
+        let mut invalid = value.clone();
+        invalid["layouts"][0]["slots"][0]["y"] = 170.into();
+        assert!(Gui::parse(&invalid.to_string()).is_err());
+        let mut invalid = value.clone();
+        invalid["layouts"][0]["slots"][0]["id"] = "unknown".into();
+        assert!(Gui::parse(&invalid.to_string()).is_err());
+        let mut invalid = value;
+        invalid["layouts"][0]["selection"] = "unknown".into();
+        assert!(Gui::parse(&invalid.to_string()).is_err());
     }
 }
