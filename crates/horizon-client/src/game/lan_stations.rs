@@ -107,13 +107,13 @@ impl Game<'_> {
                 .iter()
                 .filter(|s| s.role != horizon_mods::gui::SlotRole::Output)
                 .count();
-            let storage_only = station.is_mod_storage();
+            let storage_only = station.is_mod_storage() || station.is_mod_display();
             let outputs = gui
                 .slots
                 .iter()
                 .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
                 .count();
-            if !(if storage_only { 1..=50 } else { 1..=36 }).contains(&count)
+            if !(if storage_only { 0..=50 } else { 1..=36 }).contains(&count)
                 || !(if storage_only {
                     outputs == 0
                 } else {
@@ -228,6 +228,17 @@ impl Game<'_> {
         if let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn)
             && !host.hub.guests[gi].spectator()
         {
+            if gs.kind == StationKind::Mod {
+                let valid = gs.mod_registration.as_ref().is_some_and(|r| {
+                    let [x, y, z] = gs.pos;
+                    let block = &self.res.facts().get(self.world.block(x, y, z)).name;
+                    &**block == r.block && self.mod_workstation(&r.block).as_ref() == Some(r)
+                }) && host.hub.guests[gi].within_block_range(gs.pos, 4.0);
+                if !valid {
+                    host.play.entry(conn).or_default().station = Some(gs);
+                    return true;
+                }
+            }
             if let Some(snapshot) = &gs.storage_snapshot {
                 let key = (gs.pos[0], gs.pos[1], gs.pos[2]);
                 let valid = gs.mod_registration.as_ref().is_some_and(|r| {
@@ -656,6 +667,37 @@ impl Game<'_> {
                     .nth(index)
             });
         if let Some(selection) = selection {
+            let target = host
+                .play
+                .get(&conn)
+                .and_then(|p| p.station.as_ref())
+                .and_then(|s| s.mod_registration.clone().map(|r| (r, s.pos)));
+            let guest = host.hub.guests.iter().find(|g| g.conn == conn);
+            if let (Some((registration, pos)), Some(guest)) = (target, guest) {
+                if guest.spectator() {
+                    return;
+                }
+                let actual = &self
+                    .res
+                    .facts()
+                    .get(self.world.block(pos[0], pos[1], pos[2]))
+                    .name;
+                if &**actual != registration.block
+                    || self.mod_workstation(&registration.block).as_ref() != Some(&registration)
+                    || !guest.within_block_range(pos, 4.0)
+                {
+                    return;
+                }
+                let player = super::server_mods::workstation_player_id(guest.uuid);
+                let accepted = self.mod_gui_button(&registration, &player, pos, &selection);
+                #[cfg(feature = "mods")]
+                self.route_mod_output(Some(host));
+                if !accepted {
+                    return;
+                }
+            } else {
+                return;
+            }
             if let Some(s) = host.play.get_mut(&conn).and_then(|p| p.station.as_mut()) {
                 s.mod_selection = Some(selection);
             }

@@ -6703,6 +6703,30 @@ impl Game<'_> {
     fn menu_ops(&mut self, ops: &[(Option<usize>, i32, horizon_client::menu::Input)]) -> bool {
         use horizon_client::menu::Input;
         if self.remote.is_none()
+            && let Some(station) = self
+                .station
+                .as_ref()
+                .filter(|s| s.kind == stations::Kind::Mod)
+        {
+            if self.spectator() {
+                return true;
+            }
+            let Some(registration) = station.mod_registration.as_ref() else {
+                return true;
+            };
+            let [x, y, z] = station.pos;
+            let block = &self.res.facts().get(self.world.block(x, y, z)).name;
+            let range = if self.creative { 9.0 } else { 8.5 };
+            if &**block != registration.block
+                || self.mod_workstation(&registration.block).as_ref() != Some(registration)
+                || !self.eye_position().is_some_and(|eye| {
+                    horizon_client::lan::guest::within_block_range(eye, range, station.pos)
+                })
+            {
+                return true;
+            }
+        }
+        if self.remote.is_none()
             && self
                 .station
                 .as_ref()
@@ -7034,7 +7058,11 @@ impl Game<'_> {
             };
             let mut v: Vec<Option<usize>> =
                 (0..inputs).map(|i| Some(stations::INPUT + i)).collect();
-            if !self.station.as_ref().is_some_and(|s| s.is_mod_storage()) {
+            if !self
+                .station
+                .as_ref()
+                .is_some_and(|s| s.is_mod_storage() || s.is_mod_display())
+            {
                 v.push(Some(stations::RESULT));
                 if let Some(s) = &self.station {
                     v.extend(
@@ -7044,7 +7072,12 @@ impl Game<'_> {
             }
             v.extend((9..36).chain(0..9).map(Some));
             (
-                if mod_station_open && self.station.as_ref().is_some_and(|s| s.is_mod_storage()) {
+                if mod_station_open
+                    && self
+                        .station
+                        .as_ref()
+                        .is_some_and(|s| s.is_mod_storage() || s.is_mod_display())
+                {
                     Kind::ModStorageSlots(inputs)
                 } else if mod_station_open
                     && self.station.as_ref().is_some_and(|s| s.mod_gui.is_some())

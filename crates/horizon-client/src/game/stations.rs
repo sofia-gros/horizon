@@ -182,6 +182,11 @@ pub(super) struct Station {
     pub(super) mod_selection: Option<String>,
 }
 impl Station {
+    pub(super) fn is_mod_display(&self) -> bool {
+        self.mod_gui
+            .as_ref()
+            .is_some_and(|gui| gui.slots.is_empty())
+    }
     pub(super) fn mod_storage_indices(&self) -> Vec<usize> {
         self.mod_gui.as_ref().map_or_else(Vec::new, |gui| {
             gui.slots
@@ -486,7 +491,7 @@ impl Game<'_> {
         }
         let s = self.station.as_ref()?;
         v.extend((0..s.inputs.len()).map(|i| INPUT + i));
-        if s.kind.result_pos().is_some() && !s.is_mod_storage() {
+        if s.kind.result_pos().is_some() && !s.is_mod_storage() && !s.is_mod_display() {
             v.push(RESULT);
             v.extend((0..s.mod_extra_results.len()).map(|i| RESULT + 1 + i));
         }
@@ -587,7 +592,7 @@ impl Game<'_> {
             return;
         };
         if s.kind == Kind::Mod {
-            if s.is_mod_storage() {
+            if s.is_mod_storage() || s.is_mod_display() {
                 self.station = Some(s);
                 return;
             }
@@ -1119,12 +1124,46 @@ impl Game<'_> {
                         .map(|(i, (id, _, _, _, _))| (i, id.clone()))
                 });
             if let Some((index, id)) = selected {
-                if let Some(s) = self.station.as_mut() {
-                    s.mod_selection = Some(id);
-                }
                 if self.remote.is_some() {
+                    if let Some(s) = self.station.as_mut() {
+                        s.mod_selection = Some(id);
+                    }
                     self.remote_station_button(index as i32);
                 } else {
+                    if self.spectator() {
+                        return true;
+                    }
+                    let target = self
+                        .station
+                        .as_ref()
+                        .and_then(|s| s.mod_registration.clone().map(|r| (r, s.pos)));
+                    let Some((registration, pos)) = target else {
+                        return true;
+                    };
+                    let actual = &self
+                        .res
+                        .facts()
+                        .get(self.world.block(pos[0], pos[1], pos[2]))
+                        .name;
+                    let range = if self.creative { 9.0 } else { 8.5 };
+                    if &**actual != registration.block
+                        || self.mod_workstation(&registration.block).as_ref() != Some(&registration)
+                        || !self.eye_position().is_some_and(|eye| {
+                            horizon_client::lan::guest::within_block_range(eye, range, pos)
+                        })
+                    {
+                        return true;
+                    }
+                    let accepted =
+                        self.mod_gui_button(&registration, &self.player_uuid_string(), pos, &id);
+                    #[cfg(feature = "mods")]
+                    self.show_mod_output();
+                    if !accepted {
+                        return true;
+                    }
+                    if let Some(s) = self.station.as_mut() {
+                        s.mod_selection = Some(id);
+                    }
                     self.station_changed();
                 }
                 return true;

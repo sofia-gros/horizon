@@ -916,6 +916,7 @@ Generic workstation recipe planning. The host checks each complete input snapsho
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `preview` | `func(block: string, inputs: list<option<input>>, selection: option<string>) -> result<option<plan>, string>` | Compute a preview for complete input snapshots and a selected button. |
+| `button` | `func(block: string, player: string, dimension: string, x: s32, y: s32, z: s32, id: string) -> result<_, string>` | Handle a button pressed by a player while this registered menu is open. |
 
 ## `server-events`
 

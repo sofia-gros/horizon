@@ -542,6 +542,10 @@ impl Mods {
                                     .slots
                                     .iter()
                                     .all(|s| s.role == crate::gui::SlotRole::Storage)
+                                    && !gui
+                                        .elements
+                                        .iter()
+                                        .any(|e| matches!(e, crate::gui::Element::Button { .. }))
                         }
                     }
             })
@@ -703,6 +707,72 @@ impl Mods {
                 })
                 .collect(),
         )
+    }
+
+    /// Deliver one validated button event to its registered owner.
+    pub fn gui_button(
+        &mut self,
+        registration: &WorkstationRegistration,
+        player: &str,
+        dimension: &str,
+        pos: [i32; 3],
+        id: &str,
+    ) -> Result<(), String> {
+        if self
+            .workstation(&registration.block, &registration.owner)
+            .as_ref()
+            != Some(registration)
+            || !registration.gui.as_ref().is_some_and(|gui| {
+                gui.elements.iter().any(
+                    |e| matches!(e, crate::gui::Element::Button { id: button, .. } if button == id),
+                )
+            })
+        {
+            return Err("invalid GUI button event".into());
+        }
+        let i = self
+            .entries
+            .iter()
+            .position(|e| {
+                e.manifest
+                    .as_ref()
+                    .is_some_and(|m| m.id == registration.owner)
+            })
+            .ok_or("workstation mod stopped")?;
+        if self.entries[i]
+            .run
+            .as_ref()
+            .and_then(|r| r.gui_workstation.as_ref())
+            .is_none()
+        {
+            return Err("missing GUI button callback".into());
+        }
+        let start = self.out.len();
+        let result = self.call(i, FUEL_EVENT, |run| {
+            run.gui_workstation
+                .as_ref()
+                .expect("checked")
+                .horizon_mods_gui_workstation_events()
+                .call_button(
+                    &mut run.store,
+                    &registration.block,
+                    player,
+                    dimension,
+                    pos[0],
+                    pos[1],
+                    pos[2],
+                    id,
+                )
+        });
+        if !matches!(result, Some(Ok(()))) {
+            let discarded = self.out.split_off(start);
+            self.out.extend(
+                discarded
+                    .into_iter()
+                    .filter(|o| matches!(o, Output::Stopped { .. })),
+            );
+        }
+        result.ok_or("workstation mod trapped")?
     }
 
     /// Changes whenever the running mods (so their commands) change.

@@ -1553,7 +1553,7 @@ impl Game<'_> {
         if let Some(n) = menu
             .strip_prefix("horizon:storage:")
             .and_then(|n| n.parse::<usize>().ok())
-            .filter(|n| (1..=50).contains(n))
+            .filter(|n| *n <= 50)
         {
             return match s {
                 _ if s < n => Some(super::stations::INPUT + s),
@@ -1671,7 +1671,7 @@ impl Game<'_> {
         if menu
             .strip_prefix("horizon:storage:")
             .and_then(|n| n.parse::<usize>().ok())
-            .is_some_and(|n| (1..=50).contains(&n))
+            .is_some_and(|n| n <= 50)
         {
             return Some(Kind::Mod);
         }
@@ -5822,7 +5822,7 @@ impl Game<'_> {
                     .iter()
                     .filter(|s| s.role == horizon_mods::gui::SlotRole::Output)
                     .count();
-                if (if storage_only { 1..=50 } else { 1..=36 }).contains(&count)
+                if (if storage_only { 0..=50 } else { 1..=36 }).contains(&count)
                     && (if storage_only {
                         outputs == 0
                     } else {

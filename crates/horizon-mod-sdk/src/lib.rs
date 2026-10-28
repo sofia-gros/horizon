@@ -279,6 +279,16 @@ pub mod server {
         ) -> Result<Option<GuiWorkstationPlan>, String> {
             Ok(None)
         }
+        fn gui_button(
+            &mut self,
+            _block: &str,
+            _player: &str,
+            _dimension: &str,
+            _pos: [i32; 3],
+            _id: &str,
+        ) -> Result<(), String> {
+            Ok(())
+        }
     }
 
     impl Registration {
@@ -540,6 +550,19 @@ macro_rules! export_server_mod {
                     with(|m| {
                         result = m.gui_workstation_preview(&block, &inputs, selection.as_deref())
                     });
+                    result
+                }
+                fn button(
+                    block: String,
+                    player: String,
+                    dimension: String,
+                    x: i32,
+                    y: i32,
+                    z: i32,
+                    id: String,
+                ) -> Result<(), String> {
+                    let mut result = Err("The mod is not running".to_string());
+                    with(|m| result = m.gui_button(&block, &player, &dimension, [x, y, z], &id));
                     result
                 }
             }

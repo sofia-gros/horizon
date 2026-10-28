@@ -67,6 +67,20 @@ impl ServerMod for MiningGuest {
         }))
     }
 
+    fn gui_button(
+        &mut self,
+        block: &str,
+        _player: &str,
+        dimension: &str,
+        pos: [i32; 3],
+        id: &str,
+    ) -> Result<(), String> {
+        if id == "choose" {
+            workstations::set_progress(block, dimension, pos[0], pos[1], pos[2], "work", 42)?;
+        }
+        Ok(())
+    }
+
     fn workstation_preview(
         &mut self,
         _: &str,

@@ -1583,6 +1583,28 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
         mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
         Some(vec![10])
     );
+    assert!(
+        mods.gui_button(
+            &generic,
+            &player.id,
+            "minecraft:overworld",
+            [0, 71, 2],
+            "unknown"
+        )
+        .is_err()
+    );
+    mods.gui_button(
+        &generic,
+        &player.id,
+        "minecraft:overworld",
+        [0, 71, 2],
+        "choose",
+    )
+    .unwrap();
+    assert_eq!(
+        mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
+        Some(vec![42])
+    );
     let generic_inputs = [None, None, None];
     let planned = mods
         .gui_workstation_preview(&generic, &generic_inputs, Some("choose"))
@@ -1597,7 +1619,7 @@ fn workstation_previews_cannot_mutate_persistent_storage() {
     assert!(!storage.join("preview-write").exists());
     assert_eq!(
         mods.gui_progress(&generic, "minecraft:overworld", [0, 71, 2]),
-        Some(vec![10])
+        Some(vec![42])
     );
     let tool = horizon_mods::WorkstationInput {
         item: "example:tool".into(),

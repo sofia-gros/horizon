@@ -73,6 +73,15 @@ impl Game<'_> {
     ) -> Option<Vec<u8>> {
         None
     }
+    pub(super) fn mod_gui_button(
+        &mut self,
+        _registration: &super::stations::ModRegistration,
+        _player: &str,
+        _pos: [i32; 3],
+        _id: &str,
+    ) -> bool {
+        false
+    }
     pub(super) fn tick_server_mods(&mut self) {}
     pub(super) fn mod_block_event(&mut self, _pos: [i32; 3], _state: BlockStateId, _placed: bool) {}
     pub(super) fn mod_mined(
@@ -274,7 +283,7 @@ mod run {
                         .slots
                         .iter()
                         .all(|s| s.role == horizon_mods::gui::SlotRole::Storage);
-                if !((storage_only && (1..=50).contains(&inputs))
+                if !((storage_only && (0..=50).contains(&inputs))
                     || ((1..=36).contains(&inputs) && (1..=8).contains(&outputs)))
                 {
                     return None;
@@ -307,6 +316,33 @@ mod run {
                 return None;
             }
             self.mods.mods.gui_progress(&reg, self.dim.id(), pos)
+        }
+
+        pub(in crate::game) fn mod_gui_button(
+            &mut self,
+            registration: &super::super::stations::ModRegistration,
+            player: &str,
+            pos: [i32; 3],
+            id: &str,
+        ) -> bool {
+            if self.mods.workstation_handlers.get(&registration.block) != Some(&registration.owner)
+            {
+                return false;
+            }
+            let Some(reg) = self
+                .mods
+                .mods
+                .workstation(&registration.block, &registration.owner)
+            else {
+                return false;
+            };
+            if reg.gui != registration.gui {
+                return false;
+            }
+            self.mods
+                .mods
+                .gui_button(&reg, player, self.dim.id(), pos, id)
+                .is_ok()
         }
 
         /// Rebuild a checked result from the complete input snapshots. The mod

@@ -466,7 +466,7 @@ impl Menu {
                 player(&mut slots);
             }
             Kind::ModStorageSlots(count) => {
-                let count = count.clamp(1, 50);
+                let count = count.min(50);
                 containers[MAIN] = vec![None; count];
                 slots.extend(main(count, Role::Plain));
                 player(&mut slots);
@@ -2195,7 +2195,7 @@ impl Menu {
             }
             Kind::ModStorageSlots(count) => {
                 check_count = false;
-                let n = count.clamp(1, 50);
+                let n = count.min(50);
                 if index < n {
                     if !self.move_to(env, &mut stack, n, total, true) {
                         return None;
