@@ -47,6 +47,41 @@ impl ItemReader for ServerItems {
 }
 
 impl ServerItems {
+    /// Stage a checked main-hand edit and consumption from another inventory
+    /// slot, then commit both together. The caller must serialize all access to
+    /// this inventory from snapshot capture through commit, and capture
+    /// `ingredient` at the same time as `self`. This function does not track
+    /// revisions and must not be used with a preview that can outlive a write.
+    /// This does not authorize a recipe, select a player, or validate a menu.
+    pub fn apply_consuming(
+        &self,
+        selected: usize,
+        inventory: &mut [Option<ItemStack>],
+        ingredient_slot: usize,
+        ingredient: &ItemStack,
+        count: u32,
+        edit: &horizon_mods::ItemEdit,
+    ) -> Result<(), String> {
+        if selected == ingredient_slot || count == 0 || count > ingredient.count {
+            return Err("invalid ingredient consumption".into());
+        }
+        let held = inventory.get(selected).ok_or("invalid selected slot")?;
+        let input = inventory
+            .get(ingredient_slot)
+            .ok_or("invalid ingredient slot")?;
+        if input.as_ref() != Some(ingredient) {
+            return Err("ingredient changed; edit rejected".into());
+        }
+        let mut changed = held.clone();
+        self.apply(selected, &mut changed, edit)?;
+        let mut remainder = ingredient.clone();
+        remainder.count -= count;
+        // All checks and fallible transformations are complete before writes.
+        inventory[selected] = changed;
+        inventory[ingredient_slot] = (remainder.count != 0).then_some(remainder);
+        Ok(())
+    }
+
     /// Apply associated text and mining settings as one checked stack replacement.
     pub fn apply(
         &self,
