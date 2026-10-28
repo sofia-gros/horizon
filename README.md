@@ -1,3 +1,5 @@
+> **Wasm Mod API / hooks:** This fork develops a reusable WebAssembly mod API and synchronous hooks for Horizon. Server mods can participate in item state, mining and melee through experimental, capability-gated interfaces. The fork follows upstream Horizon; APIs and coverage are still evolving. See [Mod API and current limits](docs/mods.md).
+
 <p align="center">
   <img src="docs/media/banner.webp" alt="Horizon: Minecraft: Java Edition 26.3, rewritten in Rust and checked against vanilla by 281 differential harnesses" width="100%">
 </p>
