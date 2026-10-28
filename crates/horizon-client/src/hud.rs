@@ -132,9 +132,29 @@ fn png_size(path: &Path) -> Option<(u32, u32)> {
     use std::io::Read;
     let mut header = [0u8; 24];
     fs::File::open(path).ok()?.read_exact(&mut header).ok()?;
-    let field = |at: usize| u32::from_be_bytes(header[at..at + 4].try_into().unwrap_or_default());
-    (header[..8] == *b"\x89PNG\r\n\x1a\n" && header[12..16] == *b"IHDR")
-        .then(|| (field(16), field(20)))
+    png_header_size(&header)
+}
+fn png_header_size(header: &[u8]) -> Option<(u32, u32)> {
+    if header.len() < 24 || header[..8] != *b"\x89PNG\r\n\x1a\n" || header[12..16] != *b"IHDR" {
+        return None;
+    }
+    let field = |at: usize| -> Option<u32> {
+        Some(u32::from_be_bytes(header[at..at + 4].try_into().ok()?))
+    };
+    Some((field(16)?, field(20)?))
+}
+/// Check the same bytes the decoder will receive before allocating from IHDR.
+fn decode_mod_gui_with(
+    path: &Path,
+    decode_image: impl FnOnce(&[u8]) -> Result<(u32, u32, Vec<u8>)>,
+) -> Option<(u32, u32, Vec<u8>)> {
+    let data = fs::read(path).ok()?;
+    let (width, height) = png_header_size(&data)?;
+    if width == 0 || height == 0 || width > 1024 || height > 512 {
+        return None;
+    }
+    let image = decode_image(&data).ok()?;
+    (image.0 == width && image.1 == height).then_some(image)
 }
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -505,10 +525,7 @@ impl HudAtlas {
                             .to_string_lossy()
                             .replace('\\', "/")
                     );
-                    if let Ok((w, h, pixels)) = decode(&path)
-                        && w <= 1024
-                        && h <= 512
-                    {
+                    if let Some((w, h, pixels)) = decode_mod_gui_with(&path, decode_bytes) {
                         images.push((name, w, h, pixels));
                     }
                 }
@@ -1712,6 +1729,33 @@ mod tests {
             .unwrap()
             .write_image_data(&pixels)
             .unwrap();
+    }
+    #[test]
+    fn oversized_mod_gui_is_rejected_before_decode() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-mod-gui-limit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_png(&root, "gui/oversized", 2048, 2048);
+        let path = root.join("assets/minecraft/textures/gui/oversized.png");
+        let called = std::cell::Cell::new(false);
+        assert!(
+            decode_mod_gui_with(&path, |data| {
+                called.set(true);
+                decode_bytes(data)
+            })
+            .is_none()
+        );
+        assert!(
+            !called.get(),
+            "oversized PNG must not reach the allocating decoder"
+        );
+        write_png(&root, "gui/within", 1024, 512);
+        let path = root.join("assets/minecraft/textures/gui/within.png");
+        assert_eq!(
+            decode_mod_gui_with(&path, decode_bytes).map(|v| (v.0, v.1)),
+            Some((1024, 512))
+        );
+        let _ = fs::remove_dir_all(root);
     }
     #[test]
     fn content_mod_gui_textures_are_packed_with_their_namespace() {
