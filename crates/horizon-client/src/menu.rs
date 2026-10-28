@@ -3415,6 +3415,35 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn named_workstation_output_rechecks_input_before_take() {
+        with_menu(Kind::ModWorkstation, |env, menu| {
+            let mut original = stack("wooden_pickaxe", 1).unwrap();
+            original.data_mut().custom_name = Some("Original name".into());
+            let material = stack("flint", 2).unwrap();
+            menu.set_slot(env, 0, Some(original.clone()));
+            menu.set_slot(env, 1, Some(material.clone()));
+            let mut output = original.clone();
+            output.data_mut().custom_name = Some("刃 😀".into());
+            let transaction = [(Some(original.clone()), 1), (Some(material.clone()), 1)];
+            menu.set_workstation_transaction(&transaction, output.clone())
+                .unwrap();
+            let mut changed = original.clone();
+            changed.data_mut().custom_name = Some("Changed by another player".into());
+            menu.set_slot(env, 0, Some(changed.clone()));
+            menu.click(env, 2, 0, Input::Pickup).unwrap();
+            assert!(menu.carried.is_none());
+            assert_eq!(menu.slot(0), Some(&changed));
+            assert_eq!(menu.slot(1), Some(&material));
+            menu.set_slot(env, 0, Some(original));
+            menu.set_workstation_transaction(&transaction, output.clone())
+                .unwrap();
+            menu.click(env, 2, 0, Input::Pickup).unwrap();
+            assert_eq!(menu.carried, Some(output));
+            assert_eq!(menu.slot(1).unwrap().count, 1);
+        });
+    }
+
+    #[test]
     fn mod_workstation_multiple_inputs_are_consumed_together() {
         with_menu(Kind::ModWorkstationSlots(3), |env, menu| {
             let inputs = [stack("flint", 2), stack("stick", 1), stack("paper", 1)];

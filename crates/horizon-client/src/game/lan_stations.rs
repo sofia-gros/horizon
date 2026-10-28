@@ -31,7 +31,7 @@ pub(super) struct GuestStation {
     last_sound: u64,
     mod_registration: Option<super::stations::ModRegistration>,
     mod_selection: Option<String>,
-    mod_name: String,
+    mod_name: Option<String>,
     storage_snapshot: Option<Vec<Option<ItemStack>>>,
 }
 
@@ -196,7 +196,7 @@ impl Game<'_> {
             last_sound: 0,
             mod_registration: station.mod_registration.clone(),
             mod_selection: station.mod_selection.clone(),
-            mod_name: String::new(),
+            mod_name: None,
             storage_snapshot: (!station.mod_storage_indices().is_empty()).then(|| {
                 station
                     .mod_storage_indices()
@@ -262,7 +262,7 @@ impl Game<'_> {
                     .and_then(|code| gui.selection_from_code(*code))
                     .map(str::to_owned);
                 if gs.mod_selection != selection {
-                    gs.mod_name.clear();
+                    gs.mod_name = None;
                     gs.mod_selection = selection;
                     gs.menu.data = values.into_iter().map(i32::from).collect();
                     self.lan_mod_station_preview(&host.hub.guests[gi], &mut gs);
@@ -395,12 +395,12 @@ impl Game<'_> {
                             &inputs,
                         )
                     {
-                        gs.mod_name.clear();
+                        gs.mod_name = None;
                     }
                     super::stations::name_mod_output(
                         gui,
                         gs.mod_selection.as_deref(),
-                        &gs.mod_name,
+                        gs.mod_name.as_deref(),
                         &inputs,
                         &mut results,
                     );
@@ -410,7 +410,7 @@ impl Game<'_> {
                     .menu
                     .set_workstation_transaction_multi(&transaction, results);
             } else {
-                gs.mod_name.clear();
+                gs.mod_name = None;
             }
             return;
         }
@@ -650,7 +650,7 @@ impl Game<'_> {
                                 .is_some_and(|field| field.valid_text(name))
                     });
             if valid {
-                gs.mod_name = name.to_owned();
+                gs.mod_name = Some(name.to_owned());
                 self.lan_station_op(host, conn, None, false, |_, _| {});
             }
             return;
@@ -790,7 +790,7 @@ impl Game<'_> {
             }
             if let Some(s) = host.play.get_mut(&conn).and_then(|p| p.station.as_mut()) {
                 if s.mod_selection.as_deref() != Some(&selection) {
-                    s.mod_name.clear();
+                    s.mod_name = None;
                 }
                 s.mod_selection = Some(selection);
             }
@@ -1040,7 +1040,7 @@ impl Game<'_> {
                         .is_some_and(|gui| gui.shared_selection)
                         && station.mod_selection != selection;
                     if changed {
-                        station.mod_name.clear();
+                        station.mod_name = None;
                         station.mod_selection = selection;
                         self.lan_mod_station_preview(g, &mut station);
                     }

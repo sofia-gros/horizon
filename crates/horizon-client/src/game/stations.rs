@@ -23,10 +23,11 @@ pub(super) const RESULT: usize = 650;
 pub(super) fn name_mod_output(
     gui: &horizon_mods::gui::Gui,
     selection: Option<&str>,
-    name: &str,
+    name: Option<&str>,
     inputs: &[Option<ItemStack>],
     outputs: &mut [ItemStack],
 ) {
+    let Some(name) = name else { return };
     let Some(field) = gui
         .text_input
         .as_ref()
@@ -230,13 +231,26 @@ pub(super) struct Station {
     pub(super) mod_cost: Option<u32>,
     pub(super) mod_counts: Option<Vec<u32>>,
     pub(super) mod_selection: Option<String>,
+    /// None until this player's field has actually changed; Some("") clears a name.
+    pub(super) mod_name: Option<String>,
     pub(super) mod_scroll_dragging: bool,
 }
 impl Station {
     pub(super) fn clear_mod_name(&mut self) {
+        self.mod_name = None;
         self.name.clear();
         self.rename.set_value("");
         self.rename.focused = false;
+    }
+    fn record_mod_name_edit(&mut self, previous: &str) -> bool {
+        if self.kind != Kind::Mod {
+            return true;
+        }
+        if previous == self.rename.value {
+            return false;
+        }
+        self.mod_name = Some(self.rename.value.clone());
+        true
     }
     fn mod_text_field(&self) -> Option<&horizon_mods::gui::TextInput> {
         let gui = self.mod_gui.as_ref()?;
@@ -301,6 +315,7 @@ impl Station {
             mod_cost: None,
             mod_counts: None,
             mod_selection: None,
+            mod_name: None,
             mod_scroll_dragging: false,
         }
     }
@@ -819,7 +834,7 @@ impl Game<'_> {
                         name_mod_output(
                             gui,
                             s.mod_selection.as_deref(),
-                            &s.name,
+                            s.mod_name.as_deref(),
                             &s.inputs,
                             &mut results,
                         );
@@ -1551,6 +1566,9 @@ impl Game<'_> {
             s.rename = previous;
             return;
         }
+        if !s.record_mod_name_edit(&previous.value) {
+            return;
+        }
         s.name.clone_from(&s.rename.value);
         self.station_changed();
         self.remote_anvil_rename();
@@ -1562,8 +1580,12 @@ impl Game<'_> {
         let Some(s) = self.station.as_mut() else {
             return false;
         };
+        let previous = s.rename.value.clone();
         if !s.rename.key(key, ctrl, shift) {
             return false;
+        }
+        if !s.record_mod_name_edit(&previous) {
+            return true;
         }
         s.name.clone_from(&s.rename.value);
         self.station_changed();
@@ -1581,11 +1603,15 @@ impl Game<'_> {
         let Some(s) = self.station.as_mut() else {
             return;
         };
+        let previous = s.rename.value.clone();
         if s.rename.shortcut(shortcut, &mut self.clipboard) {
             if s.mod_text_field()
                 .is_some_and(|field| !field.valid_text(&s.rename.value))
             {
                 s.rename.set_value(&s.name);
+                return;
+            }
+            if !s.record_mod_name_edit(&previous) {
                 return;
             }
             s.name.clone_from(&s.rename.value);
@@ -3504,9 +3530,9 @@ mod mod_name_tests {
         let occupied = vec![Some(ItemStack::new("minecraft:stone", 1))];
         let make = || vec![ItemStack::new("minecraft:wooden_pickaxe", 1)];
         let mut output = make();
-        name_mod_output(&gui, Some("build"), "刃 😀", &empty, &mut output);
+        name_mod_output(&gui, Some("build"), Some("刃 😀"), &empty, &mut output);
         assert_eq!(output[0].custom_name(), Some("刃 😀"));
-        name_mod_output(&gui, Some("build"), "", &empty, &mut output);
+        name_mod_output(&gui, Some("build"), Some(""), &empty, &mut output);
         assert_eq!(output[0].custom_name(), None);
         for (selection, name, inputs) in [
             (None, "Blade", &empty),
@@ -3514,8 +3540,39 @@ mod mod_name_tests {
             (Some("build"), "Blade", &occupied),
         ] {
             let mut output = make();
-            name_mod_output(&gui, selection, name, inputs, &mut output);
+            name_mod_output(&gui, selection, Some(name), inputs, &mut output);
             assert_eq!(output[0].custom_name(), None);
         }
+    }
+    #[test]
+    fn untouched_name_preserves_existing_output_name() {
+        let mut gui = gui();
+        gui.text_input.as_mut().unwrap().empty_slot = None;
+        let mut output = vec![ItemStack::new("minecraft:wooden_pickaxe", 1)];
+        output[0].data_mut().custom_name = Some("Original name".into());
+        name_mod_output(&gui, Some("build"), None, &[None], &mut output);
+        assert_eq!(output[0].custom_name(), Some("Original name"));
+        name_mod_output(&gui, Some("build"), Some(""), &[None], &mut output);
+        assert_eq!(output[0].custom_name(), None);
+    }
+    #[test]
+    fn local_edits_are_per_player_and_navigation_does_not_clear_names() {
+        let mut first = Station::new(Kind::Mod, [0, 0, 0]);
+        let mut second = Station::new(Kind::Mod, [0, 0, 0]);
+        assert!(!first.record_mod_name_edit(""));
+        assert_eq!(first.mod_name, None);
+        first.rename.set_value("刃 😀");
+        assert!(first.record_mod_name_edit(""));
+        assert_eq!(first.mod_name.as_deref(), Some("刃 😀"));
+        assert_eq!(second.mod_name, None);
+        let previous = first.rename.value.clone();
+        first.rename.set_value("");
+        assert!(first.record_mod_name_edit(&previous));
+        assert_eq!(first.mod_name.as_deref(), Some(""));
+        second.rename.set_value("Other");
+        assert!(second.record_mod_name_edit(""));
+        first.clear_mod_name();
+        assert_eq!(first.mod_name, None);
+        assert_eq!(second.mod_name.as_deref(), Some("Other"));
     }
 }

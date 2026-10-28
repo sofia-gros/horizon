@@ -192,12 +192,15 @@ impl Game<'_> {
         let Some(field) = s.mod_gui.as_ref().and_then(|gui| gui.text_input.as_ref()) else {
             return;
         };
+        let Some(name) = s.mod_name.as_ref() else {
+            return;
+        };
         if s.mod_selection.as_deref() != Some(field.when_selected.as_str())
-            || !field.valid_text(&s.name)
+            || !field.valid_text(name)
         {
             return;
         }
-        let name = s.name.clone();
+        let name = name.clone();
         self.send(S::RenameItem(play::RenameItem { name }));
     }
 
