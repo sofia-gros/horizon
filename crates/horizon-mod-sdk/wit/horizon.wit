@@ -822,7 +822,35 @@ interface workstations {
 /// rechecked before taking a result. Guest memory is not rolled back: mods must
 /// keep their own preview logic side-effect-free and deterministic.
 interface workstation-events {
-    use items-tools.{profile, melee-profile};
+    // Independent value types keep the optional export from importing items-tools.
+    record rule {
+        /// Direct block ids, or exactly one #tag selector. At most 64 entries.
+        blocks: list<string>,
+        speed: option<f32>,
+        correct-for-drops: option<bool>,
+    }
+    record profile {
+        /// At most 16 rules, in vanilla Tool order; speeds must be finite and positive.
+        rules: list<rule>,
+        default-speed: f32,
+        damage-per-block: u32,
+        can-destroy-in-creative: bool,
+        /// False prevents mining in prediction and on the server, including Creative.
+        mining-enabled: bool,
+        /// Sets the vanilla unbreakable component; does not implement custom wear.
+        unbreakable: bool,
+    }
+    record melee-profile {
+        /// Additive attack damage above the player's base, before effects.
+        damage-bonus: f32,
+        /// Multiplier applied to base melee damage before critical bonus.
+        damage-multiplier: f32,
+        /// Total attacks per second, including the player's base speed.
+        attack-speed: f32,
+        /// False prevents direct attacks with this stack.
+        enabled: bool,
+    }
+
     record input {
         item: string,
         count: u32,
@@ -847,8 +875,7 @@ interface workstation-events {
 /// delivers the other outputs to the player's inventory in the same commit;
 /// insufficient inventory space rejects the take without changing inputs.
 interface gui-workstation-events {
-    use workstation-events.{input};
-    use items-tools.{profile, melee-profile};
+    use workstation-events.{input, profile, melee-profile};
     record output {
         item: string,
         count: u32,
