@@ -141,7 +141,28 @@ mod run {
 
     /// Capability `world`'s view during a call: the levels' chunks, moved out
     /// of the game for the call and back after it (no copy).
+    #[derive(Clone)]
+    struct MachineCapture {
+        chunk: std::sync::Arc<horizon_client::chunk::Chunk>,
+        ids: Vec<String>,
+        slots: Vec<Option<horizon_client::items::ItemStack>>,
+    }
+
+    impl std::fmt::Debug for MachineCapture {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("MachineCapture")
+                .field("ids", &self.ids)
+                .finish_non_exhaustive()
+        }
+    }
+
     struct LentWorld {
+        active_dim: &'static str,
+        machine_entities: std::collections::HashMap<
+            (i32, i32, i32),
+            Option<horizon_client::chunk::block_entity::BlockEntity>,
+        >,
+        machine_handlers: std::collections::BTreeMap<String, String>,
         registry: &'static BlockRegistry,
         biomes: std::sync::Arc<horizon_client::biome::Biomes>,
         dims: Vec<(&'static str, ChunkMap)>,
@@ -151,6 +172,103 @@ mod run {
             let (_, chunks) = self.dims.iter().find(|(d, _)| *d == dimension)?;
             let chunk = chunks.get(&(x >> 4, z >> 4))?;
             Some(state_string(self.registry, chunk.block(x & 15, y, z & 15)))
+        }
+        fn machine_snapshot(
+            &self,
+            registration: &horizon_mods::WorkstationRegistration,
+            dimension: &str,
+            pos: [i32; 3],
+        ) -> Result<horizon_mods::MachineView, String> {
+            use horizon_client::chunk::block_entity::BlockEntity;
+            use horizon_mods::ItemReader;
+            use horizon_world::nbt::Tag;
+            if dimension != self.active_dim
+                || self.machine_handlers.get(&registration.block) != Some(&registration.owner)
+            {
+                return Err("workstation is not delegated or not in the active dimension".into());
+            }
+            let (_, chunks) = self
+                .dims
+                .iter()
+                .find(|(d, _)| *d == dimension)
+                .ok_or("dimension is not loaded")?;
+            let chunk = chunks
+                .get(&(pos[0] >> 4, pos[2] >> 4))
+                .ok_or("chunk is not loaded")?;
+            let state = chunk.block(pos[0] & 15, pos[1], pos[2] & 15);
+            let actual = self.registry.state(state).ok_or("unknown block state")?;
+            if actual.name != registration.block {
+                return Err("workstation block changed".into());
+            }
+            let gui = registration.gui.as_ref().ok_or("missing GUI")?;
+            let ids: Vec<String> = gui
+                .slots
+                .iter()
+                .filter(|s| s.role == horizon_mods::gui::SlotRole::Storage)
+                .map(|s| s.id.clone())
+                .collect();
+            if ids.is_empty() {
+                return Err("no persistent storage".into());
+            }
+            let key = (pos[0], pos[1], pos[2]);
+            let saved = chunk.saved.as_ref().and_then(|saved| {
+                saved.block_entities.iter().find(|tag| {
+                    tag.get("x") == Some(&Tag::Int(pos[0]))
+                        && tag.get("y") == Some(&Tag::Int(pos[1]))
+                        && tag.get("z") == Some(&Tag::Int(pos[2]))
+                })
+            });
+            let entity = if let Some(entity) = self.machine_entities.get(&key) {
+                Some(
+                    entity
+                        .clone()
+                        .ok_or("another block entity occupies this position")?,
+                )
+            } else if let Some(tag) = saved {
+                Some(
+                    horizon_client::save::decode_block_entity(tag)
+                        .ok_or("unrecognized saved block entity")?
+                        .1,
+                )
+            } else {
+                None
+            };
+            let slots = match entity {
+                Some(BlockEntity::ModStorage(found, slots))
+                    if found == ids && slots.len() == ids.len() =>
+                {
+                    slots
+                }
+                Some(_) => return Err("storage layout or block entity does not match".into()),
+                None => vec![None; ids.len()],
+            };
+            let mut views = Vec::with_capacity(ids.len());
+            for (id, stack) in ids.iter().zip(&slots) {
+                let held = if let Some(stack) = stack {
+                    horizon_client::mod_items::ServerItems(vec![(
+                        registration.owner.clone(),
+                        0,
+                        stack.clone(),
+                    )])
+                    .main_hand(&registration.owner, &registration.path)?
+                } else {
+                    None
+                };
+                views.push(horizon_mods::MachineSlotView {
+                    id: id.clone(),
+                    item: held.as_ref().map(|s| s.item.clone()),
+                    count: held.as_ref().map_or(0, |s| s.count),
+                    custom_text: held.and_then(|s| s.custom_text),
+                });
+            }
+            Ok(horizon_mods::MachineView {
+                slots: views,
+                capture: std::sync::Arc::new(MachineCapture {
+                    chunk: chunk.clone(),
+                    ids,
+                    slots,
+                }),
+            })
         }
         fn biome(&self, dimension: &str, x: i32, y: i32, z: i32) -> Option<String> {
             let (_, chunks) = self.dims.iter().find(|(d, _)| *d == dimension)?;
@@ -899,6 +1017,111 @@ mod run {
                 }
             }
         }
+        fn apply_machine_transaction(
+            &mut self,
+            transaction: &horizon_mods::MachineTransaction,
+        ) -> Result<(), String> {
+            use horizon_client::chunk::block_entity::BlockEntity;
+            let reg = &transaction.registration;
+            if self.remote.is_some()
+                || transaction.dimension != self.dim.id()
+                || self.mods.workstation_handlers.get(&reg.block) != Some(&reg.owner)
+                || self.mods.mods.workstation(&reg.block, &reg.owner).as_ref() != Some(reg)
+            {
+                return Err("workstation authorization changed".into());
+            }
+            let p = transaction.pos;
+            if !self.world.loaded(p[0], p[2])
+                || *self
+                    .res
+                    .facts()
+                    .get(self.world.block(p[0], p[1], p[2]))
+                    .name
+                    != reg.block
+            {
+                return Err("workstation block changed or unloaded".into());
+            }
+            let capture = (transaction.capture.as_ref() as &dyn std::any::Any)
+                .downcast_ref::<MachineCapture>()
+                .ok_or("invalid storage snapshot")?;
+            if self
+                .world
+                .chunks
+                .get(&(p[0] >> 4, p[2] >> 4))
+                .is_none_or(|chunk| !std::sync::Arc::ptr_eq(chunk, &capture.chunk))
+            {
+                return Err("workstation chunk changed after snapshot".into());
+            }
+            let gui = reg.gui.as_ref().ok_or("no workstation GUI")?;
+            let specs: Vec<_> = gui
+                .slots
+                .iter()
+                .filter(|s| s.role == horizon_mods::gui::SlotRole::Storage)
+                .collect();
+            if specs.iter().map(|s| &s.id).ne(capture.ids.iter()) {
+                return Err("storage layout changed".into());
+            }
+            let key = (p[0], p[1], p[2]);
+            let live = self.world.block_entities.get(&key).cloned();
+            let saved = if live.is_none() {
+                super::super::spill::saved_entity(&self.world, p)
+            } else {
+                None
+            };
+            let entity = match (live, saved) {
+                (Some(entity), _) => Some(entity),
+                (None, Some(tag)) => Some(
+                    horizon_client::save::decode_block_entity(&tag)
+                        .ok_or("unrecognized saved block entity")?
+                        .1,
+                ),
+                (None, None) => None,
+            };
+            let current = match entity {
+                Some(BlockEntity::ModStorage(ids, slots)) if ids == capture.ids => slots,
+                Some(_) => return Err("storage layout changed".into()),
+                None => vec![None; capture.ids.len()],
+            };
+            let result = horizon_client::machine_storage::plan(
+                &current,
+                &capture.slots,
+                &specs,
+                &transaction.changes,
+                |item| self.res.items().get(item).map(|def| def.max_stack),
+                |tag, item| {
+                    self.res
+                        .items()
+                        .item_tags
+                        .get(tag)
+                        .is_some_and(|items| items.contains(item))
+                },
+            )?;
+            let mut refresh_station = false;
+            if let Some(station) = self.station.as_mut().filter(|s| {
+                s.pos == p
+                    && s.mod_registration
+                        .as_ref()
+                        .is_some_and(|r| r.block == reg.block && r.owner == reg.owner)
+            }) {
+                for (index, stack) in station
+                    .mod_storage_indices()
+                    .into_iter()
+                    .zip(result.iter().cloned())
+                {
+                    station.inputs[index] = stack;
+                }
+                refresh_station = true;
+            }
+            self.world
+                .block_entities
+                .insert(key, BlockEntity::ModStorage(capture.ids.clone(), result));
+            self.world.modified.insert((p[0] >> 4, p[2] >> 4));
+            if refresh_station {
+                self.station_changed();
+            }
+            Ok(())
+        }
+
         fn apply_item_edit(
             &mut self,
             host: Option<&mut LanHost>,
@@ -1144,6 +1367,23 @@ mod run {
             if !self.mods.world {
                 return;
             }
+            let machine_entities = self
+                .world
+                .block_entities
+                .iter()
+                .map(|(pos, entity)| {
+                    (
+                        *pos,
+                        matches!(
+                            entity,
+                            horizon_client::chunk::block_entity::BlockEntity::ModStorage(_, _)
+                        )
+                        .then(|| entity.clone()),
+                    )
+                })
+                .collect();
+            let machine_handlers = self.mods.workstation_handlers.clone();
+            let active_dim = self.dim.id();
             let mut dims = vec![(self.dim.id(), std::mem::take(&mut self.world.chunks))];
             for (dim, chunks) in self.levels.parked_chunks() {
                 dims.push((dim.id(), std::mem::take(chunks)));
@@ -1151,6 +1391,9 @@ mod run {
             let registry = self.pack.assets.registry;
             let biomes = self.res.biomes().clone();
             self.mods.mods.lend_world(Box::new(LentWorld {
+                active_dim,
+                machine_entities,
+                machine_handlers,
                 registry,
                 biomes,
                 dims,
@@ -1342,6 +1585,11 @@ mod run {
                 line
             };
             match output {
+                Output::MachineTransaction(transaction) => {
+                    if let Err(error) = self.apply_machine_transaction(&transaction) {
+                        log::debug!("Horizon: machine transaction rejected: {error}");
+                    }
+                }
                 Output::ItemEdit(edit) => {
                     let result = self.apply_item_edit(host.as_deref_mut(), &edit);
                     let line = match result {

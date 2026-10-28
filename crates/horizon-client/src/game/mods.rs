@@ -360,7 +360,7 @@ impl Game<'_> {
     /// The Mods page's rows, from what loaded.
     fn list_mods(&mut self) {
         self.mods.server = self.mods.mods.runs_server();
-        self.mods.world = self.mods.mods.wants_world();
+        self.mods.world = self.mods.mods.wants_world() || self.mods.mods.wants_machine_storage();
         let dev = &self.mods.dev;
         self.settings.mods.installed = self
             .mods
@@ -739,6 +739,7 @@ impl Game<'_> {
                 | Output::Broadcast { .. }
                 | Output::Reply { .. }
                 | Output::ItemEdit(_)
+                | Output::MachineTransaction(_)
                 | Output::SetBlocks { .. }) => {
                     self.route_server_output(host.as_deref_mut(), server);
                     continue;
