@@ -48,6 +48,13 @@ impl Game<'_> {
     /// `Slot.set` runs its container's `setChanged`, so the loom lists the
     /// patterns its inputs allow and the stonecutter the recipes of its input.
     pub(super) fn remote_station_slot_changed(&mut self, internal: usize) {
+        if let Some(s) = self.station.as_mut()
+            && s.kind == Kind::Mod
+            && internal == super::stations::RESULT
+            && s.result.is_none()
+        {
+            s.clear_mod_name();
+        }
         if !self.station.as_ref().is_some_and(|s| {
             matches!(
                 s.kind,
@@ -90,9 +97,13 @@ impl Game<'_> {
                             })
                             .count()
                 {
-                    s.mod_selection = u8::try_from(value)
+                    let selection = u8::try_from(value)
                         .ok()
                         .and_then(|code| gui.selection_from_code(code).map(str::to_owned));
+                    if s.mod_selection != selection {
+                        s.clear_mod_name();
+                    }
+                    s.mod_selection = selection;
                     return;
                 }
                 if let Some(gui) = s.mod_gui.as_mut()
@@ -168,6 +179,25 @@ impl Game<'_> {
         if let Some(s) = self.station.as_mut() {
             s.anvil_sent = Some(name.clone());
         }
+        self.send(S::RenameItem(play::RenameItem { name }));
+    }
+
+    pub(super) fn remote_mod_rename(&mut self) {
+        if self.remote.is_none() {
+            return;
+        }
+        let Some(s) = self.station.as_ref().filter(|s| s.kind == Kind::Mod) else {
+            return;
+        };
+        let Some(field) = s.mod_gui.as_ref().and_then(|gui| gui.text_input.as_ref()) else {
+            return;
+        };
+        if s.mod_selection.as_deref() != Some(field.when_selected.as_str())
+            || !field.valid_text(&s.name)
+        {
+            return;
+        }
+        let name = s.name.clone();
         self.send(S::RenameItem(play::RenameItem { name }));
     }
 

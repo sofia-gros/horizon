@@ -20,8 +20,33 @@ pub struct Gui {
     /// and inventory contents remain unchanged when the selection changes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layouts: Vec<SlotLayout>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_input: Option<TextInput>,
     #[serde(default)]
     pub elements: Vec<Element>,
+}
+
+/// A player-local output name; the server applies it only to a valid preview.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextInput {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub max_length: u8,
+    pub when_selected: String,
+    pub output: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty_slot: Option<String>,
+}
+impl TextInput {
+    pub fn valid_text(&self, text: &str) -> bool {
+        text.encode_utf16().count() <= usize::from(self.max_length)
+            && text
+                .chars()
+                .all(|c| c != '\u{a7}' && c >= ' ' && c != '\u{7f}')
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -381,6 +406,15 @@ impl Gui {
         {
             return Err("invalid player inventory position".into());
         }
+        if let Some(input) = &self.text_input
+            && (!inside(input.x, input.y, input.width, input.height)
+                || !(1..=50).contains(&input.max_length)
+                || !self.elements.iter().any(|element| matches!(element, Element::Button { id, enabled: true, .. } if id == &input.when_selected))
+                || !self.slots.iter().any(|slot| slot.id == input.output && slot.role == SlotRole::Output)
+                || input.empty_slot.as_ref().is_some_and(|id| !self.slots.iter().any(|slot| &slot.id == id && slot.role != SlotRole::Output)))
+        {
+            return Err("invalid GUI text input".into());
+        }
         if let Some(scroll) = &self.scroll {
             let viewport_w = u32::from(scroll.columns) * u32::from(scroll.cell_width);
             let viewport_h = u32::from(scroll.rows) * u32::from(scroll.cell_height);
@@ -682,6 +716,29 @@ mod tests {
         assert!(Gui::parse(&invalid.to_string()).is_err());
         let mut invalid = value;
         invalid["layouts"][0]["selection"] = "unknown".into();
+        assert!(Gui::parse(&invalid.to_string()).is_err());
+    }
+    #[test]
+    fn output_name_input_is_bounded_and_attached_to_a_valid_selection() {
+        let value = serde_json::json!({"width":176,"height":184,
+            "slots":[{"id":"result","x":114,"y":38,"role":"output"}],
+            "elements":[{"type":"button","id":"build","x":1,"y":1,"width":10,"height":10,"text":""}],
+            "text_input":{"x":80,"y":7,"width":82,"height":9,"max_length":50,"when_selected":"build","output":"result"}});
+        let gui = Gui::parse(&value.to_string()).unwrap();
+        let field = gui.text_input.unwrap();
+        assert!(field.valid_text(""));
+        assert!(field.valid_text(&"😀".repeat(25)));
+        assert!(!field.valid_text(&"😀".repeat(26)));
+        assert!(!field.valid_text("bad\nname"));
+        assert!(!field.valid_text("bad§name"));
+        let mut invalid = value.clone();
+        invalid["text_input"]["x"] = 100.into();
+        assert!(Gui::parse(&invalid.to_string()).is_err());
+        let mut invalid = value.clone();
+        invalid["text_input"]["when_selected"] = "missing".into();
+        assert!(Gui::parse(&invalid.to_string()).is_err());
+        let mut invalid = value;
+        invalid["text_input"]["output"] = "missing".into();
         assert!(Gui::parse(&invalid.to_string()).is_err());
     }
 }

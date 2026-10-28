@@ -19,6 +19,56 @@ use horizon_core::random::{LegacyRandom, RandomSource};
 pub(super) const INPUT: usize = 600;
 pub(super) const RESULT: usize = 650;
 
+/// Apply a validated player-local name only to the output selected by the GUI.
+pub(super) fn name_mod_output(
+    gui: &horizon_mods::gui::Gui,
+    selection: Option<&str>,
+    name: &str,
+    inputs: &[Option<ItemStack>],
+    outputs: &mut [ItemStack],
+) {
+    let Some(field) = gui
+        .text_input
+        .as_ref()
+        .filter(|field| mod_text_enabled(gui, selection, inputs) && field.valid_text(name))
+    else {
+        return;
+    };
+    let Some(index) = gui
+        .slots
+        .iter()
+        .filter(|slot| slot.role == horizon_mods::gui::SlotRole::Output)
+        .position(|slot| slot.id == field.output)
+    else {
+        return;
+    };
+    if let Some(output) = outputs.get_mut(index) {
+        output.data_mut().custom_name = (!name.trim().is_empty()).then(|| name.to_owned());
+        output.tidy();
+    }
+}
+
+pub(super) fn mod_text_enabled(
+    gui: &horizon_mods::gui::Gui,
+    selection: Option<&str>,
+    inputs: &[Option<ItemStack>],
+) -> bool {
+    let Some(field) = &gui.text_input else {
+        return false;
+    };
+    if selection != Some(field.when_selected.as_str()) {
+        return false;
+    }
+    field.empty_slot.as_ref().is_none_or(|id| {
+        gui.slots
+            .iter()
+            .filter(|slot| slot.role != horizon_mods::gui::SlotRole::Output)
+            .position(|slot| &slot.id == id)
+            .and_then(|i| inputs.get(i))
+            .is_some_and(Option::is_none)
+    })
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Kind {
     Enchanting,
@@ -183,6 +233,17 @@ pub(super) struct Station {
     pub(super) mod_scroll_dragging: bool,
 }
 impl Station {
+    pub(super) fn clear_mod_name(&mut self) {
+        self.name.clear();
+        self.rename.set_value("");
+        self.rename.focused = false;
+    }
+    fn mod_text_field(&self) -> Option<&horizon_mods::gui::TextInput> {
+        let gui = self.mod_gui.as_ref()?;
+        (mod_text_enabled(gui, self.mod_selection.as_deref(), &self.inputs)
+            && self.result.is_some())
+        .then_some(gui.text_input.as_ref()?)
+    }
     pub(super) fn is_mod_display(&self) -> bool {
         self.mod_gui
             .as_ref()
@@ -210,6 +271,10 @@ impl Station {
         })
     }
     fn new(kind: Kind, pos: [i32; 3]) -> Self {
+        let mut rename = anvil_box();
+        if kind == Kind::Mod {
+            rename.focused = false;
+        }
         Self {
             kind,
             pos,
@@ -220,7 +285,7 @@ impl Station {
             bookcases: 0,
             anvil: AnvilResult::default(),
             name: String::new(),
-            rename: anvil_box(),
+            rename,
             stone: Default::default(),
             selected: None,
             start: 0,
@@ -651,7 +716,16 @@ impl Game<'_> {
                         None
                     };
                     s.mod_counts = plan.as_ref().map(|(_, counts)| counts.clone());
-                    let results = plan.map(|(results, _)| results).unwrap_or_default();
+                    let mut results = plan.map(|(results, _)| results).unwrap_or_default();
+                    if let Some(gui) = &s.mod_gui {
+                        name_mod_output(
+                            gui,
+                            s.mod_selection.as_deref(),
+                            &s.name,
+                            &s.inputs,
+                            &mut results,
+                        );
+                    }
                     s.result = results.first().cloned();
                     for (cell, result) in s.mod_extra_results.iter_mut().zip(
                         results
@@ -661,6 +735,17 @@ impl Game<'_> {
                             .chain(std::iter::repeat(None)),
                     ) {
                         *cell = result;
+                    }
+                    if s.result.is_none()
+                        || s.mod_gui
+                            .as_ref()
+                            .and_then(|gui| gui.text_input.as_ref())
+                            .is_some()
+                            && !s.mod_gui.as_ref().is_some_and(|gui| {
+                                mod_text_enabled(gui, s.mod_selection.as_deref(), &s.inputs)
+                            })
+                    {
+                        s.clear_mod_name();
                     }
                 }
             }
@@ -1108,6 +1193,9 @@ impl Game<'_> {
         let (ox, oy) = self.inventory_origin(&batch);
         let local = (self.cursor.0 - ox, self.cursor.1 - oy);
         let shift = self.has_shift_down();
+        if !right && self.mod_name_click(ox, oy) {
+            return true;
+        }
         if !right {
             if let Some(s) = self.station.as_mut()
                 && let Some(scroll) = s.mod_gui.as_ref().and_then(|gui| gui.scroll.as_ref())
@@ -1144,6 +1232,9 @@ impl Game<'_> {
             if let Some((index, id)) = selected {
                 if self.remote.is_some() {
                     if let Some(s) = self.station.as_mut() {
+                        if s.mod_selection.as_deref() != Some(&id) {
+                            s.clear_mod_name();
+                        }
                         s.mod_selection = Some(id);
                     }
                     self.remote_station_button(index as i32);
@@ -1180,6 +1271,9 @@ impl Game<'_> {
                         return true;
                     }
                     if let Some(s) = self.station.as_mut() {
+                        if s.mod_selection.as_deref() != Some(&id) {
+                            s.clear_mod_name();
+                        }
                         s.mod_selection = Some(id);
                     }
                     self.station_changed();
@@ -1333,10 +1427,10 @@ impl Game<'_> {
     /// Whether keyboard text goes to the anvil rename box.
     pub(super) fn station_typing(&self) -> bool {
         self.screen == Screen::Inventory
-            && self
-                .station
-                .as_ref()
-                .is_some_and(|s| s.kind == Kind::Anvil && s.inputs[0].is_some())
+            && self.station.as_ref().is_some_and(|s| {
+                (s.kind == Kind::Anvil && s.inputs[0].is_some())
+                    || (s.mod_text_field().is_some() && s.rename.focused)
+            })
     }
     pub(super) fn station_text(&mut self, text: Option<&str>, backspace: bool) {
         // The recipe book's search box takes scripted typing too.
@@ -1347,14 +1441,22 @@ impl Game<'_> {
         let Some(s) = self.station.as_mut() else {
             return;
         };
+        let previous = s.rename.clone();
         if backspace {
             s.rename.delete_chars(-1);
         } else if let Some(t) = text {
             s.rename.insert_text(t);
         }
+        if s.mod_text_field()
+            .is_some_and(|field| !field.valid_text(&s.rename.value))
+        {
+            s.rename = previous;
+            return;
+        }
         s.name.clone_from(&s.rename.value);
         self.station_changed();
         self.remote_anvil_rename();
+        self.remote_mod_rename();
     }
     /// `AnvilScreen.keyPressed`: the rename box handles the key.
     pub(super) fn station_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
@@ -1368,6 +1470,7 @@ impl Game<'_> {
         s.name.clone_from(&s.rename.value);
         self.station_changed();
         self.remote_anvil_rename();
+        self.remote_mod_rename();
         true
     }
     /// Ctrl+A/C/V/X in the anvil's rename box (an `EditBox` of 50) or the
@@ -1381,10 +1484,67 @@ impl Game<'_> {
             return;
         };
         if s.rename.shortcut(shortcut, &mut self.clipboard) {
+            if s.mod_text_field()
+                .is_some_and(|field| !field.valid_text(&s.rename.value))
+            {
+                s.rename.set_value(&s.name);
+                return;
+            }
             s.name.clone_from(&s.rename.value);
             self.station_changed();
             self.remote_anvil_rename();
+            self.remote_mod_rename();
         }
+    }
+    fn mod_name_click(&mut self, ox: f32, oy: f32) -> bool {
+        let Some(field) = self
+            .station
+            .as_ref()
+            .and_then(Station::mod_text_field)
+            .cloned()
+        else {
+            return false;
+        };
+        let (mx, my) = self.cursor;
+        let (x, y) = (ox + f32::from(field.x), oy + f32::from(field.y));
+        let inside = mx >= x
+            && my >= y
+            && mx < x + f32::from(field.width)
+            && my < y + f32::from(field.height);
+        let shift = self.has_shift_down();
+        let Some(s) = self.station.as_mut() else {
+            return false;
+        };
+        s.rename.focused = inside;
+        if inside {
+            s.rename.x = x;
+            s.rename.y = y;
+            s.rename.width = f32::from(field.width);
+            s.rename.height = f32::from(field.height);
+            s.rename.max_length = usize::from(field.max_length);
+            s.rename.click(&self.gui.atlas, mx, shift, false);
+        }
+        inside
+    }
+    fn draw_mod_name(&mut self, batch: &mut HudBatch, ox: f32, oy: f32) {
+        let Some(field) = self
+            .station
+            .as_ref()
+            .and_then(Station::mod_text_field)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(s) = self.station.as_mut() else {
+            return;
+        };
+        let edit = &mut s.rename;
+        edit.x = ox + f32::from(field.x);
+        edit.y = oy + f32::from(field.y);
+        edit.width = f32::from(field.width);
+        edit.height = f32::from(field.height);
+        edit.max_length = usize::from(field.max_length);
+        edit.draw(batch, &self.gui.atlas, None);
     }
     /// A click in the anvil's name box (`EditBox.onClick`).
     fn anvil_name_click(&mut self, ox: f32, oy: f32) -> bool {
@@ -2406,6 +2566,7 @@ impl Game<'_> {
         if anvil_name {
             self.draw_anvil_name(batch, ox, oy);
         }
+        self.draw_mod_name(batch, ox, oy);
         let drag = self.drag_view();
         for i in self.station_slots().unwrap_or_default() {
             let Some((sx, sy)) = self.slot_position_any(i) else {
@@ -3230,4 +3391,33 @@ fn anvil_box() -> horizon_client::ui::EditBox {
     edit.text_color = u32::MAX;
     edit.focused = true;
     edit
+}
+
+#[cfg(test)]
+mod mod_name_tests {
+    use super::*;
+    fn gui() -> horizon_mods::gui::Gui {
+        horizon_mods::gui::Gui::parse(r#"{"width":176,"height":184,"slots":[{"id":"tool","x":10,"y":20,"role":"storage"},{"id":"result","x":100,"y":20,"role":"output"}],"elements":[{"type":"button","id":"build","x":1,"y":1,"width":10,"height":10,"text":""}],"text_input":{"x":80,"y":7,"width":82,"height":9,"max_length":50,"when_selected":"build","output":"result","empty_slot":"tool"}}"#).unwrap()
+    }
+    #[test]
+    fn names_only_apply_to_the_authorized_preview() {
+        let gui = gui();
+        let empty = vec![None];
+        let occupied = vec![Some(ItemStack::new("minecraft:stone", 1))];
+        let make = || vec![ItemStack::new("minecraft:wooden_pickaxe", 1)];
+        let mut output = make();
+        name_mod_output(&gui, Some("build"), "刃 😀", &empty, &mut output);
+        assert_eq!(output[0].custom_name(), Some("刃 😀"));
+        name_mod_output(&gui, Some("build"), "", &empty, &mut output);
+        assert_eq!(output[0].custom_name(), None);
+        for (selection, name, inputs) in [
+            (None, "Blade", &empty),
+            (Some("build"), "bad\nname", &empty),
+            (Some("build"), "Blade", &occupied),
+        ] {
+            let mut output = make();
+            name_mod_output(&gui, selection, name, inputs, &mut output);
+            assert_eq!(output[0].custom_name(), None);
+        }
+    }
 }
