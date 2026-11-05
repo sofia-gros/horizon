@@ -91,6 +91,21 @@ fn dry_sample(
     !missing && result.is_ok_and(|contacts| contacts.iter().all(|c| c.height <= 0.0))
 }
 
+/// Only the family's explicit eye-immersion drowning policy enters common
+/// mob air logic; body contact, burn state and native water flags are unrelated.
+pub(super) fn drowning_eyes(m: &Mob, w: &MobWorld<'_>) -> bool {
+    w.registered_fluids
+        .is_some_and(|resources| can_drown(resources, &contacts(m, w)))
+}
+fn can_drown(resources: &RegisteredFluidResources<'_>, contacts: &[Contact]) -> bool {
+    contacts.iter().any(|contact| {
+        contact.eyes_inside
+            && resources
+                .interaction(contact.source)
+                .is_some_and(|policy| policy.can_drown)
+    })
+}
+
 /// Policy-only opt-in to the mob's existing water/rain fire-clearing phase.
 /// A burning mob needs body contact, not eye immersion or native water tags.
 pub(super) fn extinguishes(m: &Mob, w: &MobWorld<'_>) -> bool {
@@ -203,7 +218,7 @@ mod tests {
             "policy":{"drop_off":1,"slope_distance":4,"tick_delay":5,"source_conversion":false},
             "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
             "interaction":{"travel":{"acceleration":if name == "hot" {0.02} else {0.04},"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
-                "motion_scale":scales[usize::from(name == "other")],"can_swim":false,"can_drown":false,"extinguishes":name == "hot" && effect.is_some(),
+                "motion_scale":scales[usize::from(name == "other")],"can_swim":false,"can_drown":name == "hot","extinguishes":name == "hot" && effect.is_some(),
                 "fall_distance_scale":1.0,"burn":burn,"effect":effect}
         })).collect();
         RegisteredFluidResources::from_reader(
@@ -579,6 +594,104 @@ mod tests {
             assert_eq!(m.health, 10.0);
             assert_eq!(m.fire_ticks, 0);
         }
+    }
+    #[test]
+    fn drowning_requires_eyes_in_the_matching_enabled_family() {
+        let registry = registry();
+        let resources = resources(&registry);
+        let m = mob();
+        let body_only = sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(0)));
+        assert!(body_only[0].height > 0.0);
+        assert!(!can_drown(&resources, &body_only));
+        for state in [0, 1] {
+            let full = sample(&m, &resources, |p| {
+                (p.y <= 1).then_some(BlockStateId(state))
+            });
+            assert!(can_drown(&resources, &full));
+        }
+        let other = sample(&m, &resources, |p| (p.y <= 1).then_some(BlockStateId(16)));
+        assert!(!can_drown(&resources, &other));
+        assert!(!can_drown(&resources, &sample(&m, &resources, |_| None)));
+        // An independently recorded eye sample does not need body depth.
+        let mut eye = current_contact(&resources, 1, Vec3::ZERO);
+        eye.height = 0.0;
+        eye.eyes_inside = true;
+        assert!(can_drown(&resources, &[eye]));
+    }
+    #[test]
+    fn registered_eye_contact_runs_the_existing_air_damage_and_refill_path() {
+        let registry = registry();
+        let resources = resources(&registry);
+        let mut m = mob();
+        let contacts = sample(&m, &resources, |p| (p.y <= 1).then_some(BlockStateId(1)));
+        let submerged = can_drown(&resources, &contacts);
+        let mut events = Vec::new();
+        m.air = 300;
+        super::super::ai::tick_common_air(&mut m, submerged, &mut events);
+        assert_eq!(m.air, 299);
+        assert_eq!(m.health, 10.0);
+        assert!(events.is_empty());
+        m.air = -19;
+        super::super::ai::tick_common_air(&mut m, submerged, &mut events);
+        assert_eq!(m.air, 0);
+        assert_eq!(m.health, 8.0);
+        assert!(matches!(
+            events.as_slice(),
+            [MobEvent::Drown { mob: 1, .. }]
+        ));
+        super::super::ai::tick_common_air(&mut m, false, &mut events);
+        assert_eq!(m.air, 4);
+        assert_eq!(events.len(), 1);
+        assert!(!m.fluids.in_water && !m.fluids.eye_in_water);
+    }
+    #[test]
+    fn common_air_respects_water_breathing_nautilus_and_inherent_breathing() {
+        for mode in 0..4 {
+            let mut m = mob();
+            let mut events = Vec::new();
+            m.air = 100;
+            match mode {
+                0 => m.add_effect("minecraft:water_breathing", 100, 0),
+                1 => m.add_effect("minecraft:breath_of_the_nautilus", 100, 0),
+                2 => Arc::make_mut(&mut m.kind).flags.breathes_water = true,
+                _ => {}
+            }
+            super::super::ai::tick_common_air(&mut m, true, &mut events);
+            assert_eq!(
+                m.air,
+                match mode {
+                    0 | 2 => 104,
+                    1 => 100,
+                    _ => 99,
+                }
+            );
+            assert_eq!(m.health, 10.0);
+            assert!(events.is_empty());
+            // Leaving the fluid refills even while the nautilus effect remains.
+            super::super::ai::tick_common_air(&mut m, false, &mut events);
+            assert_eq!(
+                m.air,
+                match mode {
+                    0 | 2 => 108,
+                    1 => 104,
+                    _ => 103,
+                }
+            );
+        }
+    }
+    #[test]
+    fn drowning_damage_keeps_native_invulnerability_and_air_cap() {
+        let mut m = mob();
+        let mut events = Vec::new();
+        m.invulnerable_flag = true;
+        m.air = -19;
+        super::super::ai::tick_common_air(&mut m, true, &mut events);
+        assert_eq!(m.air, 0);
+        assert_eq!(m.health, 10.0);
+        assert!(matches!(events.as_slice(), [MobEvent::Drown { .. }]));
+        m.air = 299;
+        super::super::ai::tick_common_air(&mut m, false, &mut events);
+        assert_eq!(m.air, 300);
     }
     #[test]
     fn only_positive_body_contact_with_an_extinguishing_family_clears_fire() {

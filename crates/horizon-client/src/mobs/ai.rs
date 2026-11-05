@@ -41,6 +41,29 @@ fn block_contact_damage(m: &mut Mob, w: &MobWorld, fire: f32) {
     }
 }
 
+/// Shared common air supply for native water and opted-in registered fluids.
+/// Aquatic and axolotl callers keep their separate air/suffocation behavior.
+pub(super) fn tick_common_air(m: &mut Mob, submerged: bool, events: &mut Vec<MobEvent>) {
+    let needs_air = submerged && !m.kind.flags.breathes_water;
+    let holds_air = needs_air && m.has_effect("minecraft:breath_of_the_nautilus");
+    let drowns = needs_air && !holds_air && !m.has_effect("minecraft:water_breathing");
+    let vanilla = Breath {
+        can_breathe: !drowns,
+        consume: 1,
+        refill: if drowns || holds_air { 0 } else { 4 },
+    };
+    let breath = breathe(m.id, &m.kind.id, vanilla);
+    if let Some(drowning) = drown(m.id, &m.kind.id, &mut m.air, breath, true) {
+        events.push(MobEvent::Drown {
+            mob: m.id,
+            at: [m.position.x, m.position.y, m.position.z],
+        });
+        if let Some(damage) = drowning.damage {
+            m.damage(damage, Damage::of(DamageKind::Drown));
+        }
+    }
+}
+
 /// Existing mob water/rain fire handling, also used by an explicit registered
 /// fluid policy. Keep the sound position, volume, RNG and countdown behavior.
 pub(super) fn extinguish_environment_fire(m: &mut Mob, wet: bool, events: &mut Vec<MobEvent>) {
@@ -1052,25 +1075,8 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 m.air = 300;
             }
         } else {
-            // LivingEntity.baseTick's air supply (LivingBreatheEvent): an
-            // entity with its eyes in water that can't breathe there loses
-            // air, any other gains it.
-            let drowns = m.fluids.eye_in_water && !m.kind.flags.breathes_water;
-            let vanilla = Breath {
-                can_breathe: !drowns,
-                consume: 1,
-                refill: if drowns { 0 } else { 4 },
-            };
-            let breath = breathe(m.id, &m.kind.id, vanilla);
-            if let Some(drowning) = drown(m.id, &m.kind.id, &mut m.air, breath, true) {
-                events.push(MobEvent::Drown {
-                    mob: m.id,
-                    at: [m.position.x, m.position.y, m.position.z],
-                });
-                if let Some(damage) = drowning.damage {
-                    m.damage(damage, Damage::of(DamageKind::Drown));
-                }
-            }
+            let submerged = m.fluids.eye_in_water || super::registered_fluids::drowning_eyes(m, w);
+            tick_common_air(m, submerged, events);
         }
 
         if m.kind.flags.water_sensitive && (m.fluids.in_water || in_rain(m, w)) {
