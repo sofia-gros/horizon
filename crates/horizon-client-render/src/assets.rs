@@ -259,14 +259,19 @@ impl RenderAssets {
         if let Some(resources) = &assets.registered_fluids {
             // These textures belong to procedural liquids, not model faces.
             // Include them explicitly, including the upward flowing variant.
-            let mut visuals: Vec<_> = resources.visuals().collect();
-            visuals.sort_by(|(_, a), (_, b)| a.still.cmp(&b.still).then(a.flowing.cmp(&b.flowing)));
-            for (id, visual) in visuals {
-                sprites.insert(root, &visual.still)?;
-                sprites.insert(
-                    root,
-                    &visual.flowing_texture(resources.flow.vertical_direction(id)?),
-                )?;
+            let mut textures = BTreeSet::new();
+            for (id, visual) in resources.visuals() {
+                textures.insert(visual.still.clone());
+                textures.insert(
+                    visual
+                        .flowing_texture(resources.flow.vertical_direction(id)?)
+                        .into_owned(),
+                );
+            }
+            for texture in textures {
+                sprites.insert(root, &texture)?;
+            }
+            for (_, visual) in resources.visuals() {
                 if draws
                     && visual
                         .fog

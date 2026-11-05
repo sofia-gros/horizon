@@ -168,13 +168,21 @@ BlueMap is licensed under the MIT license:
 
 ## SlimeKnights registered-fluid behavior
 
+`crates/horizon-client-render/src/fog/texture_color.rs` adapts
+[`TextureColorHelper.computeAverageColor`](https://github.com/SlimeKnights/Mantle/blob/17c287ad52f7b10154e07fa7570dc7bccd74ca2b/src/main/java/slimeknights/mantle/client/model/TextureColorHelper.java),
+Copyright (c) 2022 SlimeKnights. That method's explicit Apache-2.0 license is
+preserved in `licenses/mantle-texture-color-Apache-2.0.txt`, in addition to Mantle's
+repository MIT notice below. No separate upstream NOTICE file was present.
+Changes: Rust RGBA slices, bounded dimensions, RGB-only result and a pack-local
+cache before atlas resampling. Physical frame zero, thresholds, x-major f32
+accumulation and the source alpha/red/green saturation inputs are preserved.
+
 `crates/horizon-client-render/src/fog.rs` adapts the color multiplication and
 minimum start/end overrides of Mantle `ClientTextureFluidType` at
 `17c287ad52f7b10154e07fa7570dc7bccd74ca2b` (MIT, copyright below).
 `registered_fluids/resources.rs` adds opt-in fog declarations and original
 loaded-only camera sampling. Changes: the existing host spherical environmental
-channel, sky/cloud caps, and native callbacks last. Sprite-derived automatic
-color calculation and camera overlays are not adapted in this slice. The source
+channel, sky/cloud caps, and native callbacks last. Camera overlays remain outside this slice. The source
 `FluidTexture` data model and TConstruct `FluidTextureProvider` were also read.
 
 `crates/horizon-client/src/game/dispenser.rs` follows the registered bucket

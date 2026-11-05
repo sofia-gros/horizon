@@ -15,7 +15,7 @@ use std::{collections::HashMap, fs::File, io, path::Path, sync::Arc};
 
 pub const RESOURCE_PATH: &str = "horizon/registered_fluids.json";
 /// Optional spherical camera fog. Color is an RGB multiplier, not a replacement.
-/// A missing color leaves the host color intact (it does not infer sprite color).
+/// A missing color preserves the host color unless `calculate_color` opts in.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FluidFog {
