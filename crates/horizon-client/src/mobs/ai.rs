@@ -41,6 +41,20 @@ fn block_contact_damage(m: &mut Mob, w: &MobWorld, fire: f32) {
     }
 }
 
+/// Existing mob water/rain fire handling, also used by an explicit registered
+/// fluid policy. Keep the sound position, volume, RNG and countdown behavior.
+pub(super) fn extinguish_environment_fire(m: &mut Mob, wet: bool, events: &mut Vec<MobEvent>) {
+    if m.fire_ticks > 0 && wet {
+        m.fire_ticks = 0;
+        events.push(MobEvent::Sound(
+            "entity.generic.extinguish_fire",
+            m.center(),
+            0.7,
+            1.6 + (m.random.next_float() - m.random.next_float()) * 0.4,
+        ));
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Ai {
     /// `Mob.homePosition` and `homeRadius`: where a restricted mob stays
@@ -991,15 +1005,9 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     // Fire: water or rain (Entity.isInRain) extinguishes, lava ignites,
     // burning hurts every second.
-    if m.fire_ticks > 0 && (m.fluids.in_water || in_rain(m, w)) {
-        m.fire_ticks = 0;
-        events.push(MobEvent::Sound(
-            "entity.generic.extinguish_fire",
-            m.center(),
-            0.7,
-            1.6 + (m.random.next_float() - m.random.next_float()) * 0.4,
-        ));
-    }
+    let extinguishing = m.fire_ticks > 0
+        && (m.fluids.in_water || in_rain(m, w) || super::registered_fluids::extinguishes(m, w));
+    extinguish_environment_fire(m, extinguishing, events);
     if m.fire_ticks > 0 {
         if m.kind.flags.fire_immune {
             m.fire_ticks = 0;
