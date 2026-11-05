@@ -732,20 +732,24 @@ impl Mob {
                 let _ = lava.apply_to(&mut pushed, lava_scale);
             }
         }
-        if self.pushed_by_fluid()
-            && let Some(resources) = w.registered_fluids
-        {
-            // Keep registered identities separate and never read absent chunks.
-            // Invalid/oversized sampling fails closed before applying any push.
-            if let Ok(contacts) = crate::motion::registered_fluid_contacts_with_flow(
-                w.world,
-                resources,
-                w.fluid_tables,
-                self.bounds().deflate(Vec3::new(0.001, 0.001, 0.001)),
-                Vec3::new(self.position.x, self.eye_y(), self.position.z),
-            ) {
-                self.push_registered_currents(resources, &contacts);
-            }
+        if let Some(resources) = w.registered_fluids {
+            // Fall policy does not depend on current susceptibility. A failed
+            // flow query falls back to bounded geometry with zero flow vectors,
+            // so it can still scale a fall without inventing any current.
+            let contacts = if self.pushed_by_fluid() {
+                crate::motion::registered_fluid_contacts_with_flow(
+                    w.world,
+                    resources,
+                    w.fluid_tables,
+                    self.bounds().deflate(Vec3::new(0.001, 0.001, 0.001)),
+                    Vec3::new(self.position.x, self.eye_y(), self.position.z),
+                )
+                .unwrap_or_else(|_| super::registered_fluids::contacts(self, w))
+            } else {
+                super::registered_fluids::contacts(self, w)
+            };
+            self.push_registered_currents(resources, &contacts);
+            self.scale_registered_fall(resources, &contacts);
         }
         if self.fluids.in_water {
             self.fall_distance = 0.0;
@@ -776,6 +780,21 @@ impl Mob {
                 && policy.motion_scale > 0.0
             {
                 let _ = contact.current.apply_to(&mut pushed, policy.motion_scale);
+            }
+        }
+    }
+    /// Like the registered player adapter, each positively immersed family
+    /// scales the accumulated fall once per fluid refresh, never once per cell.
+    pub(super) fn scale_registered_fall(
+        &mut self,
+        resources: &horizon_world::registered_fluids::resources::RegisteredFluidResources<'_>,
+        contacts: &[horizon_world::registered_fluids::contact::Contact],
+    ) {
+        for contact in contacts {
+            if contact.height > 0.0
+                && let Some(policy) = resources.interaction(contact.source)
+            {
+                self.fall_distance *= policy.fall_distance_scale;
             }
         }
     }
