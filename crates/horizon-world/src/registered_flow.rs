@@ -29,6 +29,9 @@ pub trait RegisteredFlowWorld {
     fn block(&self, pos: BlockPos) -> Option<BlockStateId>;
     fn air(&self) -> BlockStateId;
     fn solid(&self, state: BlockStateId) -> bool;
+    /// Whether the block can contain any liquid, independently of its identity.
+    fn can_hold_any(&self, pos: BlockPos, state: BlockStateId) -> bool;
+    /// Whether it accepts this exact prospective source/flowing identity.
     fn can_hold(&self, pos: BlockPos, state: BlockStateId, fluid: RegisteredFluidId) -> bool;
     fn pass_wall(
         &self,
@@ -148,7 +151,7 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
         let amount = highest.saturating_sub(policy.drop_off);
         (amount > 0).then(|| self.flowing(id, amount, false))
     }
-    fn pass<W: RegisteredFlowWorld>(
+    fn maybe_pass<W: RegisteredFlowWorld>(
         &self,
         world: &W,
         id: RegisteredFluidId,
@@ -158,8 +161,24 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
         target: BlockStateId,
     ) -> bool {
         !self.source_at(id, target)
-            && world.can_hold(rel(pos, direction), target, id)
+            && world.can_hold_any(rel(pos, direction), target)
             && world.pass_wall(pos, state, direction, target)
+    }
+    fn pass<W: RegisteredFlowWorld>(
+        &self,
+        world: &W,
+        id: RegisteredFluidId,
+        pos: BlockPos,
+        state: BlockStateId,
+        direction: Direction,
+        target: BlockStateId,
+    ) -> bool {
+        self.maybe_pass(world, id, pos, state, direction, target)
+            && world.can_hold(
+                rel(pos, direction),
+                target,
+                self.fluids.flowing(id).expect("validated fluid identity"),
+            )
     }
     fn hole<W: RegisteredFlowWorld>(
         &self,
@@ -177,7 +196,12 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
                 .fluids
                 .from_block(below)
                 .is_some_and(|fluid| self.same(id, fluid))
-                || world.can_hold(below_pos, below, id))
+                || (world.can_hold_any(below_pos, below)
+                    && world.can_hold(
+                        below_pos,
+                        below,
+                        self.fluids.flowing(id).expect("validated fluid identity"),
+                    )))
     }
     fn slope<W: RegisteredFlowWorld>(
         &self,
@@ -288,12 +312,15 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
             let Some(target) = world.block(at) else {
                 continue;
             };
-            if !self.pass(world, fluid.id(), pos, state, direction, target) {
+            if !self.maybe_pass(world, fluid.id(), pos, state, direction, target) {
                 continue;
             }
             let Some(next) = self.new_liquid(world, fluid.id(), at, target, policy) else {
                 continue;
             };
+            if !world.can_hold(at, target, next.id()) {
+                continue;
+            }
             let distance = if self.hole(world, fluid.id(), at, target) {
                 0
             } else {
@@ -361,9 +388,11 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
         }
         let below_pos = rel(pos, Direction::Down);
         if let Some(below) = world.block(below_pos) {
-            if self.pass(world, fluid.id(), pos, state, Direction::Down, below) {
+            if self.maybe_pass(world, fluid.id(), pos, state, Direction::Down, below) {
                 if let Some(next) = self.new_liquid(world, fluid.id(), below_pos, below, policy) {
-                    if world.can_replace(below_pos, below, next.id(), Direction::Down) {
+                    if world.can_hold(below_pos, below, next.id())
+                        && world.can_replace(below_pos, below, next.id(), Direction::Down)
+                    {
                         self.spread_to(world, below_pos, below, next, Direction::Down);
                         let sources = HORIZONTAL
                             .into_iter()
@@ -396,7 +425,8 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
         let Some(old) = world.block(pos) else {
             return Ok(false);
         };
-        if !world.can_hold(pos, old, source)
+        if !world.can_hold_any(pos, old)
+            || !world.can_hold(pos, old, source)
             || !world.can_replace(pos, old, source, Direction::Down)
         {
             return Ok(false);
@@ -497,6 +527,7 @@ mod tests {
         game_time: i64,
         deny: Option<BlockPos>,
         floor: bool,
+        acceptance: HashMap<BlockPos, RegisteredFluidId>,
     }
     impl<'a, 'r> World<'a, 'r> {
         fn new(fluids: &'a RegisteredFluids<'r>) -> Self {
@@ -515,6 +546,7 @@ mod tests {
                 game_time: 0,
                 deny: None,
                 floor: true,
+                acceptance: HashMap::new(),
             }
         }
         fn run(&mut self, flow: &RegisteredFlow<'_, '_>) {
@@ -555,12 +587,18 @@ mod tests {
         fn solid(&self, state: BlockStateId) -> bool {
             state == BlockStateId(1)
         }
-        fn can_hold(&self, _pos: BlockPos, state: BlockStateId, id: RegisteredFluidId) -> bool {
-            state == BlockStateId(0)
-                || self
-                    .fluids
-                    .from_block(state)
-                    .is_some_and(|other| self.fluids.same_family(id, other.id()).unwrap())
+        fn can_hold_any(&self, _pos: BlockPos, state: BlockStateId) -> bool {
+            !self.solid(state)
+        }
+        fn can_hold(&self, pos: BlockPos, state: BlockStateId, id: RegisteredFluidId) -> bool {
+            self.acceptance
+                .get(&pos)
+                .is_none_or(|accepted| *accepted == id)
+                && (state == BlockStateId(0)
+                    || self
+                        .fluids
+                        .from_block(state)
+                        .is_some_and(|other| self.fluids.same_family(id, other.id()).unwrap()))
         }
         fn pass_wall(
             &self,
@@ -578,7 +616,12 @@ mod tests {
             id: RegisteredFluidId,
             _direction: Direction,
         ) -> bool {
-            self.can_hold(pos, state, id)
+            let _ = pos;
+            state == BlockStateId(0)
+                || self
+                    .fluids
+                    .from_block(state)
+                    .is_some_and(|other| self.fluids.same_family(id, other.id()).unwrap())
         }
         fn allow_spread(&self, _from: BlockPos, to: BlockPos) -> bool {
             self.deny != Some(to)
@@ -657,6 +700,92 @@ mod tests {
             fluids
                 .from_block(world.block(BlockPos::new(1, 1, 0)).unwrap())
                 .is_some()
+        );
+    }
+    #[test]
+    fn direct_spread_checks_computed_flowing_identity() {
+        let registry = registry();
+        let fluids = catalog(&registry);
+        let source = fluids.id("test:one").unwrap();
+        let flowing = fluids.flowing(source).unwrap();
+        let flow = RegisteredFlow::new(&fluids, [(source, policy())]).unwrap();
+        for (target, accepted, should_spread) in [
+            (BlockPos::new(0, 2, 0), source, false),
+            (BlockPos::new(0, 2, 0), flowing, true),
+            (BlockPos::new(1, 1, 0), source, false),
+            (BlockPos::new(1, 1, 0), flowing, true),
+        ] {
+            let mut world = World::new(&fluids);
+            world.acceptance.insert(target, accepted);
+            let origin = if target.y == 2 {
+                BlockPos::new(0, 3, 0)
+            } else {
+                BlockPos::new(0, 1, 0)
+            };
+            flow.place_source(&mut world, origin, source).unwrap();
+            flow.tick(&mut world, origin, source).unwrap();
+            assert_eq!(
+                fluids.from_block(world.block(target).unwrap()).is_some(),
+                should_spread
+            );
+        }
+    }
+    #[test]
+    fn slope_and_holes_query_flowing_not_origin_identity() {
+        let registry = registry();
+        let fluids = catalog(&registry);
+        let source = fluids.id("test:one").unwrap();
+        let flowing = fluids.flowing(source).unwrap();
+        let flow = RegisteredFlow::new(&fluids, [(source, policy())]).unwrap();
+        let mut world = World::new(&fluids);
+        let origin = BlockPos::new(0, 1, 0);
+        let target = BlockPos::new(1, 1, 0);
+        let below = BlockPos::new(1, 0, 0);
+        world.cells.insert(below, BlockStateId(0));
+        world.acceptance.insert(target, flowing);
+        world.acceptance.insert(below, flowing);
+        assert!(flow.pass(
+            &world,
+            source,
+            origin,
+            BlockStateId(0),
+            Direction::East,
+            BlockStateId(0)
+        ));
+        assert!(flow.hole(&world, source, target, BlockStateId(0)));
+        world.acceptance.insert(target, source);
+        world.acceptance.insert(below, source);
+        assert!(!flow.pass(
+            &world,
+            source,
+            origin,
+            BlockStateId(0),
+            Direction::East,
+            BlockStateId(0)
+        ));
+        assert!(!flow.hole(&world, source, target, BlockStateId(0)));
+    }
+    #[test]
+    fn computed_source_conversion_uses_source_acceptance() {
+        let registry = registry();
+        let fluids = catalog(&registry);
+        let source = fluids.id("test:one").unwrap();
+        let mut rules = policy();
+        rules.source_conversion = true;
+        let flow = RegisteredFlow::new(&fluids, [(source, rules)]).unwrap();
+        let mut world = World::new(&fluids);
+        let west = BlockPos::new(-1, 1, 0);
+        let east = BlockPos::new(1, 1, 0);
+        let middle = BlockPos::new(0, 1, 0);
+        flow.place_source(&mut world, west, source).unwrap();
+        flow.place_source(&mut world, east, source).unwrap();
+        world.acceptance.insert(middle, source);
+        flow.tick(&mut world, west, source).unwrap();
+        assert!(
+            fluids
+                .from_block(world.block(middle).unwrap())
+                .unwrap()
+                .is_source()
         );
     }
     #[test]
