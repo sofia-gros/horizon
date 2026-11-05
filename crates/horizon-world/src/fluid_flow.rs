@@ -1,4 +1,7 @@
-//! Neighbor-derived water/lava currents and falling-fluid wall deflection.
+// Upward-current semantics adapted from Mantle, Copyright (c) 2022 SlimeKnights.
+// MIT License. Full source and notice are in THIRD_PARTY_NOTICES.md.
+// Changed: explicit sample direction while preserving native downward callers.
+//! Neighbor-derived fluid currents and vertical-column wall deflection.
 use crate::fluid::{FluidKind, FluidState};
 use horizon_core::{
     geometry::{Direction, Vec3},
@@ -11,6 +14,9 @@ pub trait FlowSample: Copy {
     fn same_family(self, other: Self) -> bool;
     fn own_height(self) -> f32;
     fn falling(self) -> bool;
+    fn flows_up(self) -> bool {
+        false
+    }
 }
 impl FlowSample for FluidState {
     fn is_empty(self) -> bool {
@@ -74,7 +80,13 @@ fn sample_solid_face<S: FlowSample, W: FluidFlowWorld<S>>(
     if fluid.same_family(state) {
         return Ok(false);
     }
-    if direction == Direction::Up {
+    if direction
+        == if state.flows_up() {
+            Direction::Down
+        } else {
+            Direction::Up
+        }
+    {
         return Ok(true);
     }
     if world.is_ice_class(block) {
@@ -111,6 +123,7 @@ pub fn flow_at_sample<S: FlowSample, W: FluidFlowWorld<S>>(
     }
     let mut x = 0.0;
     let mut z = 0.0;
+    let vertical = if state.flows_up() { 1 } else { -1 };
     for direction in HORIZONTAL {
         let [dx, dy, dz] = direction.normal();
         let p = position.offset(dx, dy, dz);
@@ -123,11 +136,16 @@ pub fn flow_at_sample<S: FlowSample, W: FluidFlowWorld<S>>(
         if height == 0.0 {
             let block = world.block(p)?;
             if !world.blocks_fluid_flow(block) {
-                let below = world.fluid(p.offset(0, -1, 0))?;
-                if affects_flow(state, below) {
-                    height = below.own_height();
+                let vertical_neighbor = world.fluid(p.offset(0, vertical, 0))?;
+                if affects_flow(state, vertical_neighbor) {
+                    height = vertical_neighbor.own_height();
                     if height > 0.0 {
-                        difference = state.own_height() - (height - 0.8888889f32);
+                        difference = if state.flows_up() {
+                            // Mantle InvertedFluid retains this f32 operation order.
+                            state.own_height() - height + 0.8888889f32
+                        } else {
+                            state.own_height() - (height - 0.8888889f32)
+                        };
                     }
                 }
             }
@@ -145,9 +163,12 @@ pub fn flow_at_sample<S: FlowSample, W: FluidFlowWorld<S>>(
             let [dx, dy, dz] = direction.normal();
             let p = position.offset(dx, dy, dz);
             if sample_solid_face(world, state, p, direction)?
-                || sample_solid_face(world, state, p.offset(0, 1, 0), direction)?
+                || sample_solid_face(world, state, p.offset(0, -vertical, 0), direction)?
             {
-                result = result.normalize().add_vector(Vec3::new(0.0, -6.0, 0.0));
+                result =
+                    result
+                        .normalize()
+                        .add_vector(Vec3::new(0.0, f64::from(vertical) * 6.0, 0.0));
                 break;
             }
         }
@@ -161,7 +182,7 @@ mod registered_sample_tests {
     use std::convert::Infallible;
 
     #[derive(Clone, Copy)]
-    struct Sample(u64, u8, bool);
+    struct Sample(u64, u8, bool, bool);
     impl FlowSample for Sample {
         fn is_empty(self) -> bool {
             self.0 == 0
@@ -175,19 +196,29 @@ mod registered_sample_tests {
         fn falling(self) -> bool {
             self.2
         }
+        fn flows_up(self) -> bool {
+            self.3
+        }
     }
     struct World {
         east: Sample,
         wall: bool,
+        side_vertical: Option<(i32, Sample)>,
     }
     impl FluidFlowWorld<Sample> for World {
         type Error = Infallible;
         type Block = bool;
         fn fluid(&mut self, p: BlockPos) -> Result<Sample, Infallible> {
-            Ok(if p.x == 1 {
-                self.east
+            Ok(if p.x == 1 && p.z == 0 {
+                if p.y == 0 {
+                    self.east
+                } else {
+                    self.side_vertical
+                        .filter(|(y, _)| *y == p.y)
+                        .map_or(Sample(0, 0, false, false), |(_, fluid)| fluid)
+                }
             } else {
-                Sample(41, 8, false)
+                Sample(41, 8, false, false)
             })
         }
         fn block(&mut self, _: BlockPos) -> Result<bool, Infallible> {
@@ -212,18 +243,43 @@ mod registered_sample_tests {
     fn currents_preserve_custom_family_identity_and_falling_walls() {
         let origin = BlockPos::new(0, 0, 0);
         let mut world = World {
-            east: Sample(41, 4, false),
+            east: Sample(41, 4, false, false),
             wall: false,
+            side_vertical: None,
         };
-        let flow = flow_at_sample(&mut world, Sample(41, 8, false), origin).unwrap();
+        let flow = flow_at_sample(&mut world, Sample(41, 8, false, false), origin).unwrap();
         assert_eq!((flow.x, flow.y, flow.z), (1.0, 0.0, 0.0));
-        world.east = Sample(42, 4, false);
-        let flow = flow_at_sample(&mut world, Sample(41, 8, false), origin).unwrap();
+        world.east = Sample(42, 4, false, false);
+        let flow = flow_at_sample(&mut world, Sample(41, 8, false, false), origin).unwrap();
         assert_eq!((flow.x, flow.y, flow.z), (0.0, 0.0, 0.0));
         world.wall = true;
-        let flow = flow_at_sample(&mut world, Sample(41, 8, true), origin).unwrap();
+        let flow = flow_at_sample(&mut world, Sample(41, 8, true, false), origin).unwrap();
         assert_eq!((flow.x, flow.y, flow.z), (0.0, -1.0, 0.0));
-        let flow = flow_at_sample(&mut world, Sample(0, 0, true), origin).unwrap();
+        let flow = flow_at_sample(&mut world, Sample(0, 0, true, false), origin).unwrap();
         assert_eq!((flow.x, flow.y, flow.z), (0.0, 0.0, 0.0));
+    }
+    #[test]
+    fn upward_currents_sample_above_empty_sides_and_push_columns_upward() {
+        let origin = BlockPos::new(0, 0, 0);
+        let upward = Sample(41, 8, false, true);
+        let mut world = World {
+            east: Sample(0, 0, false, false),
+            wall: false,
+            side_vertical: Some((1, Sample(41, 4, false, true))),
+        };
+        let flow = flow_at_sample(&mut world, upward, origin).unwrap();
+        assert_eq!((flow.x, flow.y, flow.z), (1.0, 0.0, 0.0));
+        world.side_vertical = Some((1, Sample(42, 4, false, true)));
+        let flow = flow_at_sample(&mut world, upward, origin).unwrap();
+        assert_eq!((flow.x, flow.y, flow.z), (0.0, 0.0, 0.0));
+        world.side_vertical = Some((-1, Sample(41, 4, false, false)));
+        let flow = flow_at_sample(&mut world, upward, origin).unwrap();
+        assert_eq!((flow.x, flow.y, flow.z), (0.0, 0.0, 0.0));
+        let flow = flow_at_sample(&mut world, Sample(41, 8, false, false), origin).unwrap();
+        assert_eq!((flow.x, flow.y, flow.z), (1.0, 0.0, 0.0));
+        world.east = Sample(42, 4, false, false);
+        world.wall = true;
+        let flow = flow_at_sample(&mut world, Sample(41, 8, true, true), origin).unwrap();
+        assert_eq!((flow.x, flow.y, flow.z), (0.0, 1.0, 0.0));
     }
 }

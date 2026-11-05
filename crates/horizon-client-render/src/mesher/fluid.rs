@@ -24,6 +24,7 @@ pub(super) enum Sample {
         source: horizon_world::registered_fluids::RegisteredFluidId,
         amount: u8,
         falling: bool,
+        up: bool,
     },
 }
 impl From<FluidState> for Sample {
@@ -58,6 +59,9 @@ impl FlowSample for Sample {
             Self::Native(s) => s.falling(),
             Self::Registered { falling, .. } => falling,
         }
+    }
+    fn flows_up(self) -> bool {
+        matches!(self, Self::Registered { up: true, .. })
     }
 }
 #[derive(Clone, Copy)]
@@ -594,16 +598,19 @@ mod registered_tests {
             source,
             amount: 8,
             falling: false,
+            up: false,
         };
         let flowing = Sample::Registered {
             source,
             amount: 4,
             falling: true,
+            up: false,
         };
         let foreign = Sample::Registered {
             source: b.id("test:liquid").unwrap(),
             amount: 8,
             falling: false,
+            up: false,
         };
         let water = Sample::from(FluidState::from_json(r#"{"id":"minecraft:water"}"#).unwrap());
         assert!(full.same_family(flowing));
@@ -613,5 +620,17 @@ mod registered_tests {
         assert!(!full.is_empty());
         assert_eq!(flowing.own_height(), 4.0 / 9.0);
         assert!(flowing.falling());
+        let rising = Sample::Registered {
+            source,
+            amount: 4,
+            falling: true,
+            up: true,
+        };
+        assert!(rising.flows_up());
+        assert!(!flowing.flows_up());
+        assert!(!water.flows_up());
+        assert!(rising.same_family(full));
+        // Mantle changes flowing texture and currents, not the surface geometry.
+        assert_eq!(rising.own_height(), flowing.own_height());
     }
 }

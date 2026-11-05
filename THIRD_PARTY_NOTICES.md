@@ -180,8 +180,14 @@ yet. No Forge implementation was read or copied for this adapter.
 feeding-neighbor, ceiling-hole/slope and source-support semantics of
 [`Mantle InvertedFluid` at 17c287ad52f7b10154e07fa7570dc7bccd74ca2b](https://github.com/SlimeKnights/Mantle/blob/17c287ad52f7b10154e07fa7570dc7bccd74ca2b/src/main/java/slimeknights/mantle/fluid/InvertedFluid.java).
 Changes: one explicit per-family vertical direction inside the existing host
-algorithm, with host guards and scheduling; current vectors and client geometry
-are not included. Mantle carries the same SlimeKnights copyright and MIT notice:
+algorithm, with host guards and scheduling. `crates/horizon-world/src/fluid_flow.rs`
+adapts the same class's upward current neighbor selection, f32 operation order
+and column wall deflection. Native samples retain the old downward behavior.
+`registered_fluids/resources.rs` follows
+[`ClientInvertedFluidType` at the same revision](https://github.com/SlimeKnights/Mantle/blob/17c287ad52f7b10154e07fa7570dc7bccd74ca2b/src/main/java/slimeknights/mantle/fluid/texture/ClientInvertedFluidType.java)
+to select a flowing sprite with the `_inverted` suffix. The type and fluid leave
+height/shape geometry unchanged; no ceiling mirroring is added. Mantle carries
+the same SlimeKnights copyright and MIT notice:
 
 MIT License
 

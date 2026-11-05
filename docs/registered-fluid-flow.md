@@ -1,10 +1,9 @@
 # Registered fluid flow and scheduling (draft)
 
 This describes the simulation layer built on the registered fluid catalog.
-The ordinary downward path has separate draft resource, game-world, renderer,
-contact and bucket adapters. The new upward path is simulation-only and is
-deliberately rejected by the live resource loader until its remaining adapters
-are ready.
+Both directions use the draft resource, game-world, renderer, contact and bucket
+adapters. Upward declarations now load, select inverted flowing artwork and
+sample upward currents. No Ichor/Cinderslime definitions ship in this host patch.
 
 `RegisteredFlow` executes the existing host FlowingFluid transition and spread
 ordering with catalog-scoped identities. Every family needs an explicit policy:
@@ -26,10 +25,16 @@ commit/scheduling boundaries unchanged.
 
 The inversion follows MIT Mantle `InvertedFluid` at
 `17c287ad52f7b10154e07fa7570dc7bccd74ca2b`; see THIRD_PARTY_NOTICES.md.
-Rendering, body/eye geometry, currents and any inverted travel policies remain
-unimplemented. `RegisteredFluidResources::from_reader` rejects `up` rather than
-silently rendering a rising liquid on the bottom of the cell. No Ichor or
-Cinderslime declaration is enabled by this patch.
+Mantle's `ClientInvertedFluidType` substitutes a `flowing_inverted` texture but
+does not mirror vertex geometry; `InvertedFluid` does not override fluid height
+or shape. Keep the existing bottom-based surfaces and body/eye sampling rather
+than inventing ceiling-anchored volumes. The world renderer now appends
+`_inverted` to the declared flowing sprite for upward families; resource authors
+must provide that texture. Missing artwork fails mesh-table construction.
+The shared current path looks above empty neighboring cells and applies upward
+column wall deflection, with the source's f32 arithmetic order. Player and mesh
+sampling use the same explicit family direction. Native currents stay downward.
+Exact movement/source parity, visuals, gameplay and save/LAN need final validation.
 
 The authoritative adapter supplies loaded cells, support and wall occlusion,
 fluid acceptance/replacement rules, protection callbacks and compare-before-write
@@ -52,7 +57,10 @@ protected/unloaded cells, explicit source conversion, timing, chunk save/reload,
 paused chunks, wrong-chunk data and active-batch lifecycle restrictions.
 New upward cases cover rise/ceiling spread, pickup/draining, ceiling-hole
 selection and source support, independent family directions and unloaded upper
-cells. An inherited invalid-policy fixture now uses slope 9, matching the
+cells. Current cases cover above/below neighbor selection, foreign-family
+isolation and upward column push. Resource/mesh cases retain ordinary height
+and eye semantics while selecting the inverted flowing sprite. An inherited
+invalid-policy fixture now uses slope 9, matching the
 previously expanded maximum of 8. These new/updated cases were not run: only
 brief static review, rustfmt and whitespace review were performed. Builds,
 tests, CI inspection, version checks and merges remain deferred.

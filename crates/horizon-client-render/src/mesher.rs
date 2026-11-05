@@ -710,10 +710,14 @@ impl MeshTables {
                         source: resources.catalog.source(state.id())?,
                         amount: state.amount(),
                         falling: state.falling(),
+                        up: resources.flow.vertical_direction(state.id())?
+                            == horizon_world::registered_flow::VerticalFlow::Up,
                     },
                     Some(fluid::Visual {
                         still: layer(&visual.still)?,
-                        flowing: layer(&visual.flowing)?,
+                        flowing: layer(
+                            &visual.flowing_texture(resources.flow.vertical_direction(state.id())?),
+                        )?,
                         tint: visual.tint,
                         emission: visual.emission,
                     }),
