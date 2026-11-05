@@ -78,6 +78,15 @@ impl Wire {
     pub fn new(decoded: ItemStack, patch: Arc<[u8]>) -> Self {
         Self(Some(Arc::new((decoded, patch))))
     }
+    /// Snapshot identity includes the decoded baseline as well as raw bytes.
+    /// Normal item equality deliberately ignores this retained wire state.
+    pub fn same_snapshot(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
     /// The server's patch, whether or not the stack changed since.
     pub fn patch(&self) -> Option<&[u8]> {
         self.0.as_deref().map(|(_, patch)| &**patch)

@@ -948,6 +948,15 @@ impl Game<'_> {
         if self.res.facts().is_air(state) {
             return Ok(());
         }
+        if !self.with_level(|b, level, ticks| {
+            b.can_remove_block(
+                level,
+                ticks,
+                horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
+            )
+        }) {
+            return Ok(());
+        }
         let name = self.res.facts().get(state).name.clone();
         let is_tnt = &*name == "minecraft:tnt";
         // CreakingHeartBlock.onExplosionHit: its creaking dies (no
@@ -981,6 +990,7 @@ impl Game<'_> {
             self.pending.record_saved(pos, &tag);
         }
         if !is_tnt {
+            let snapshot = self.block_removal_snapshot(pos);
             let dynamic = self.pending.dynamic(pos);
             // LootContextParams.EXPLOSION_RADIUS under DESTROY_WITH_DECAY: the
             // tables' survives_explosion and explosion_decay draw from their
@@ -1003,6 +1013,18 @@ impl Game<'_> {
                 )
             });
             self.native_block_drops(pos, state, None, None, Some(radius), &mut drops);
+            if self.block_removal_snapshot(pos) != snapshot
+                || !self.with_level(|b, level, ticks| {
+                    b.can_remove_block(
+                        level,
+                        ticks,
+                        horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
+                    )
+                })
+            {
+                self.pending.clear(pos);
+                return Ok(());
+            }
             for mut stack in drops {
                 if &*stack.item == "minecraft:air" || stack.count == 0 {
                     continue;
