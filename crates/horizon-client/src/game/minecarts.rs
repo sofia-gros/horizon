@@ -1236,6 +1236,23 @@ impl Game<'_> {
         self.push_from_ticked_cart(c);
         // AbstractMinecart.tick: updateFluidInteraction, a stream pushes the cart.
         c.in_water = c.push_by_fluid(&self.world, &self.res.motion().fluids).0 > 0.0;
+        // Custom currents share the post-move phase, but never become native
+        // water (drag/gravity, fall resets and rail behavior keep their flags).
+        if self.remote.is_none()
+            && c.is_pushed_by_fluid()
+            && let Some(resources) = self.res.rest().registered_fluids.as_deref()
+        {
+            let (bounds, position, eye_y) = (c.bounds(), c.position, c.fluid_eye_y());
+            let _ = horizon_client::entities::update_registered_entity_fluids(
+                bounds,
+                position,
+                eye_y,
+                &mut c.velocity,
+                &self.world,
+                &self.res.motion().fluids,
+                resources,
+            );
+        }
         // updateFluidInteraction: being in water resets the fall distance.
         if c.in_water {
             c.fall_distance = 0.0;
@@ -2879,5 +2896,119 @@ mod tests {
         assert_eq!(saved.get("PushZ"), Some(&Tag::Double(0.25f64.to_bits())));
         let loaded = Minecart::from_nbt(&saved, 1, CartKind::Furnace).unwrap();
         assert_eq!(loaded.push, Vec3::new(0.5, 0.0, 0.25));
+    }
+}
+
+#[cfg(test)]
+mod registered_current_tests {
+    use super::*;
+    use horizon_world::{
+        entity_fluid::CurrentTarget,
+        registered_fluids::{LiquidFamily, RegisteredFluids},
+        registry::BlockRegistry,
+    };
+
+    fn registry() -> BlockRegistry {
+        let rows: Vec<_> = (0..16).map(|level| serde_json::json!([
+            "test:fluid", false, true, "", {"id":"test:fluid", "properties":{"level":level.to_string()}}
+        ])).collect();
+        BlockRegistry::from_facts_json(
+            serde_json::json!({"states":rows,"defaults":{"test:fluid":0}})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap()
+    }
+    fn catalog(registry: &BlockRegistry) -> RegisteredFluids<'_> {
+        RegisteredFluids::new(
+            registry,
+            [LiquidFamily {
+                source: "test:fluid".into(),
+                flowing: "test:flowing_fluid".into(),
+                block: "test:fluid".into(),
+            }],
+        )
+        .unwrap()
+    }
+    struct Target<'a>(&'a mut Minecart);
+    impl CurrentTarget for Target<'_> {
+        type Error = std::convert::Infallible;
+        fn is_player_class(&self) -> bool {
+            false
+        }
+        fn velocity(&mut self) -> Result<Vec3, Self::Error> {
+            Ok(self.0.velocity)
+        }
+        fn add_delta_movement(&mut self, delta: Vec3) -> Result<(), Self::Error> {
+            self.0.velocity = self.0.velocity.add_vector(delta);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn all_cart_kinds_share_body_current_without_native_water_or_variant_changes() {
+        let registry = registry();
+        let catalog = catalog(&registry);
+        for kind in [
+            CartKind::Rideable,
+            CartKind::Chest,
+            CartKind::Hopper,
+            CartKind::Furnace,
+            CartKind::Tnt,
+            CartKind::CommandBlock,
+            CartKind::Spawner,
+        ] {
+            let mut cart = Minecart::new(1, kind, Vec3::new(1.0, 0.0, 0.5));
+            cart.no_gravity = true;
+            cart.fuel = 23;
+            cart.fuse = 7;
+            cart.fall_distance = 3.0;
+            assert!(cart.is_pushed_by_fluid());
+            let contacts = catalog
+                .contacts_with_flow(
+                    cart.bounds().deflate(Vec3::new(0.001, 0.001, 0.001)),
+                    Vec3::new(cart.position.x, cart.fluid_eye_y(), cart.position.z),
+                    8192,
+                    // One source and one shallow flowing cell of the same family.
+                    |p| (p.y == 0).then_some(BlockStateId(if p.x == 0 { 0 } else { 7 })),
+                    |_| Ok::<_, std::io::Error>(Vec3::new(3.0, 0.0, 4.0)),
+                )
+                .unwrap();
+            assert_eq!(contacts.len(), 1);
+            assert!(contacts[0].height > 0.0);
+            assert!(!contacts[0].eyes_inside);
+            contacts[0]
+                .current
+                .apply_to(&mut Target(&mut cart), 0.01)
+                .unwrap();
+            assert_eq!(cart.velocity, Vec3::new(0.006, 0.0, 0.008));
+            assert!(!cart.in_water);
+            assert_eq!((cart.fuel, cart.fuse, cart.fall_distance), (23, 7, 3.0));
+            assert_eq!(cart.items.len(), kind.slots());
+            assert_eq!(cart.spawner.is_some(), kind == CartKind::Spawner);
+        }
+    }
+
+    #[test]
+    fn cart_contacts_follow_the_moved_body_and_do_not_invent_missing_fluid() {
+        let registry = registry();
+        let catalog = catalog(&registry);
+        let mut cart = Minecart::new(1, CartKind::Rideable, Vec3::new(0.5, 0.0, 0.5));
+        let sample = |cart: &Minecart, present: bool| {
+            catalog
+                .contacts(
+                    cart.bounds().deflate(Vec3::new(0.001, 0.001, 0.001)),
+                    Vec3::new(cart.position.x, cart.fluid_eye_y(), cart.position.z),
+                    8192,
+                    |p| (present && p.y == 0).then_some(BlockStateId(7)),
+                )
+                .unwrap()
+        };
+        assert!(sample(&cart, true)[0].height > 0.0);
+        assert!(sample(&cart, false).is_empty());
+        // The old body remains below the shallow surface; only current position counts.
+        cart.position.y = 0.2;
+        assert!(sample(&cart, true).is_empty());
+        assert_eq!(cart.previous.y, 0.0);
     }
 }

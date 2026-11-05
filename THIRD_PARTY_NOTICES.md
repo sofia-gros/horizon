@@ -382,3 +382,8 @@ Tinkers' Construct motion-scale policy above (Copyright (c) 2022 SlimeKnights,
 revision `f4e77d43f39ba1047bf93ae816b7e1beaab514c2`). The TNT wiring and public
 adapter export are original Rust; no additional external implementation was
 read or copied.
+
+Minecart registered currents reuse the original host current adapter and MIT
+Tinkers' Construct motion-scale policy above (Copyright (c) 2022 SlimeKnights,
+revision `f4e77d43f39ba1047bf93ae816b7e1beaab514c2`). The minecart tick wiring
+is original Rust; no additional external implementation was read or copied.
