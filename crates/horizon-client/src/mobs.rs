@@ -1047,6 +1047,9 @@ pub struct Extra {
     /// The mob or boat this one rides, and the mob riding it (`getVehicle`,
     /// `getFirstPassenger`).
     pub mount: Option<u32>,
+    /// Ephemeral authoritative boat snapshot for registered-fluid contact.
+    /// The vehicle ID must still match `mount`; this is never saved to entity NBT.
+    pub registered_fluid_boat: Option<(u32, crate::motion::RiddenBoat)>,
     pub rider: Option<u32>,
     /// `Entity.boardingCooldown`: ticks after leaving a boat before a boat
     /// can pick this mob up again.

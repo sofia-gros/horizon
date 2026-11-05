@@ -47,3 +47,6 @@ hydration, a native swimming pose, species-specific swim-stroll/breaching logic,
 automatic ridden custom-fluid buoyancy, passenger boat shielding or custom mob
 status behavior. Those and the final integration pass remain open; #379 is not
 complete.
+
+Immediate boat-passenger shielding for registered observations is covered by the
+later `registered-mob-fluid-boat-shield.md` slice, using the boat's existing status.

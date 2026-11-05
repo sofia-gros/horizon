@@ -1047,6 +1047,19 @@ impl Game<'_> {
                     keep.push(true);
                     continue;
                 }
+                // Refresh the boat hull before registered-fluid observations;
+                // a dismounted mob or a non-boat vehicle clears the snapshot.
+                m.extra.registered_fluid_boat = m.extra.mount.and_then(|id| {
+                    self.boats.iter().find(|b| b.id == id).map(|b| {
+                        (
+                            id,
+                            horizon_client::motion::RiddenBoat {
+                                under_water: b.under_water(),
+                                max_y: b.bounds().max_position().y,
+                            },
+                        )
+                    })
+                });
                 horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
                 horizon_client::mobs::blocks_changed(m, &path_changes);
                 let from = events.len();

@@ -27,22 +27,55 @@ pub(super) fn contacts(m: &Mob, w: &MobWorld<'_>) -> Vec<Contact> {
     })
 }
 
+/// Reuse the existing player boat-box rule for registered mob observations.
+/// A stale snapshot cannot shield a dismounted mob or another vehicle's rider.
+pub(super) fn interaction_box(m: &Mob) -> Option<Aabb> {
+    let mut bounds = m.bounds().deflate(Vec3::new(0.001, 0.001, 0.001));
+    if let Some((id, boat)) = m.extra.registered_fluid_boat
+        && m.extra.mount == Some(id)
+        && !boat.under_water
+        && boat.max_y.is_finite()
+    {
+        let lo = bounds.min_position();
+        let hi = bounds.max_position();
+        if boat.max_y >= hi.y {
+            return None;
+        }
+        bounds = Aabb::new(Vec3::new(lo.x, lo.y.max(boat.max_y), lo.z), hi);
+    }
+    Some(bounds)
+}
+
 fn sample(
     m: &Mob,
     resources: &RegisteredFluidResources<'_>,
     block: impl FnMut(BlockPos) -> Option<BlockStateId>,
 ) -> Vec<Contact> {
-    // This snapshot belongs only to this block-contact pass. Oversized or
-    // invalid bounds fail closed rather than scanning unbounded world space.
-    resources
+    let Some(bounds) = interaction_box(m) else {
+        return Vec::new();
+    };
+    // Oversized/invalid bounds fail closed. Eyes below the surviving body
+    // box are sheltered too, including small passengers inside the hull.
+    let mut contacts = resources
         .catalog
         .contacts(
-            m.bounds().deflate(Vec3::new(0.001, 0.001, 0.001)),
+            bounds,
             Vec3::new(m.position.x, m.eye_y(), m.position.z),
             8192,
             block,
         )
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if m.extra.registered_fluid_boat.is_some_and(|(id, boat)| {
+        m.extra.mount == Some(id)
+            && !boat.under_water
+            && boat.max_y.is_finite()
+            && m.eye_y() < boat.max_y
+    }) {
+        for contact in &mut contacts {
+            contact.eyes_inside = false;
+        }
+    }
+    contacts
 }
 
 /// Native water/lava and species-specific travel take precedence at the caller.
@@ -349,6 +382,92 @@ mod tests {
             vertical_drag: 0.8,
             gravity_scale: 0.0625,
             jump: 0.04,
+        }
+    }
+    fn boat(m: &mut Mob, max_y: f64, under_water: bool) {
+        m.extra.mount = Some(42);
+        m.extra.registered_fluid_boat =
+            Some((42, crate::motion::RiddenBoat { max_y, under_water }));
+    }
+    #[test]
+    fn fully_sheltered_passenger_has_no_registered_contact_or_policy_effects() {
+        let registry = registry();
+        let resources = resources_with_fall(&registry, None, [0.01, 0.0], [0.5, 1.0]);
+        let mut m = mob();
+        boat(&mut m, 2.0, false);
+        m.fall_distance = 8.0;
+        assert!(interaction_box(&m).is_none());
+        let contacts = sample(&m, &resources, |_| {
+            panic!("fully sheltered body must not sample")
+        });
+        assert!(contacts.is_empty());
+        m.push_registered_currents(&resources, &contacts);
+        m.scale_registered_fall(&resources, &contacts);
+        inside(
+            &mut m,
+            Some(&resources),
+            BlockStateId(0),
+            &contacts,
+            &mut LegacyRandom::new(8),
+        );
+        assert_eq!(m.velocity, Vec3::ZERO);
+        assert_eq!(m.fall_distance, 8.0);
+        assert_eq!(m.health, 10.0);
+        assert_eq!(m.fire_ticks, 0);
+        assert!(m.outbox.is_empty());
+        assert!(!can_drown(&resources, &contacts));
+        assert!(!can_float(&resources, &contacts, m.fluid_jump_threshold()));
+        assert!(select_travel(&resources, &contacts).is_none());
+    }
+    #[test]
+    fn exposed_body_still_contacts_liquid_but_eyes_below_hull_stay_sheltered() {
+        let registry = registry();
+        let resources = resources(&registry);
+        let mut m = mob();
+        boat(&mut m, 0.7, false);
+        let bounds = interaction_box(&m).unwrap();
+        assert_eq!(bounds.min_position().y, 0.7);
+        let exposed = sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(0)));
+        assert!(exposed[0].height > 0.0 && exposed[0].height < 0.2);
+        assert!(!exposed[0].eyes_inside);
+        let below = sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(7)));
+        assert!(below.is_empty());
+        Arc::make_mut(&mut m.kind).eye_height = 0.5;
+        let deep = sample(&m, &resources, |p| (p.y <= 1).then_some(BlockStateId(0)));
+        assert!(deep.iter().any(|c| c.height > 0.0));
+        assert!(!can_drown(&resources, &deep));
+        Arc::make_mut(&mut m.kind).eye_height = 1.3;
+        let deep = sample(&m, &resources, |p| (p.y <= 1).then_some(BlockStateId(0)));
+        assert!(can_drown(&resources, &deep));
+    }
+    #[test]
+    fn underwater_dismounted_and_mismatched_boat_snapshots_do_not_shield() {
+        let registry = registry();
+        let resources = resources(&registry);
+        for mode in 0..4 {
+            let mut m = mob();
+            boat(&mut m, 2.0, mode == 0);
+            match mode {
+                1 => m.extra.mount = None,
+                2 => m.extra.mount = Some(43),
+                3 => m.extra.registered_fluid_boat = None,
+                _ => {}
+            }
+            assert!(interaction_box(&m).is_some());
+            let contacts = sample(&m, &resources, |p| (p.y <= 1).then_some(BlockStateId(1)));
+            assert!(contacts.iter().any(|c| c.height > 0.0));
+            assert!(can_drown(&resources, &contacts));
+        }
+    }
+    #[test]
+    fn malformed_boat_height_cannot_grant_contact_immunity() {
+        let registry = registry();
+        let resources = resources(&registry);
+        for max_y in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut m = mob();
+            boat(&mut m, max_y, false);
+            let contacts = sample(&m, &resources, |p| (p.y <= 1).then_some(BlockStateId(0)));
+            assert!(can_drown(&resources, &contacts));
         }
     }
     #[test]

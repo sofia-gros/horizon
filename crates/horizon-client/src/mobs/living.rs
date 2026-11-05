@@ -736,17 +736,19 @@ impl Mob {
             // Fall policy does not depend on current susceptibility. A failed
             // flow query falls back to bounded geometry with zero flow vectors,
             // so it can still scale a fall without inventing any current.
-            let contacts = if self.pushed_by_fluid() {
-                crate::motion::registered_fluid_contacts_with_flow(
-                    w.world,
-                    resources,
-                    w.fluid_tables,
-                    self.bounds().deflate(Vec3::new(0.001, 0.001, 0.001)),
-                    Vec3::new(self.position.x, self.eye_y(), self.position.z),
-                )
-                .unwrap_or_else(|_| super::registered_fluids::contacts(self, w))
-            } else {
-                super::registered_fluids::contacts(self, w)
+            let contacts = match super::registered_fluids::interaction_box(self) {
+                Some(bounds) if self.pushed_by_fluid() => {
+                    crate::motion::registered_fluid_contacts_with_flow(
+                        w.world,
+                        resources,
+                        w.fluid_tables,
+                        bounds,
+                        Vec3::new(self.position.x, self.eye_y(), self.position.z),
+                    )
+                    .unwrap_or_else(|_| super::registered_fluids::contacts(self, w))
+                }
+                Some(_) => super::registered_fluids::contacts(self, w),
+                None => Vec::new(),
             };
             self.push_registered_currents(resources, &contacts);
             self.scale_registered_fall(resources, &contacts);
