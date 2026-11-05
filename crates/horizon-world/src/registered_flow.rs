@@ -370,7 +370,9 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
         if !fluid.is_source() {
             let next = self.new_liquid(world, fluid.id(), pos, state, policy);
             if next != Some(fluid) {
-                if !world.allow_level_change(pos, fluid, next) {
+                if next.is_some_and(|next| !world.can_hold(pos, state, next.id()))
+                    || !world.allow_level_change(pos, fluid, next)
+                {
                     return Ok(());
                 }
                 let block = next
@@ -885,6 +887,42 @@ mod tests {
                 .unwrap()
                 .is_source()
         );
+    }
+    #[test]
+    fn in_place_source_conversion_respects_exact_acceptance() {
+        let registry = registry();
+        let fluids = catalog(&registry);
+        let source = fluids.id("test:one").unwrap();
+        let flowing = fluids.flowing(source).unwrap();
+        let mut enabled = policy();
+        enabled.source_conversion = true;
+        let flow = RegisteredFlow::new(&fluids, [(source, enabled)]).unwrap();
+        for accepted in [flowing, source] {
+            let mut world = World::new(&fluids);
+            flow.place_source(&mut world, BlockPos::new(-1, 1, 0), source)
+                .unwrap();
+            flow.place_source(&mut world, BlockPos::new(1, 1, 0), source)
+                .unwrap();
+            let pos = BlockPos::new(0, 1, 0);
+            world
+                .cells
+                .insert(pos, fluids.block(flow.flowing(source, 1, false)).unwrap());
+            world.acceptance.insert(pos, accepted);
+            let before = world.cells.clone();
+            let scheduled = world.ticks.count();
+            flow.tick(&mut world, pos, flowing).unwrap();
+            if accepted == flowing {
+                assert_eq!(world.cells, before);
+                assert_eq!(world.ticks.count(), scheduled);
+            } else {
+                assert!(
+                    fluids
+                        .from_block(world.block(pos).unwrap())
+                        .unwrap()
+                        .is_source()
+                );
+            }
+        }
     }
     #[test]
     fn missing_foreign_and_unbounded_policies_are_rejected() {
