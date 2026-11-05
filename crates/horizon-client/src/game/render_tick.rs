@@ -160,11 +160,16 @@ impl Game<'_> {
                 .registered_fluids
                 .as_ref()
                 .and_then(|resources| {
-                    resources.fog_at(at, |pos| {
-                        (self.world.loaded(pos.x, pos.z)
-                            && (self.world.shape.min_y..self.world.shape.max_y()).contains(&pos.y))
-                        .then(|| self.world.block(pos.x, pos.y, pos.z))
-                    })
+                    resources.fog_at_with_colors(
+                        at,
+                        |pos| {
+                            (self.world.loaded(pos.x, pos.z)
+                                && (self.world.shape.min_y..self.world.shape.max_y())
+                                    .contains(&pos.y))
+                            .then(|| self.world.block(pos.x, pos.y, pos.z))
+                        },
+                        |texture| self.pack.render.registered_fog_colors.get(texture).copied(),
+                    )
                 })
             {
                 horizon_client::fog::apply_registered_fog(&mut fog, policy);

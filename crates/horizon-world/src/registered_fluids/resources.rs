@@ -15,7 +15,7 @@ use std::{collections::HashMap, fs::File, io, path::Path, sync::Arc};
 
 pub const RESOURCE_PATH: &str = "horizon/registered_fluids.json";
 /// Optional spherical camera fog. Color is an RGB multiplier, not a replacement.
-/// A missing color leaves the host color intact (it does not infer sprite color).
+/// A missing color preserves the host color unless `calculate_color` opts in.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FluidFog {
@@ -23,6 +23,9 @@ pub struct FluidFog {
     pub end: f32,
     #[serde(default)]
     pub color: Option<u32>,
+    /// Resolve from the loaded still sprite only when no explicit color exists.
+    #[serde(default)]
+    pub calculate_color: bool,
 }
 impl FluidFog {
     fn validate(self) -> io::Result<()> {
@@ -257,12 +260,27 @@ impl<'r> RegisteredFluidResources<'r> {
             .then(|| self.interaction(source))
             .flatten()
     }
+    /// Source-family visuals, once per family (not once per block level).
+    pub fn visuals(&self) -> impl Iterator<Item = (RegisteredFluidId, &FluidVisual)> {
+        self.visuals.iter().map(|(&id, visual)| (id, visual))
+    }
     /// Camera-point immersion, independent of the player's position. At most
     /// two loaded-only reads; upward fluids retain the same bottom surface.
     pub fn fog_at(
         &self,
         camera: [f64; 3],
+        block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+    ) -> Option<FluidFog> {
+        self.fog_at_with_colors(camera, block, |_| None)
+    }
+    /// Resolve automatic colors from the current resource pack's cache, never
+    /// the simulation catalog. Explicit colors win, and absent sprites preserve
+    /// the existing fog color. No resolver call occurs outside the liquid.
+    pub fn fog_at_with_colors(
+        &self,
+        camera: [f64; 3],
         mut block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+        color: impl FnOnce(&str) -> Option<u32>,
     ) -> Option<FluidFog> {
         if camera
             .iter()
@@ -276,7 +294,7 @@ impl<'r> RegisteredFluidResources<'r> {
             camera[2].floor() as i32,
         );
         let (visual, fluid) = self.visual(block(pos)?)?;
-        let fog = visual.fog?;
+        let mut fog = visual.fog?;
         let above = block(BlockPos::new(pos.x, pos.y + 1, pos.z))
             .and_then(|state| self.catalog.from_block(state));
         let height = if above.is_some_and(|above| {
@@ -288,7 +306,13 @@ impl<'r> RegisteredFluidResources<'r> {
         } else {
             f64::from(fluid.own_height())
         };
-        (camera[1] < f64::from(pos.y) + height).then_some(fog)
+        if camera[1] >= f64::from(pos.y) + height {
+            return None;
+        }
+        if fog.calculate_color && fog.color.is_none() {
+            fog.color = color(&visual.still).filter(|&rgb| rgb <= 0x00ff_ffff);
+        }
+        Some(fog)
     }
     pub fn visual(&self, state: BlockStateId) -> Option<(&FluidVisual, RegisteredFluidState)> {
         let fluid = self.catalog.from_block(state)?;
@@ -329,6 +353,7 @@ mod tests {
             start: -8.0,
             end: 24.0,
             color: Some(0x478a33),
+            calculate_color: false,
         });
         let source = |p: BlockPos| (p.y == 0).then_some(BlockStateId(0));
         assert_eq!(resources.fog_at([0.5, 0.5, 0.5], source), expected);
@@ -363,6 +388,38 @@ mod tests {
                     .is_err()
             );
         }
+    }
+    #[test]
+    fn automatic_fog_color_uses_current_cache_and_explicit_color_wins() {
+        let registry = registry();
+        let mut value = document();
+        value["fluids"][0]["visual"]["fog"] = json!({"start":0.25,"end":2,"calculate_color":true});
+        let resources =
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).unwrap();
+        let block = |p: BlockPos| (p.y == 0).then_some(BlockStateId(0));
+        for color in [None, Some(0x123456), Some(0x654321)] {
+            let fog = resources
+                .fog_at_with_colors([0.5, 0.5, 0.5], block, |texture| {
+                    assert_eq!(texture, "test:block/liquid_still");
+                    color
+                })
+                .unwrap();
+            assert_eq!(fog.color, color);
+        }
+        assert_eq!(
+            resources.fog_at_with_colors([0.5, 0.99, 0.5], block, |_| panic!("above surface")),
+            None
+        );
+        value["fluids"][0]["visual"]["fog"]["color"] = json!(0x478a33);
+        let resources =
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).unwrap();
+        assert_eq!(
+            resources
+                .fog_at_with_colors([0.5, 0.5, 0.5], block, |_| panic!("explicit wins"))
+                .unwrap()
+                .color,
+            Some(0x478a33)
+        );
     }
     #[test]
     fn interaction_policy_binds_flowing_identity_and_rejects_bad_numbers() {

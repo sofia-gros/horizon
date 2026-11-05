@@ -71,6 +71,8 @@ pub struct Sprites {
     pub minimum_size: u32,
     pub pixels: Vec<u8>,
     pub layers: BTreeMap<String, u32>,
+    /// Failed named sprites must not contribute missing-texture checker colors.
+    missing: std::collections::BTreeSet<String>,
     pub animations: Vec<SpriteAnimation>,
     pub opaque: Vec<bool>,
     pub translucent: Vec<bool>,
@@ -203,6 +205,16 @@ impl Sprites {
     pub fn count(&self) -> usize {
         self.native.len()
     }
+    /// Physical frame zero at native resolution, independent of animation order
+    /// or atlas resampling. Missing-texture fallbacks have no sampleable color.
+    pub(crate) fn native_frame_zero(&self, name: &str) -> Option<(u32, &[u8])> {
+        if name == "minecraft:missingno" || self.missing.contains(name) {
+            return None;
+        }
+        let layer = *self.layers.get(name)? as usize;
+        let (side, frames, _) = self.native.get(layer)?;
+        Some((*side, frames.first()?.as_slice()))
+    }
     /// `SpriteContents.computeTransparency(u0, v0, u1, v1)` is NONE: every texel under
     /// the quad's UV box is fully opaque in every frame, so the quad needs no alpha test.
     pub fn region_opaque(&self, layer: u32, uv: &[[f32; 2]; 4]) -> bool {
@@ -314,6 +326,7 @@ impl Sprites {
         match self.load(root, name) {
             Ok(layer) => Ok(layer),
             Err(e) => {
+                self.missing.insert(name.to_owned());
                 // `MissingTextureAtlasSprite.getLocation()`: vanilla models name the
                 // missing texture on purpose (block/air.json's particle), #853.
                 if name != "minecraft:missingno" {
@@ -792,6 +805,29 @@ pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, avail
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_color_frame_ignores_initial_animation_and_missing_fallbacks() {
+        let mut sprites = super::Sprites::default();
+        sprites.layers.insert("test:animated".into(), 0);
+        sprites.native.push((
+            1,
+            std::sync::Arc::new(vec![vec![1, 2, 3, 255], vec![9, 8, 7, 255]]),
+            1,
+        ));
+        assert_eq!(
+            sprites.native_frame_zero("test:animated"),
+            Some((1, &[1, 2, 3, 255][..]))
+        );
+        sprites.finish();
+        assert_eq!(
+            sprites.native_frame_zero("test:animated"),
+            Some((1, &[1, 2, 3, 255][..]))
+        );
+        sprites.missing.insert("test:animated".into());
+        assert_eq!(sprites.native_frame_zero("test:animated"), None);
+        assert_eq!(sprites.native_frame_zero("test:absent"), None);
+    }
+
     use super::*;
     use std::fs::{self, File};
     #[test]
