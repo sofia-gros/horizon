@@ -173,7 +173,10 @@ fn chunk_of(p: Vec3) -> (i32, i32) {
 
 impl Game<'_> {
     /// Saved ticks and the save time for a chunk about to be written.
-    pub(super) fn attach_save_data(&self, chunk: &mut Chunk) {
+    pub(super) fn attach_save_data(&self, chunk: &mut Chunk) -> Result<()> {
+        if self.registered_fluid_active {
+            return Err("cannot snapshot chunks during registered fluid execution".into());
+        }
         let pos = ChunkPos::new(chunk.x, chunk.z);
         let time = self.world.game_time;
         let mut extras: ChunkExtras = chunk.saved.as_deref().cloned().unwrap_or_default();
@@ -189,6 +192,17 @@ impl Game<'_> {
         }
         if let Some(t) = self.block_ticks.fluids.chunk(pos) {
             extras.fluid_ticks = t.pack(time);
+        }
+        if let Some(ticks) = &self.registered_fluid_ticks {
+            match ticks.save_chunk(pos, time) {
+                Ok(Some(saved)) => {
+                    extras
+                        .root
+                        .insert(super::registered_fluids::TICK_KEY.into(), saved);
+                }
+                Ok(None) => {}
+                Err(error) => return Err(error.into()),
+            }
         }
         extras.last_update = time;
         // PistonMovingBlockEntity.saveAdditional: a block caught mid-move is
@@ -220,6 +234,7 @@ impl Game<'_> {
                 .insert("InhabitedTime".into(), horizon_world::nbt::Tag::Long(*t));
         }
         chunk.saved = Some(Arc::new(extras));
+        Ok(())
     }
     /// Register a newly resident chunk with the tick scheduler, with the
     /// block and fluid ticks it was saved with (`LevelChunk.registerTickContainerInLevel`
@@ -228,6 +243,7 @@ impl Game<'_> {
     pub(super) fn register_chunk_ticks(&mut self, key: (i32, i32)) {
         let pos = ChunkPos::new(key.0, key.1);
         let saved = self.world.chunks.get(&key).and_then(|c| c.saved.clone());
+        self.register_registered_fluid_chunk(key, saved.as_deref());
         // ChunkAccess.inhabitedTime as saved.
         if let Some(Tag::Long(t)) = saved
             .as_deref()

@@ -262,6 +262,7 @@ mod raids;
 mod ram_limit;
 mod random_textures;
 mod recipe_book;
+mod registered_fluids;
 mod remote;
 mod remote_camera;
 mod remote_chat;
@@ -897,6 +898,7 @@ struct InteractTarget {
 
 /// The client world as seen by the vanilla block-behaviour library.
 struct GameLevel<'w> {
+    registered_fluid_changes: Option<&'w RefCell<Vec<(BlockPos, i64)>>>,
     world: &'w mut World,
     redstone_experiments: bool,
     facts: &'w BlockFacts,
@@ -1122,6 +1124,9 @@ impl LevelAccess for GameLevel<'_> {
     }
     fn observe_block_changed(&self, pos: BlockPos, old: BlockStateId, new: BlockStateId) {
         if self.native_authoritative {
+            if let Some(changes) = self.registered_fluid_changes {
+                changes.borrow_mut().push((pos, self.world.game_time));
+            }
             self.native_block_changed(self.dimension, pos, old, new);
         }
     }
@@ -1152,13 +1157,7 @@ impl LevelAccess for GameLevel<'_> {
         }
         !canceled
     }
-    fn allow_fluid_level_change(
-        &self,
-        pos: BlockPos,
-        fluid: &'static str,
-        from: i32,
-        to: i32,
-    ) -> bool {
+    fn allow_fluid_level_change(&self, pos: BlockPos, fluid: &str, from: i32, to: i32) -> bool {
         let mut cancel = false;
         if self.native_authoritative {
             self.native_fluid_level_change(self.dimension, pos, fluid, from, to, &mut cancel);
@@ -1857,6 +1856,8 @@ struct WorldCore {
 }
 
 struct WorldRest {
+    registered_fluids:
+        Option<Arc<horizon_world::registered_fluids::resources::RegisteredFluidResources<'static>>>,
     items: Items,
     recipes: Recipes,
     transformers: horizon_client::block_transform::Transformers,
@@ -2701,6 +2702,9 @@ struct Game<'a> {
     win: Option<win::Win>,
     end: end::EndState,
     block_ticks: Ticks,
+    registered_fluid_ticks: Option<registered_fluids::Scheduler>,
+    registered_fluid_active: bool,
+    registered_fluid_changes: RefCell<Vec<(BlockPos, i64)>>,
     tick_chunks: horizon_client::tick_chunk_membership::TickChunkMembership,
     tickets: horizon_client::ticket_levels::ChunkTickets,
     random_tick_sections: horizon_client::random_tick_sections::RandomTickSections,
@@ -4361,6 +4365,12 @@ impl Game<'_> {
             trigger_hooks,
             trigger_extras,
             world: &mut self.world,
+            registered_fluid_changes: self
+                .res
+                .rest
+                .get()
+                .and_then(|rest| rest.registered_fluids.as_ref())
+                .map(|_| &self.registered_fluid_changes),
             facts: self.res.facts(),
             collision: self.collision,
             events: &mut self.level_events,
@@ -4557,6 +4567,14 @@ impl Game<'_> {
             self.portals.sections.remove(&key);
             self.block_ticks
                 .remove_chunk(horizon_core::position::ChunkPos::new(key.0, key.1));
+            if let Some(ticks) = &mut self.registered_fluid_ticks {
+                if let Err(error) = ticks.unload_chunk(
+                    horizon_core::position::ChunkPos::new(key.0, key.1),
+                    self.world.game_time,
+                ) {
+                    self.error = Some(Box::new(error));
+                }
+            }
             // Its moving pistons were saved with it and load back with it.
             self.block_ticks
                 .moving_pistons
@@ -4622,6 +4640,11 @@ impl Game<'_> {
             let pos = horizon_core::position::ChunkPos::new(x, z);
             self.block_ticks.blocks.unpack_chunk(pos, time);
             self.block_ticks.fluids.unpack_chunk(pos, time);
+            if let Some(ticks) = &mut self.registered_fluid_ticks {
+                if let Err(error) = ticks.start_ticking_chunk(pos, time) {
+                    self.error = Some(Box::new(error));
+                }
+            }
         }
     }
     /// ServerLevel.tick block phases: scheduled ticks, random ticks in the
@@ -4631,6 +4654,7 @@ impl Game<'_> {
         self.tickets.tick_portal();
         self.sync_tick_chunks();
         self.start_ticking_chunks();
+        self.tick_registered_fluids()?;
         let levels = self.tickets.levels();
         let bounds = levels.random_tick_bounds();
         // Keep the world map's chunk order, including empty chunks
@@ -11577,7 +11601,7 @@ impl Game<'_> {
     fn with_entities<'a>(
         &self,
         chunks: impl IntoIterator<Item = &'a Arc<horizon_client::chunk::Chunk>>,
-    ) -> Vec<Arc<horizon_client::chunk::Chunk>> {
+    ) -> Result<Vec<Arc<horizon_client::chunk::Chunk>>> {
         horizon_client::save::chunks_with_block_entities(
             chunks,
             &self.world.block_entities,
@@ -11585,8 +11609,8 @@ impl Game<'_> {
         )
         .into_iter()
         .map(|mut c| {
-            self.attach_save_data(&mut c);
-            Arc::new(c)
+            self.attach_save_data(&mut c)?;
+            Ok(Arc::new(c))
         })
         .collect()
     }
@@ -11960,6 +11984,8 @@ impl Game<'_> {
         self.world_debug = horizon_client::save::WorldGen::read(&save_root)
             .is_some_and(|w| w.preset == horizon_client::save::WorldPreset::Debug);
         self.block_ticks = Ticks::new(self.level.seed as i32);
+        self.registered_fluid_ticks = self.new_registered_fluid_scheduler();
+        self.registered_fluid_changes.borrow_mut().clear();
         self.tick_chunks.clear();
         self.clear_entities();
         self.player = None;
@@ -15009,10 +15035,13 @@ impl Game<'_> {
         self.save.save_attachments(&self.world.attachments)?;
         self.save.save_forced_chunks(&self.streaming.forced)?;
         self.streaming.save(&mut self.world, wait);
-        let keys: Vec<_> = self.world.modified.drain().collect();
-        let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
+        let keys: Vec<_> = self.world.modified.iter().copied().collect();
+        let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)))?;
         self.save
             .save_later(&chunks, self.pack.assets.registry, world_biomes!(self))?;
+        for key in keys {
+            self.world.modified.remove(&key);
+        }
         // Prepare entities while the chunk writer runs, then use one barrier.
         self.save_entities(false)?;
         self.save_raids();
@@ -16392,7 +16421,21 @@ impl Game<'_> {
             .filter(|c| self.world.modified.remove(&(c.x, c.z)))
             .cloned()
             .collect();
-        let modified = horizon_client::spans::time("with_entities", || self.with_entities(&dirty));
+        let modified =
+            match horizon_client::spans::time("with_entities", || self.with_entities(&dirty)) {
+                Ok(modified) => modified,
+                Err(error) => {
+                    // Refusing an in-flight fluid snapshot must not discard dirty chunks.
+                    for chunk in &unloaded {
+                        self.world.chunks.insert((chunk.x, chunk.z), chunk.clone());
+                    }
+                    for chunk in &dirty {
+                        self.world.modified.insert((chunk.x, chunk.z));
+                    }
+                    self.error = Some(error);
+                    return;
+                }
+            };
         horizon_client::spans::time("unload_entities", || self.unload_entities(&unloaded));
         if !unloaded.is_empty() {
             let gone: horizon_client::fast_hash::FxHashSet<(i32, i32)> =
@@ -18562,6 +18605,9 @@ impl<'a> Game<'a> {
             win: None,
             end: Default::default(),
             block_ticks: Ticks::new(0),
+            registered_fluid_ticks: None,
+            registered_fluid_active: false,
+            registered_fluid_changes: RefCell::new(Vec::new()),
             tick_chunks: Default::default(),
             tickets: Default::default(),
             random_tick_sections: Default::default(),
@@ -19939,7 +19985,15 @@ fn load_world_rest(
     );
     progress.set(8);
     let _tail = startup::step("rest.tail");
+    let registered_fluids =
+        horizon_world::registered_fluids::resources::RegisteredFluidResources::load(
+            registry, root,
+        )?;
+    if let Some(fluids) = &registered_fluids {
+        fluids.validate_buckets(|id| items.get(id).is_some())?;
+    }
     Ok(WorldRest {
+        registered_fluids: registered_fluids.map(Arc::new),
         stations,
         items,
         recipes,

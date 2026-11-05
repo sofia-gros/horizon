@@ -1,6 +1,6 @@
 //! A separate tick queue for registered fluid IDs. Vanilla enum discriminants
 //! never enter this queue, and saved chunks use the existing named NBT codec.
-use super::{RegisteredFluidId, RegisteredFluidTick, RegisteredFluids};
+use super::{Catalog, RegisteredFluidId, RegisteredFluidTick, RegisteredFluids};
 use crate::{compression::invalid, nbt::Tag};
 use horizon_core::{
     position::{BlockPos, ChunkPos},
@@ -11,13 +11,19 @@ use horizon_core::{
 use std::io;
 
 pub struct RegisteredFluidScheduler<'a, 'r> {
-    fluids: &'a RegisteredFluids<'r>,
+    fluids: Catalog<'a, 'r>,
     queue: LevelTicks,
     sub_tick: i64,
     collecting: bool,
 }
 impl<'a, 'r> RegisteredFluidScheduler<'a, 'r> {
     pub fn new(fluids: &'a RegisteredFluids<'r>) -> Self {
+        Self::with_catalog(Catalog::Borrowed(fluids))
+    }
+    pub fn new_shared(fluids: std::sync::Arc<RegisteredFluids<'r>>) -> Self {
+        Self::with_catalog(Catalog::Shared(fluids))
+    }
+    fn with_catalog(fluids: Catalog<'a, 'r>) -> Self {
         Self {
             fluids,
             queue: LevelTicks::default(),
@@ -158,6 +164,12 @@ impl<'a, 'r> RegisteredFluidScheduler<'a, 'r> {
         self.queue.finish_tick().map_err(io::Error::other)?;
         self.collecting = false;
         Ok(())
+    }
+    pub fn catalog(&self) -> &RegisteredFluids<'r> {
+        &self.fluids
+    }
+    pub fn has_chunk(&self, pos: ChunkPos) -> bool {
+        self.queue.chunk(pos).is_some()
     }
     pub fn count(&self) -> usize {
         self.queue.count()

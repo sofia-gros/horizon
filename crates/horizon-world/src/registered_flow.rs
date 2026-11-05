@@ -1,9 +1,11 @@
 //! Flow transitions for registered liquids. Policy and world effects are
 //! explicit: no registered liquid inherits vanilla lava behavior by default.
 //! The ordering follows the existing `level::fluids` FlowingFluid algorithm.
+pub mod level;
+
 use crate::{
     compression::invalid,
-    registered_fluids::{RegisteredFluidId, RegisteredFluidState, RegisteredFluids},
+    registered_fluids::{Catalog, RegisteredFluidId, RegisteredFluidState, RegisteredFluids},
     registry::BlockStateId,
 };
 use horizon_core::{geometry::Direction, position::BlockPos};
@@ -15,7 +17,8 @@ const HORIZONTAL: [Direction; 4] = [
     Direction::West,
     Direction::East,
 ];
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FlowPolicy {
     pub drop_off: u8,
     pub slope_distance: u8,
@@ -58,7 +61,7 @@ pub trait RegisteredFlowWorld {
     fn schedule(&mut self, pos: BlockPos, fluid: RegisteredFluidId, delay: i32);
 }
 pub struct RegisteredFlow<'a, 'r> {
-    fluids: &'a RegisteredFluids<'r>,
+    fluids: Catalog<'a, 'r>,
     policies: HashMap<RegisteredFluidId, FlowPolicy>,
 }
 impl<'a, 'r> RegisteredFlow<'a, 'r> {
@@ -66,12 +69,24 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
         fluids: &'a RegisteredFluids<'r>,
         policies: impl IntoIterator<Item = (RegisteredFluidId, FlowPolicy)>,
     ) -> io::Result<Self> {
+        Self::with_catalog(Catalog::Borrowed(fluids), policies)
+    }
+    pub fn new_shared(
+        fluids: std::sync::Arc<RegisteredFluids<'r>>,
+        policies: impl IntoIterator<Item = (RegisteredFluidId, FlowPolicy)>,
+    ) -> io::Result<Self> {
+        Self::with_catalog(Catalog::Shared(fluids), policies)
+    }
+    fn with_catalog(
+        fluids: Catalog<'a, 'r>,
+        policies: impl IntoIterator<Item = (RegisteredFluidId, FlowPolicy)>,
+    ) -> io::Result<Self> {
         let mut result = Self {
             fluids,
             policies: HashMap::new(),
         };
         for (id, policy) in policies {
-            let source = fluids.source(id)?;
+            let source = result.fluids.source(id)?;
             if !(1..=8).contains(&policy.drop_off)
                 || policy.slope_distance > 4
                 || policy.tick_delay <= 0
@@ -83,6 +98,9 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
             }
         }
         Ok(result)
+    }
+    pub fn tick_delay(&self, id: RegisteredFluidId) -> io::Result<i32> {
+        Ok(self.policy(id)?.tick_delay)
     }
     fn policy(&self, id: RegisteredFluidId) -> io::Result<FlowPolicy> {
         self.policies

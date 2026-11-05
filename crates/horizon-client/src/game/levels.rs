@@ -41,6 +41,8 @@ pub(super) struct Parked {
     locator: Option<Arc<VanillaTerrain>>,
     save: Arc<SaveDir>,
     block_ticks: Ticks,
+    registered_fluid_ticks: Option<super::registered_fluids::Scheduler>,
+    registered_fluid_changes: std::cell::RefCell<Vec<(horizon_core::position::BlockPos, i64)>>,
     tick_chunks: TickChunkMembership,
     tickets: ChunkTickets,
     random_tick_sections: RandomTickSections,
@@ -188,6 +190,8 @@ impl Game<'_> {
             locator,
             save,
             block_ticks: Ticks::new(self.level.seed as i32),
+            registered_fluid_ticks: self.new_registered_fluid_scheduler(),
+            registered_fluid_changes: std::cell::RefCell::new(Vec::new()),
             tick_chunks: Default::default(),
             tickets: Default::default(),
             random_tick_sections: Default::default(),
@@ -244,6 +248,14 @@ impl Game<'_> {
         self.share_spawn_conditions();
         swap(&mut self.save, &mut p.save);
         swap(&mut self.block_ticks, &mut p.block_ticks);
+        swap(
+            &mut self.registered_fluid_ticks,
+            &mut p.registered_fluid_ticks,
+        );
+        swap(
+            &mut self.registered_fluid_changes,
+            &mut p.registered_fluid_changes,
+        );
         swap(&mut self.tick_chunks, &mut p.tick_chunks);
         swap(&mut self.tickets, &mut p.tickets);
         swap(&mut self.random_tick_sections, &mut p.random_tick_sections);

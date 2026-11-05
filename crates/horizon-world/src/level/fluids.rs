@@ -103,6 +103,54 @@ impl Behaviours {
     }
 }
 
+impl Behaviours {
+    fn collision_or_empty(&self, state: BlockStateId) -> (i32, &VoxelShape) {
+        let index = self.facts(state).shape;
+        match self.collision_shape(state) {
+            Some(shape) => (index, shape),
+            None => (-1, VoxelShape::empty_ref()),
+        }
+    }
+    /// `FlowingFluid.canPassThroughWall`.
+    pub fn fluid_wall_open(
+        &self,
+        direction: Direction,
+        source: BlockStateId,
+        target: BlockStateId,
+    ) -> bool {
+        // The shapes are compared by identity and borrowed, never cloned: a
+        // clone of the shared block or empty shape is atomic reference counts
+        // every thread contends on, and this runs for every step of a spread.
+        let (target_index, target_shape) = self.collision_or_empty(target);
+        if target_shape.is_block() {
+            return false;
+        }
+        let (source_index, source_shape) = self.collision_or_empty(source);
+        if source_shape.is_block() {
+            return false;
+        }
+        if source_shape.is_empty_identity() && target_shape.is_empty_identity() {
+            return true;
+        }
+        let cacheable = source_index >= 0 && target_index >= 0;
+        let key = (source_index, target_index, direction as u8);
+        if cacheable
+            && let Some(result) = self
+                .occlusion_cache
+                .read()
+                .ok()
+                .and_then(|cache| cache.get(&key).copied())
+        {
+            return result;
+        }
+        let result = !merged_face_occludes(source_shape, target_shape, direction);
+        if cacheable && let Ok(mut cache) = self.occlusion_cache.write() {
+            cache.insert(key, result);
+        }
+        result
+    }
+}
+
 impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     fn fast_lava(&self) -> bool {
         self.level.dimension() == Dimension::Nether
@@ -172,51 +220,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
     // ---- shape occlusion ----
 
-    fn collision_or_empty(&self, state: BlockStateId) -> (i32, &VoxelShape) {
-        let index = self.b.facts(state).shape;
-        match self.b.collision_shape(state) {
-            Some(shape) => (index, shape),
-            None => (-1, VoxelShape::empty_ref()),
-        }
-    }
-    /// `FlowingFluid.canPassThroughWall`.
     fn can_pass_through_wall(
         &self,
         direction: Direction,
         source: BlockStateId,
         target: BlockStateId,
     ) -> bool {
-        // The shapes are compared by identity and borrowed, never cloned: a
-        // clone of the shared block or empty shape is atomic reference counts
-        // every thread contends on, and this runs for every step of a spread.
-        let (target_index, target_shape) = self.collision_or_empty(target);
-        if target_shape.is_block() {
-            return false;
-        }
-        let (source_index, source_shape) = self.collision_or_empty(source);
-        if source_shape.is_block() {
-            return false;
-        }
-        if source_shape.is_empty_identity() && target_shape.is_empty_identity() {
-            return true;
-        }
-        let cacheable = source_index >= 0 && target_index >= 0;
-        let key = (source_index, target_index, direction as u8);
-        if cacheable
-            && let Some(result) = self
-                .b
-                .occlusion_cache
-                .read()
-                .ok()
-                .and_then(|cache| cache.get(&key).copied())
-        {
-            return result;
-        }
-        let result = !merged_face_occludes(source_shape, target_shape, direction);
-        if cacheable && let Ok(mut cache) = self.b.occlusion_cache.write() {
-            cache.insert(key, result);
-        }
-        result
+        self.b.fluid_wall_open(direction, source, target)
     }
 
     // ---- liquid containers ----
@@ -704,6 +714,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     /// `LiquidBlock.onPlace` / `neighborChanged`.
     pub(crate) fn liquid_block_changed(&mut self, pos: BlockPos, state: BlockStateId) {
+        if self.b.fluid(state).kind() == FluidKind::Empty {
+            return;
+        }
+
         if self.should_spread_liquid(pos, state) {
             let kind = self.b.fluid(state).kind();
             let delay = self.fluid_tick_delay(kind);
