@@ -23,9 +23,14 @@ const TAGS: &[&str] = &[
 pub struct NativeDamage {
     name: &'static str,
     tags: u16,
+    message_id: &'static str,
 }
 impl NativeDamage {
-    pub fn from_catalog(catalog: &Catalog, name: &'static str) -> Option<Self> {
+    pub fn from_catalog(
+        catalog: &Catalog,
+        name: &'static str,
+        message_id: &'static str,
+    ) -> Option<Self> {
         if name.starts_with("minecraft:") {
             return None;
         }
@@ -33,6 +38,7 @@ impl NativeDamage {
         let definition = catalog.definition(id)?;
         if definition.scaling != horizon_world::damage_source::Scaling::Never
             || definition.death_message_type != "default"
+            || definition.message_id != message_id
         {
             return None;
         }
@@ -48,10 +54,18 @@ impl NativeDamage {
                 0
             }
         });
-        Some(Self { name, tags })
+        Some(Self {
+            name,
+            tags,
+            message_id,
+        })
     }
     pub fn name(self) -> &'static str {
         self.name
+    }
+    /// Verified default death-message key, retained with the combat entry.
+    pub fn message_id(self) -> &'static str {
+        self.message_id
     }
     pub(super) fn in_tag(self, tag: &str) -> bool {
         TAGS.iter()
@@ -89,7 +103,8 @@ pub(crate) mod tests {
         .unwrap()
     }
     pub(crate) fn source(tags: &[&str]) -> NativeDamage {
-        NativeDamage::from_catalog(&catalog(tags), "example:environment").unwrap()
+        NativeDamage::from_catalog(&catalog(tags), "example:environment", "example.environment")
+            .unwrap()
     }
     fn mob(species: Species, immune: bool, armor: f32) -> Mob {
         let mut kind = sensor_scan_tests::kind();
@@ -101,15 +116,22 @@ pub(crate) mod tests {
     }
     #[test]
     fn unsupported_or_missing_sources_fail_closed_and_snapshots_do_not_change() {
-        assert!(NativeDamage::from_catalog(&catalog(&[]), "example:missing").is_none());
+        assert!(
+            NativeDamage::from_catalog(&catalog(&[]), "example:missing", "example.missing")
+                .is_none()
+        );
         for unsupported in [
             "minecraft:is_projectile",
             "minecraft:bypasses_cooldown",
             "minecraft:is_freezing",
         ] {
             assert!(
-                NativeDamage::from_catalog(&catalog(&[unsupported]), "example:environment")
-                    .is_none()
+                NativeDamage::from_catalog(
+                    &catalog(&[unsupported]),
+                    "example:environment",
+                    "example.environment"
+                )
+                .is_none()
             );
         }
         let fire = source(&["minecraft:is_fire"]);
@@ -117,6 +139,10 @@ pub(crate) mod tests {
         assert!(Damage::of(DamageKind::Native(fire)).is_fire());
         assert!(!Damage::of(DamageKind::Native(plain)).is_fire());
         assert_eq!(fire.name(), "example:environment");
+        assert_eq!(fire.message_id(), "example.environment");
+        assert!(
+            NativeDamage::from_catalog(&catalog(&[]), "example:environment", "wrong").is_none()
+        );
     }
     #[test]
     fn native_damage_keeps_armor_cooldown_invulnerability_and_resistance() {
@@ -176,5 +202,61 @@ pub(crate) mod tests {
             (armored.health - 8.72).abs() < 0.0001,
             "custom magic does not imply bypasses_armor"
         );
+    }
+    #[test]
+    fn native_damage_positive_bypass_tags_preserve_their_distinct_semantics() {
+        for tag in [
+            "minecraft:bypasses_effects",
+            "minecraft:bypasses_resistance",
+        ] {
+            let mut entity = mob(Species::Cow, false, 0.0);
+            entity
+                .extra
+                .effects
+                .push(("minecraft:resistance".into(), 100, 0));
+            assert!(entity.damage(2.0, Damage::of(DamageKind::Native(source(&[tag])))));
+            assert_eq!(entity.health, 8.0);
+        }
+        let mut armored = mob(Species::Cow, false, 10.0);
+        assert!(armored.damage(
+            2.0,
+            Damage::of(DamageKind::Native(source(&["minecraft:bypasses_armor"])))
+        ));
+        assert_eq!(armored.health, 8.0);
+        let mut invulnerable = mob(Species::Cow, false, 0.0);
+        invulnerable.invulnerable_flag = true;
+        assert!(invulnerable.damage(
+            2.0,
+            Damage::of(DamageKind::Native(source(&[
+                "minecraft:bypasses_invulnerability"
+            ])))
+        ));
+        assert_eq!(invulnerable.health, 8.0);
+        for bypass in [false, true] {
+            let mut wolf = mob(Species::Wolf, false, 0.0);
+            wolf.extra.head = Some("minecraft:wolf_armor".into());
+            let tags = if bypass {
+                &["minecraft:bypasses_wolf_armor"][..]
+            } else {
+                &[]
+            };
+            assert!(wolf.damage(2.0, Damage::of(DamageKind::Native(source(tags)))));
+            assert_eq!(wolf.health, if bypass { 8.0 } else { 10.0 });
+        }
+        let mut gear = crate::mobs::gear::Gear::default();
+        gear.upgrade(crate::mobs::gear::HEAD, "minecraft:protection", 4);
+        assert_eq!(
+            crate::mobs::gear::protection_points(&gear, DamageKind::Native(source(&[]))),
+            4.0
+        );
+        for tag in [
+            "minecraft:bypasses_enchantments",
+            "minecraft:bypasses_effects",
+        ] {
+            assert_eq!(
+                crate::mobs::gear::protection_points(&gear, DamageKind::Native(source(&[tag]))),
+                0.0
+            );
+        }
     }
 }

@@ -1,7 +1,8 @@
 # Native environmental mob damage
 
 `mobs::native_damage::NativeDamage::from_catalog` resolves a native code-owned,
-static namespaced damage type against an immutable world damage catalog. Wrap
+static namespaced damage type and expected static death-message key against an
+immutable world damage catalog. A mismatched message key fails closed. Wrap
 it in `DamageKind::Native` and use `Mob::damage` or `Mob::damage_with`. The normal
 mob damage path remains authoritative: invulnerability, armor, Resistance,
 hurt cooldown, absorption, death protection, native cancellation/modification
@@ -17,11 +18,17 @@ attacks or other unsupported damage semantics. A rejected catalog must disable
 the caller's action, not select a vanilla fallback.
 
 The descriptor copies resolved tag bits and borrows only a static native type
-name. It does not register global state, leak strings, or depend on a later
+name and verified message key. Pet death messages use that retained metadata,
+and horse armor fire protection uses its retained flags. It does not register global state, leak strings, or depend on a later
 world's catalog. Rebuild descriptors after a world resource reload. Historical
-combat records keep the source snapshot of their original hit. Damage
-identifiers, data-pack loading, and entity/tank transactions remain the native
-mod's responsibility; this bridge does not create a new network registry.
+combat records keep the source snapshot of their original hit. Native mods must contribute their definitions and damage tags through the
+world data-pack overlay as well as resolve their damage snapshot. Valid custom
+(non-Minecraft) damage definitions join the synchronized damage registry and
+are sent to clients, so DamageEvent retains the real source ID. Vanilla
+definition overrides are ignored. Reload keeps the original wire registry
+IDs, matching the existing synchronized-registry policy; newly added identities
+require reopening the world. The caller must not damage with an identity absent
+from that registry. Entity/tank transactions remain the caller's responsibility.
 
 Vanilla variants retain their previous paths. The new behavior is opt-in.
 Tests exercise actual `Mob::damage` with fire immunity, Fire Resistance,

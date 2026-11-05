@@ -535,12 +535,11 @@ impl Game<'_> {
         let at = [m.position.x, m.position.y, m.position.z];
         let amount = ((damage / 4.0) as u32).max(1);
         let name = damage_type(kind, false);
-        let fire = self
-            .motion
-            .health
-            .damage
-            .id(name)
-            .is_some_and(|d| self.motion.health.damage.in_tag(d, "minecraft:is_fire"));
+        let fire = match kind {
+            DamageKind::Native(_) => horizon_client::mobs::Damage::of(kind).is_fire(),
+            _ => self.motion.health.damage.id(name)
+                .is_some_and(|d| self.motion.health.damage.in_tag(d, "minecraft:is_fire")),
+        };
         // A piece's maximum, or none when it may not lose durability at all.
         // `doHurtEquipment` starts from the item's `equippable` component
         // (`Equippable equippable = item.get(DataComponents.EQUIPPABLE)`), so a
@@ -7599,7 +7598,7 @@ mod native_damage_identity_tests {
             &serde_json::json!({}),
         )
         .unwrap();
-        let custom = NativeDamage::from_catalog(&catalog, "example:environment").unwrap();
+        let custom = NativeDamage::from_catalog(&catalog, "example:environment", "example.environment").unwrap();
         let source = Damage::of(DamageKind::Native(custom));
         assert_eq!(super::source_damage_type(source), "example:environment");
         assert!(!super::melee(source.kind));

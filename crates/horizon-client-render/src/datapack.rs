@@ -596,7 +596,7 @@ fn content_id(file: &str) -> Option<String> {
     let (kind, rest) = rest.split_once('/')?;
     let kind = match kind {
         "recipe" | "recipe_filter" | "loot_table" | "advancement" | "trade_set"
-        | "villager_trade" | "dialog" | "data_maps" => kind,
+        | "villager_trade" | "dialog" | "data_maps" | "damage_type" => kind,
         // A tag id is `{ns}:{path-under-tags}` (`tags/worldgen/biome/
         // test:sub/mytag`), the whole path after the namespace, so nested
         // registries keep their directory (`TagLoader`'s id shape).
@@ -628,6 +628,7 @@ impl DataStore {
             for f in pack.list_kinds(&[
                 "advancement",
                 "data_maps",
+                "damage_type",
                 "dialog",
                 "function",
                 "item_modifier",

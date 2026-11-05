@@ -443,19 +443,22 @@ impl Game<'_> {
     /// `CombatTracker.getDeathMessage` for a player whose display name is
     /// `me`: a server's guest is not `PLAYER_NAME`.
     pub(super) fn combat_death_message_for(&mut self, me: Text) -> Text {
+        self.combat_death_message_with_definition(me, None)
+    }
+    fn combat_death_message_with_definition(&mut self, me: Text, native: Option<(&str, &str)>) -> Text {
         self.recheck_combat();
         let entries = std::mem::take(&mut self.combat.entries);
         self.combat.in_combat = false;
         let Some(killing) = entries.last() else {
             return Text::translate("death.attack.generic", &[me]);
         };
-        let def = self
+        let def = native.map(|(message, kind)| (message.to_owned(), kind.to_owned())).or_else(|| self
             .motion
             .health
             .damage
             .id(&killing.damage_type)
             .and_then(|id| self.motion.health.damage.definition(id))
-            .map(|d| (d.message_id.clone(), d.death_message_type.clone()))
+            .map(|d| (d.message_id.clone(), d.death_message_type.clone())))
             .unwrap_or_else(|| ("generic".into(), "default".into()));
         self.combat.entries = entries;
         let knock = self.most_significant_fall();
@@ -653,7 +656,11 @@ impl Game<'_> {
             ..CombatTracker::default()
         };
         std::mem::swap(&mut self.combat, &mut tracker);
-        let text = self.combat_death_message_for(me);
+        let native = m.combat.entries.last().and_then(|entry| match entry.source.kind {
+            horizon_client::mobs::DamageKind::Native(source) => Some((source.message_id(), "default")),
+            _ => None,
+        });
+        let text = self.combat_death_message_with_definition(me, native);
         std::mem::swap(&mut self.combat, &mut tracker);
         text
     }
