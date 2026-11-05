@@ -186,6 +186,21 @@ impl<'r> RegisteredFluidResources<'r> {
     pub fn interaction(&self, fluid: RegisteredFluidId) -> Option<&InteractionPolicy> {
         self.interactions.get(&self.catalog.source(fluid).ok()?)
     }
+    /// A block-inside callback needs positive body height for this exact family,
+    /// not merely eye immersion or contact with another liquid.
+    pub fn interaction_at_contact(
+        &self,
+        state: BlockStateId,
+        contacts: &[super::contact::Contact],
+    ) -> Option<InteractionPolicy> {
+        let fluid = self.catalog.from_block(state)?;
+        let source = self.catalog.source(fluid.id()).ok()?;
+        contacts
+            .iter()
+            .any(|contact| contact.source == source && contact.height > 0.0)
+            .then(|| self.interaction(source).copied())
+            .flatten()
+    }
     pub fn visual(&self, state: BlockStateId) -> Option<(&FluidVisual, RegisteredFluidState)> {
         let fluid = self.catalog.from_block(state)?;
         Some((
@@ -230,6 +245,80 @@ mod tests {
         assert!(
             RegisteredFluidResources::from_reader(&registry, doc.to_string().as_bytes()).is_err()
         );
+    }
+    #[test]
+    fn sustained_effects_require_matching_positive_body_contact() {
+        use super::super::contact::Contact;
+        let registry = registry();
+        for (id, player_id) in [
+            ("minecraft:poison", "poison"),
+            ("minecraft:slowness", "slowness"),
+            ("minecraft:blindness", "blindness"),
+        ] {
+            let mut doc = document();
+            doc["fluids"][0]["interaction"] = json!({"travel":{"acceleration":0.02,
+                "horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
+                "motion_scale":0.0023333333333333335,"can_swim":true,"can_drown":true,
+                "extinguishes":true,"fall_distance_scale":0.5,
+                "effect":{"id":id,"duration_ticks":100,"amplifier":0}});
+            let resources =
+                RegisteredFluidResources::from_reader(&registry, doc.to_string().as_bytes())
+                    .unwrap();
+            let source = resources.catalog.id("test:liquid").unwrap();
+            let flowing = resources.catalog.id("test:flowing_liquid").unwrap();
+            let mut contact = Contact {
+                source,
+                height: 0.25,
+                eyes_inside: false,
+                current: Default::default(),
+            };
+            for fluid in [
+                resources.catalog.state(source, 8, false).unwrap(),
+                resources.catalog.state(flowing, 4, false).unwrap(),
+            ] {
+                let block = resources.catalog.block(fluid).unwrap();
+                let effect = resources
+                    .interaction_at_contact(block, &[contact])
+                    .unwrap()
+                    .effect
+                    .unwrap();
+                assert_eq!(effect.id.player_id(), player_id);
+                assert_eq!((effect.duration_ticks, effect.amplifier), (100, 0));
+                assert!(resources.interaction_at_contact(block, &[]).is_none());
+                for height in [0.0, -0.1, f64::NAN] {
+                    contact.height = height;
+                    contact.eyes_inside = true;
+                    assert!(
+                        resources
+                            .interaction_at_contact(block, &[contact])
+                            .is_none()
+                    );
+                }
+                contact.height = 0.25;
+                contact.source = flowing; // A flowing ID is not a matching source contact.
+                assert!(
+                    resources
+                        .interaction_at_contact(block, &[contact])
+                        .is_none()
+                );
+                contact.source = source;
+                contact.eyes_inside = false;
+            }
+            for bad in [
+                json!({"id":id,"duration_ticks":0,"amplifier":0}),
+                json!({"id":id,"duration_ticks":72001,"amplifier":0}),
+                json!({"id":id,"duration_ticks":100,"amplifier":256}),
+                json!({"id":"minecraft:instant_damage","duration_ticks":100,"amplifier":0}),
+                json!({"id":"tconstruct:enderference","duration_ticks":100,"amplifier":0}),
+                json!({"id":id,"duration_ticks":100,"amplifier":0,"curatives":[]}),
+            ] {
+                doc["fluids"][0]["interaction"]["effect"] = bad;
+                assert!(
+                    RegisteredFluidResources::from_reader(&registry, doc.to_string().as_bytes())
+                        .is_err()
+                );
+            }
+        }
     }
     #[test]
     fn content_merge_rejects_foreign_or_duplicate_ids_without_mutating_aggregate() {

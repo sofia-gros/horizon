@@ -230,6 +230,9 @@ pub enum MotionEvent {
     /// `WitherRoseBlock.entityInside`: the player's box swept through a
     /// wither rose; the server adds its Wither unless peaceful.
     InsideWitherRose,
+    /// A matching registered-fluid body contact requests a sustained effect.
+    /// Only the authoritative player dispatcher applies it.
+    RegisteredFluidEffect(horizon_world::registered_fluids::interaction::EffectContact),
     /// `ServerPlayer.checkFallDamage` after a mace smash: block particles
     /// from the landing block, more the further the fall.
     SmashLanding {

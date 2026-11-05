@@ -10,6 +10,21 @@ use horizon_world::{
 pub(super) type Scheduler = RegisteredFluidScheduler<'static, 'static>;
 pub(super) const TICK_KEY: &str = "horizon:registered_fluid_ticks";
 impl Game<'_> {
+    /// Contact effects use the existing authoritative effect merge/attribute
+    /// path. Prediction never adds effects locally; normal sync supplies them.
+    pub(super) fn registered_fluid_effect(
+        &mut self,
+        effect: horizon_world::registered_fluids::interaction::EffectContact,
+    ) {
+        if self.remote.is_some() || self.spectator() {
+            return;
+        }
+        self.add_player_effect(horizon_client::effects::EffectInstance::new(
+            effect.id.player_id(),
+            effect.duration_ticks as i32,
+            i32::from(effect.amplifier),
+        ));
+    }
     pub(super) fn new_registered_fluid_scheduler(&self) -> Option<Scheduler> {
         self.res
             .rest

@@ -4238,6 +4238,9 @@ impl Game<'_> {
                 if matches!(event, MotionEvent::InsideWitherRose) {
                     game.wither_rose_contact();
                 }
+                if let MotionEvent::RegisteredFluidEffect(effect) = event {
+                    game.registered_fluid_effect(*effect);
+                }
             }
             // ServerGamePacketListenerImpl.handleMovePlayer:
             // Player.checkMovementStatistics for each move.
