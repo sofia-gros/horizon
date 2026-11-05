@@ -1,8 +1,8 @@
 // Fluid fire policy follows TConstruct, Copyright (c) 2022 SlimeKnights.
 // MIT License; source and license are in THIRD_PARTY_NOTICES.md.
 // Changed: registered family policies and the host dropped-item damage model.
-//! Authoritative item fluid forces and fire contact, without native aliases.
-use super::ItemEntity;
+//! Authoritative item and armor-stand fluid forces and fire contact, without native aliases.
+use super::{ArmorStand, ItemEntity};
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_world::{
     entity_fluid::CurrentTarget,
@@ -40,16 +40,47 @@ pub(super) fn extinguish(
     if item.fire_ticks <= 0 {
         return;
     }
-    if sample(item, resources, block).is_some_and(|contacts| {
-        contacts.iter().any(|contact| {
-            contact.height > 0.0
-                && resources
-                    .interaction(contact.source)
-                    .is_some_and(|p| p.extinguishes)
-        })
-    }) {
+    if sample(item, resources, block)
+        .is_some_and(|contacts| extinguishing_contact(resources, &contacts))
+    {
         item.fire_ticks = 0;
     }
+}
+
+/// Stand fire clearing uses body contact, even when invisible or NoGravity.
+/// Markers retain their exclusion from registered fluid immersion.
+pub(super) fn extinguish_stand(
+    stand: &mut ArmorStand,
+    resources: &RegisteredFluidResources<'_>,
+    block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+) {
+    if stand.fire_ticks <= 0 {
+        return;
+    }
+    let Some(bounds) = stand.registered_fluid_box() else {
+        return;
+    };
+    if resources
+        .catalog
+        .contacts(
+            bounds.deflate(Vec3::new(0.001, 0.001, 0.001)),
+            stand.registered_fluid_eyes(),
+            8192,
+            block,
+        )
+        .is_ok_and(|contacts| extinguishing_contact(resources, &contacts))
+    {
+        stand.fire_ticks = 0;
+    }
+}
+
+fn extinguishing_contact(resources: &RegisteredFluidResources<'_>, contacts: &[Contact]) -> bool {
+    contacts.iter().any(|contact| {
+        contact.height > 0.0
+            && resources
+                .interaction(contact.source)
+                .is_some_and(|p| p.extinguishes)
+    })
 }
 
 fn sample(
@@ -307,6 +338,80 @@ mod tests {
             );
             assert_eq!(stand.health, 20.0);
         }
+    }
+    #[test]
+    fn stand_extinguishing_preserves_health_equipment_and_movement() {
+        let registry = registry();
+        let r = resources(&registry);
+        for (invisible, no_gravity) in [(false, false), (true, false), (false, true)] {
+            let mut stand = ArmorStand::new(7, Vec3::new(0.5, 0.0, 0.5), 23.0);
+            stand.fire_ticks = 200;
+            stand.health = 6.0;
+            stand.invisible = invisible;
+            stand.no_gravity = no_gravity;
+            stand.velocity = Vec3::new(0.1, -0.2, 0.3);
+            stand.enchantment_fall_distance = 8.0;
+            stand.equipment[0] = Some(item(0.0).stack);
+            extinguish_stand(&mut stand, &r, cool);
+            assert_eq!((stand.fire_ticks, stand.health), (0, 6.0));
+            assert_eq!(stand.position, Vec3::new(0.5, 0.0, 0.5));
+            assert_eq!(stand.velocity, Vec3::new(0.1, -0.2, 0.3));
+            assert_eq!(stand.enchantment_fall_distance, 8.0);
+            assert_eq!(
+                stand.equipment[0].as_ref().unwrap().item.as_ref(),
+                "minecraft:oak_planks"
+            );
+            assert_eq!(stand.equipment[0].as_ref().unwrap().count, 1);
+            extinguish_stand(&mut stand, &r, |_| panic!("unlit stand needs no query"));
+        }
+    }
+    #[test]
+    fn stand_extinguishing_respects_small_marker_and_flowing_surface_geometry() {
+        let registry = registry();
+        let r = resources(&registry);
+        for (small, y, fluid_y, state, expected) in [
+            (false, 0.0, 1, 16, 0),
+            (true, 0.0, 1, 16, 200),
+            (true, 0.0, 0, 16, 0),
+            (false, 0.9, 0, 16, 200),
+            (false, 0.0, 0, 23, 0),
+            (false, 0.2, 0, 23, 200),
+            (false, 0.0, 0, 0, 200),
+        ] {
+            let mut stand = ArmorStand::new(7, Vec3::new(0.5, y, 0.5), 0.0);
+            stand.small = small;
+            stand.fire_ticks = 200;
+            extinguish_stand(&mut stand, &r, |p| {
+                (p.y == fluid_y).then_some(BlockStateId(state))
+            });
+            assert_eq!(
+                stand.fire_ticks, expected,
+                "small={small}, y={y}, fluid_y={fluid_y}, state={state}"
+            );
+        }
+        let mut marker = ArmorStand::new(7, Vec3::new(0.5, 0.0, 0.5), 0.0);
+        marker.marker = true;
+        marker.fire_ticks = 200;
+        extinguish_stand(&mut marker, &r, |_| {
+            panic!("marker has no registered immersion")
+        });
+        assert_eq!(marker.fire_ticks, 200);
+    }
+    #[test]
+    fn stand_extinguishing_rejects_missing_invalid_and_eye_only_contacts() {
+        let registry = registry();
+        let r = resources(&registry);
+        let mut stand = ArmorStand::new(7, Vec3::new(0.5, 0.0, 0.5), 0.0);
+        stand.fire_ticks = 200;
+        extinguish_stand(&mut stand, &r, |_| None);
+        assert_eq!(stand.fire_ticks, 200);
+        stand.position.y = f64::NAN;
+        extinguish_stand(&mut stand, &r, |_| panic!("invalid body has no query"));
+        assert_eq!(stand.fire_ticks, 200);
+        let mut eye = current(&r, "test:cool", Vec3::ZERO);
+        eye.height = 0.0;
+        eye.eyes_inside = true;
+        assert!(!extinguishing_contact(&r, &[eye]));
     }
     fn cool(p: BlockPos) -> Option<BlockStateId> {
         (p.y == 0).then_some(BlockStateId(16))

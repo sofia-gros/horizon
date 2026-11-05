@@ -1456,6 +1456,9 @@ impl ArmorStand {
         world: &World,
         facts: &BlockFacts,
         registry: &horizon_world::registry::BlockRegistry,
+        registered: Option<
+            &horizon_world::registered_fluids::resources::RegisteredFluidResources<'_>,
+        >,
     ) -> bool {
         let (lo, hi) = (self.bounds().min_position(), self.bounds().max_position());
         let mut water = false;
@@ -1473,6 +1476,11 @@ impl ArmorStand {
         }
         if water {
             self.fire_ticks = 0;
+        } else if let Some(resources) = registered {
+            registered_fluids::extinguish_stand(self, resources, |p| {
+                (world.loaded(p.x, p.z) && (world.bottom_y()..world.top_y()).contains(&p.y))
+                    .then(|| world.block(p.x, p.y, p.z))
+            });
         }
         if self.fire_ticks > 0 {
             if self.fire_ticks % 20 == 0
@@ -1791,7 +1799,7 @@ mod fire_environment_tests {
             )
             .unwrap();
         for _ in 0..150 {
-            assert!(stand.environment_tick(&world, &facts, assets.registry));
+            assert!(stand.environment_tick(&world, &facts, assets.registry, None));
         }
         assert_eq!(stand.health, 20.0, "lava does not hurt armor stands");
     }

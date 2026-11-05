@@ -872,7 +872,12 @@ impl Game<'_> {
             }
             self.armor_stand_turtle_eggs(i, landed)?;
             let a = &mut self.armor_stands[i];
-            if !a.environment_tick(&self.world, self.res.facts(), self.pack.assets.registry) {
+            if !a.environment_tick(
+                &self.world,
+                self.res.facts(),
+                self.pack.assets.registry,
+                registered.as_deref(),
+            ) {
                 dead.push(i);
             }
         }
