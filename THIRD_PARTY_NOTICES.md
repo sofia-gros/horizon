@@ -357,3 +357,10 @@ Armor-stand registered-fluid travel is original Rust wiring of the existing
 registered travel contract and native host stand movement/falling kernels.
 No additional external source was read or copied; existing policy attribution
 above remains unchanged.
+
+Armor-stand registered-fluid ignition in `entities/registered_fluids.rs` adapts
+[Tinkers' Construct BurningLiquidBlock.entityInside at f4e77d43f39ba1047bf93ae816b7e1beaab514c2](https://github.com/SlimeKnights/TinkersConstruct/blob/f4e77d43f39ba1047bf93ae816b7e1beaab514c2/src/main/java/slimeknights/tconstruct/fluids/block/BurningLiquidBlock.java),
+Copyright (c) 2022 SlimeKnights, MIT (full license above). Changes: bounded
+registered-family body sampling, the host stand block-contact exclusions, and
+its existing lava-damage rejection. Ignition precedes that rejection, so no
+accepted-hit sound is produced. No Forge implementation was read or copied.

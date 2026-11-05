@@ -1,6 +1,6 @@
 // Fluid fire policy follows TConstruct, Copyright (c) 2022 SlimeKnights.
 // MIT License; source and license are in THIRD_PARTY_NOTICES.md.
-// Changed: registered family policies and the host dropped-item damage model.
+// Changed: registered family policies and host dropped-item/armor-stand adapters.
 //! Authoritative item and armor-stand fluid forces and fire contact, without native aliases.
 use super::{ArmorStand, ItemEntity};
 use horizon_core::{geometry::Vec3, position::BlockPos};
@@ -61,6 +61,31 @@ pub(super) fn extinguish_stand(
     }
     if extinguishing_contact(resources, &stand_contacts(stand, resources, block)) {
         stand.fire_ticks = 0;
+    }
+}
+
+/// BurningLiquidBlock ignites before asking the target to accept lava damage.
+/// The existing stand model rejects that direct damage, so there is no accepted
+/// hit or burn sound here. Ordinary ongoing fire damage stays in environment_tick.
+pub(super) fn ignite_stand(
+    stand: &mut ArmorStand,
+    resources: &RegisteredFluidResources<'_>,
+    block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+) {
+    // As in the native stand block-contact path, marker/NoGravity stands do
+    // not run inside-block callbacks. Invisibility alone does not block the
+    // source's unconditional ignition step, though it rejects fire damage.
+    if stand.marker || stand.no_gravity || stand.health <= 0.5 {
+        return;
+    }
+    for contact in stand_contacts(stand, resources, block) {
+        if contact.height > 0.0
+            && let Some(burn) = resources.interaction(contact.source).and_then(|p| p.burn)
+        {
+            // Repeated cells of one family have the same idempotent max;
+            // rejected lava hits cause no additional per-cell side effects.
+            stand.fire_ticks = stand.fire_ticks.max(i32::from(burn.seconds) * 20);
+        }
     }
 }
 
@@ -417,6 +442,81 @@ mod tests {
             );
             assert_eq!(stand.health, 20.0);
         }
+    }
+    #[test]
+    fn stand_burning_contact_ignites_without_direct_lava_damage_or_other_changes() {
+        let registry = registry();
+        let r = resources(&registry);
+        for invisible in [false, true] {
+            let mut stand = ArmorStand::new(7, Vec3::new(0.5, 0.0, 0.5), 0.0);
+            stand.invisible = invisible;
+            stand.health = 6.0;
+            stand.velocity = Vec3::new(0.1, -0.2, 0.3);
+            stand.equipment[0] = Some(item(0.0).stack);
+            ignite_stand(&mut stand, &r, source);
+            assert_eq!((stand.fire_ticks, stand.health), (200, 6.0));
+            assert_eq!(stand.velocity, Vec3::new(0.1, -0.2, 0.3));
+            assert_eq!(stand.equipment[0].as_ref().unwrap().count, 1);
+            stand.fire_ticks = 400;
+            ignite_stand(&mut stand, &r, source);
+            assert_eq!((stand.fire_ticks, stand.health), (400, 6.0));
+        }
+        for (marker, no_gravity, health) in [
+            (true, false, 20.0),
+            (false, true, 20.0),
+            (false, false, 0.5),
+        ] {
+            let mut stand = ArmorStand::new(7, Vec3::new(0.5, 0.0, 0.5), 0.0);
+            stand.marker = marker;
+            stand.no_gravity = no_gravity;
+            stand.health = health;
+            ignite_stand(&mut stand, &r, |_| panic!("excluded stand must not query"));
+            assert_eq!((stand.fire_ticks, stand.health), (0, health));
+        }
+    }
+    #[test]
+    fn stand_burning_contact_requires_positive_burning_family_body_height() {
+        let registry = registry();
+        let r = resources(&registry);
+        for (small, y, fluid_y, state, expected) in [
+            (false, 0.0, 1, 0, 200),
+            (true, 0.0, 1, 0, 0),
+            (false, 0.9, 0, 0, 0),
+            (false, 0.0, 0, 7, 200),
+            (false, 0.2, 0, 7, 0),
+            (false, 0.0, 0, 16, 0),
+        ] {
+            let mut stand = ArmorStand::new(7, Vec3::new(0.5, y, 0.5), 0.0);
+            stand.small = small;
+            ignite_stand(&mut stand, &r, |p| {
+                (p.y == fluid_y).then_some(BlockStateId(state))
+            });
+            assert_eq!((stand.fire_ticks, stand.health), (expected, 20.0));
+        }
+        let mut stand = ArmorStand::new(7, Vec3::new(0.5, 0.0, 0.5), 0.0);
+        ignite_stand(&mut stand, &r, |_| None);
+        assert_eq!(stand.fire_ticks, 0);
+        stand.position.y = f64::NAN;
+        ignite_stand(&mut stand, &r, |_| panic!("invalid body"));
+        assert_eq!(stand.fire_ticks, 0);
+    }
+    #[test]
+    fn stand_extinguishing_then_burning_can_reignite_in_mixed_or_magma_like_fluids() {
+        let registry = registry();
+        let r = resources(&registry);
+        let mut stand = ArmorStand::new(7, Vec3::new(1.0, 0.0, 0.5), 0.0);
+        stand.fire_ticks = 80;
+        let mixed = |p: BlockPos| (p.y == 0).then_some(BlockStateId(if p.x == 0 { 16 } else { 0 }));
+        extinguish_stand(&mut stand, &r, mixed);
+        assert_eq!(stand.fire_ticks, 0);
+        ignite_stand(&mut stand, &r, mixed);
+        assert_eq!((stand.fire_ticks, stand.health), (200, 20.0));
+        let magma_like = resources_with_hot_extinguishing(&registry, true);
+        stand.position.x = 0.5;
+        extinguish_stand(&mut stand, &magma_like, source);
+        assert_eq!(stand.fire_ticks, 0);
+        ignite_stand(&mut stand, &magma_like, source);
+        assert_eq!((stand.fire_ticks, stand.health), (200, 20.0));
     }
     #[test]
     fn stand_travel_chooses_deepest_body_family_and_last_equal_depth() {
