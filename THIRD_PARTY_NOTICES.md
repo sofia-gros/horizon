@@ -173,8 +173,11 @@ check, ignition and lava-type damage of `BurningLiquidBlock.entityInside`, and
 the matching-family status-effect contact of `MobEffectLiquidBlock.entityInside`, from
 [Tinkers' Construct f4e77d43](https://github.com/SlimeKnights/TinkersConstruct/tree/f4e77d43f39ba1047bf93ae816b7e1beaab514c2).
 Changes: explicit resource policies, catalog-scoped identity, and Horizon player
-health/effect dispatch. The source's empty curative-item list is not represented
-yet. No Forge implementation was read or copied for this adapter.
+health/effect dispatch. `crates/horizon-client/src/game/registered_fluids.rs`
+also follows the source's empty curative-item list by setting an explicit
+per-instance opt-out from generic consumable cures. Host merge/persistence
+mechanics are original; mixed-source equivalence remains unverified.
+No Forge implementation was read or copied for these adapters.
 
 `crates/horizon-world/src/registered_flow.rs` also adapts the upward spread,
 feeding-neighbor, ceiling-hole/slope and source-support semantics of

@@ -14,6 +14,9 @@ pub struct EffectInstance {
     pub amplifier: i32,
     pub ambient: bool,
     pub visible: bool,
+    /// Explicit mod instance policy. Generic consumable cures do not remove
+    /// this effect; commands, targeted removal, death and expiry still can.
+    pub no_curatives: bool,
     pub hidden: Option<Box<EffectInstance>>,
 }
 impl EffectInstance {
@@ -24,6 +27,7 @@ impl EffectInstance {
             amplifier: amplifier.clamp(0, 255),
             ambient: false,
             visible: true,
+            no_curatives: false,
             hidden: None,
         }
     }
@@ -49,10 +53,12 @@ impl EffectInstance {
             }
             self.amplifier = take.amplifier;
             self.duration = take.duration;
+            self.no_curatives = take.no_curatives;
             changed = true;
         } else if self.shorter_than(take) {
             if take.amplifier == self.amplifier {
                 self.duration = take.duration;
+                self.no_curatives = take.no_curatives;
                 changed = true;
             } else if let Some(h) = self.hidden.as_mut() {
                 h.update(take);
@@ -98,6 +104,7 @@ impl EffectInstance {
             self.amplifier = h.amplifier;
             self.ambient = h.ambient;
             self.visible = h.visible;
+            self.no_curatives = h.no_curatives;
             self.hidden = h.hidden;
         }
     }
@@ -168,6 +175,9 @@ pub enum OmenTick {
     /// It added this effect, then returned false.
     Add(EffectInstance),
 }
+/// Saved active effect plus its explicit generic-curative immunity.
+pub type SavedEffect = (String, i32, i32, bool, bool, bool);
+
 #[derive(Clone, Debug, Default)]
 pub struct PlayerEffects {
     pub list: Vec<EffectInstance>,
@@ -200,22 +210,27 @@ impl PlayerEffects {
     pub fn clear(&mut self) {
         self.list.clear();
     }
+    /// Milk-style generic curing. Direct removal remains separate.
+    pub fn cure(&mut self) {
+        self.list.retain(|effect| effect.no_curatives);
+    }
     /// The effects of a saved player (`Player.active_effects`: id,
     /// duration, amplifier, ambient, particles visible).
-    pub fn from_saved(saved: &[(String, i32, i32, bool, bool)]) -> Self {
+    pub fn from_saved(saved: &[SavedEffect]) -> Self {
         let mut effects = Self::default();
-        for (id, duration, amplifier, ambient, particles) in saved {
+        for (id, duration, amplifier, ambient, particles, no_curatives) in saved {
             if let Some(def) = potions::effect(id) {
                 let mut e = EffectInstance::new(def.id, *duration, *amplifier);
                 e.ambient = *ambient;
                 e.visible = *particles;
+                e.no_curatives = *no_curatives;
                 effects.add(e);
             }
         }
         effects
     }
     /// `Player.active_effects` for the save.
-    pub fn saved(&self) -> Vec<(String, i32, i32, bool, bool)> {
+    pub fn saved(&self) -> Vec<SavedEffect> {
         self.list
             .iter()
             .map(|e| {
@@ -225,6 +240,7 @@ impl PlayerEffects {
                     e.amplifier,
                     e.ambient,
                     e.visible,
+                    e.no_curatives,
                 )
             })
             .collect()
@@ -507,6 +523,51 @@ mod tests {
     }
 
     #[test]
+    fn generic_cures_keep_protected_instances_but_clear_and_expiry_do_not() {
+        let mut effects = PlayerEffects::default();
+        let mut poison = EffectInstance::new("poison", 2, 0);
+        poison.no_curatives = true;
+        effects.add(poison);
+        effects.add(EffectInstance::new("speed", 100, 0));
+        effects.cure();
+        assert_eq!(effects.list.len(), 1);
+        assert_eq!(effects.list[0].id, "poison");
+        let saved = effects.saved();
+        let mut restored = PlayerEffects::from_saved(&saved);
+        restored.cure();
+        assert_eq!(restored.list, effects.list);
+        restored.tick_with(&mut |_, _| OmenTick::Continue, false);
+        restored.tick_with(&mut |_, _| OmenTick::Continue, false);
+        assert!(restored.list.is_empty());
+        effects.clear();
+        assert!(effects.list.is_empty());
+    }
+
+    #[test]
+    fn accepted_duration_and_hidden_effect_keep_their_own_cure_policy() {
+        let mut protected = EffectInstance::new("slowness", 100, 0);
+        protected.no_curatives = true;
+        let mut effect = protected.clone();
+        // A stronger short effect becomes active; its protected predecessor
+        // keeps counting down and regains its policy on downgrade.
+        assert!(effect.update(&EffectInstance::new("slowness", 1, 1)));
+        assert!(!effect.no_curatives);
+        assert!(effect.hidden.as_ref().unwrap().no_curatives);
+        effect.tick_client();
+        assert_eq!((effect.duration, effect.amplifier), (99, 0));
+        assert!(effect.no_curatives);
+        // An ignored shorter dose does not replace the active policy.
+        assert!(!effect.update(&EffectInstance::new("slowness", 5, 0)));
+        assert!(effect.no_curatives);
+        // A same-strength accepted extension supplies the active policy.
+        assert!(effect.update(&EffectInstance::new("slowness", 200, 0)));
+        assert!(!effect.no_curatives);
+        protected.duration = 250;
+        assert!(effect.update(&protected));
+        assert!(effect.no_curatives);
+    }
+
+    #[test]
     fn bad_omen_in_a_village_becomes_raid_omen_over_two_ticks() {
         let mut fx = PlayerEffects::default();
         fx.add(EffectInstance::new("bad_omen", 100, 1));
@@ -544,11 +605,14 @@ mod tests {
             1,
         ));
         let saved = fx.saved();
-        assert_eq!(saved, [("ruby:glow".to_owned(), 600, 1, false, true)]);
+        assert_eq!(
+            saved,
+            [("ruby:glow".to_owned(), 600, 1, false, true, false)]
+        );
         assert_eq!(PlayerEffects::from_saved(&saved).list, fx.list);
         // Without its mod the saved effect is dropped, as an unknown id is.
         assert!(
-            PlayerEffects::from_saved(&[("gone:glow".into(), 600, 1, false, true)])
+            PlayerEffects::from_saved(&[("gone:glow".into(), 600, 1, false, true, false)])
                 .list
                 .is_empty()
         );

@@ -3614,8 +3614,8 @@ pub struct Level {
     pub post_effects: Vec<String>,
     /// Player.lastDeathLocation: the dimension and block of the last death.
     pub last_death: Option<(String, [i32; 3])>,
-    /// Player.active_effects: (id, duration, amplifier, ambient, show_particles).
-    pub active_effects: Vec<(String, i32, i32, bool, bool)>,
+    /// Player.active_effects, including optional mod curative immunity.
+    pub active_effects: Vec<crate::effects::SavedEffect>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
     pub ender_items: Vec<Option<crate::items::ItemStack>>,
     /// The `recipeBook` compound: open/filter settings and unlocked recipes.
@@ -3991,6 +3991,7 @@ impl Level {
                         get("amplifier").unwrap_or(0) as i32,
                         get("ambient").unwrap_or(0) != 0,
                         get("show_particles").is_none_or(|v| v != 0),
+                        get("horizon:no_curatives").is_some_and(|v| v != 0),
                     ))
                 })
                 .collect(),
@@ -4103,16 +4104,22 @@ impl Level {
                 Tag::List(
                     self.active_effects
                         .iter()
-                        .map(|(id, duration, amplifier, ambient, particles)| {
-                            Tag::compound([
-                                ("id", string(id)),
-                                ("duration", Tag::Int(*duration)),
-                                ("amplifier", Tag::Byte(*amplifier as i8)),
-                                ("ambient", Tag::Byte(i8::from(*ambient))),
-                                ("show_particles", Tag::Byte(i8::from(*particles))),
-                                ("show_icon", Tag::Byte(i8::from(*particles))),
-                            ])
-                        })
+                        .map(
+                            |(id, duration, amplifier, ambient, particles, no_curatives)| {
+                                let mut fields = vec![
+                                    ("id", string(id)),
+                                    ("duration", Tag::Int(*duration)),
+                                    ("amplifier", Tag::Byte(*amplifier as i8)),
+                                    ("ambient", Tag::Byte(i8::from(*ambient))),
+                                    ("show_particles", Tag::Byte(i8::from(*particles))),
+                                    ("show_icon", Tag::Byte(i8::from(*particles))),
+                                ];
+                                if *no_curatives {
+                                    fields.push(("horizon:no_curatives", Tag::Byte(1)));
+                                }
+                                Tag::compound(fields)
+                            },
+                        )
                         .collect(),
                 ),
             ),
@@ -6829,7 +6836,7 @@ mod tests {
         // A player loaded with an effect that has since run out: the loaded
         // compound still holds it, but the save writes only what is active.
         let mut level = Level {
-            active_effects: vec![("minecraft:speed".into(), 200, 1, false, true)],
+            active_effects: vec![("minecraft:speed".into(), 200, 1, false, true, false)],
             ..Level::default()
         };
         let loaded = level.player_tag();
@@ -6837,6 +6844,26 @@ mod tests {
         level.player_extra = Some(loaded);
         level.active_effects.clear();
         assert!(level.player_tag().get("active_effects").is_none());
+    }
+
+    #[test]
+    fn effect_cure_policy_round_trips_without_changing_vanilla_entries() {
+        let level = Level {
+            active_effects: vec![
+                ("minecraft:poison".into(), 100, 0, false, true, true),
+                ("minecraft:speed".into(), 200, 1, false, true, false),
+            ],
+            ..Level::default()
+        };
+        let tag = level.player_tag();
+        let Some(Tag::List(effects)) = tag.get("active_effects") else {
+            panic!("missing effects");
+        };
+        assert_eq!(effects[0].get("horizon:no_curatives"), Some(&Tag::Byte(1)));
+        assert!(effects[1].get("horizon:no_curatives").is_none());
+        let mut loaded = Level::default();
+        loaded.read_player(&tag);
+        assert_eq!(loaded.active_effects, level.active_effects);
     }
 
     #[test]

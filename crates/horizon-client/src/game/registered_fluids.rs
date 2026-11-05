@@ -1,3 +1,6 @@
+// Contact cure policy follows Tinkers' Construct, Copyright (c) 2022 SlimeKnights.
+// MIT License; full notice in THIRD_PARTY_NOTICES.md.
+// Changed: explicit declaration and Horizon player-instance dispatch.
 //! Live authoritative registered-fluid scheduling. Rendering and item-use
 //! adapters are separate integration gates; no mod declarations ship here.
 use super::*;
@@ -19,11 +22,13 @@ impl Game<'_> {
         if self.remote.is_some() || self.spectator() {
             return;
         }
-        self.add_player_effect(horizon_client::effects::EffectInstance::new(
+        let mut instance = horizon_client::effects::EffectInstance::new(
             effect.id.player_id(),
             effect.duration_ticks as i32,
             i32::from(effect.amplifier),
-        ));
+        );
+        instance.no_curatives = effect.no_curatives;
+        self.add_player_effect(instance);
     }
     pub(super) fn new_registered_fluid_scheduler(&self) -> Option<Scheduler> {
         self.res
