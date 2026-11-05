@@ -24,7 +24,7 @@ pub type Compound = BTreeMap<JavaString, Tag>;
 /// Float and double variants hold their IEEE bit patterns. Java canonicalizes
 /// NaNs on binary output. Loading, like vanilla's valueOf factories, normalizes
 /// negative zero to positive zero.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Tag {
     End,
     Byte(i8),
@@ -788,6 +788,48 @@ impl Snbt<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structural_hash_preserves_nbt_values_without_serialization() {
+        use std::hash::{Hash, Hasher};
+        let hash = |tag: &Tag| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            tag.hash(&mut h);
+            h.finish()
+        };
+        let first = Tag::compound([("b", Tag::Int(2)), ("a", Tag::Int(1))]);
+        let reordered = Tag::compound([("a", Tag::Int(1)), ("b", Tag::Int(2))]);
+        assert_eq!(first, reordered);
+        assert_eq!(hash(&first), hash(&reordered));
+        assert_eq!(hash(&first), hash(&first.clone()));
+        for (left, right) in [
+            (Tag::Int(1), Tag::Long(1)),
+            (Tag::Int(1), Tag::Int(2)),
+            (Tag::List(vec![Tag::Int(1)]), Tag::IntArray(vec![1])),
+            (Tag::Float(0.0_f32.to_bits()), Tag::Float((-0.0_f32).to_bits())),
+            (
+                Tag::Double(0x7ff8_0000_0000_0001),
+                Tag::Double(0x7ff8_0000_0000_0002),
+            ),
+            (
+                Tag::String(JavaString(vec![0xd800])),
+                Tag::String(JavaString(vec![0xfffd])),
+            ),
+        ] {
+            assert_ne!(left, right);
+            assert_ne!(hash(&left), hash(&right));
+        }
+        let nested = Tag::compound([(
+            "custom",
+            Tag::List(vec![Tag::compound([("upgrade", Tag::Int(1))])]),
+        )]);
+        let mut changed = nested.clone();
+        let Some(Tag::List(items)) = changed.get_mut("custom") else {
+            panic!("missing custom list");
+        };
+        *items[0].get_mut("upgrade").unwrap() = Tag::Int(2);
+        assert_ne!(hash(&nested), hash(&changed));
+    }
     #[test]
     fn streamed_lists_reach_the_visitor_and_stay_empty_in_the_tree() {
         let list = |n: i32| Tag::List((0..n).map(Tag::Int).collect());
