@@ -43,3 +43,6 @@ simulated dragons remain on their prior paths; overrides that decline travel
 can fall through to this common path. Custom mob effects and mixed-fluid/source
 phase parity also remain open. Live collision behavior and network movement
 need the final integration pass. This does not finish #379.
+
+Configured jumps and collision-aware fluid exit are covered by the later
+`registered-mob-fluid-jump-exit.md` slice, with its documented limitations.
