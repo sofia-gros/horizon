@@ -49,6 +49,9 @@ pub struct EffectContact {
     pub id: ContactEffect,
     pub duration_ticks: u32,
     pub amplifier: u8,
+    /// Explicit empty curative-item policy; omitted keeps ordinary behavior.
+    #[serde(default)]
+    pub no_curatives: bool,
 }
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

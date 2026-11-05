@@ -6748,8 +6748,12 @@ impl Game<'_> {
                 }
             }
             ConsumeEffect::ClearAllEffects => {
-                self.potions.effects.clear();
-                self.apply_effect_status();
+                // Per-instance curative policy is authoritative, not part of
+                // vanilla effect packets. Prediction waits for server removals.
+                if self.remote.is_none() {
+                    self.potions.effects.cure();
+                    self.apply_effect_status();
+                }
             }
             ConsumeEffect::RemoveEffects(to_remove) => {
                 for target in to_remove {

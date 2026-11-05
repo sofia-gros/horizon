@@ -296,6 +296,7 @@ mod tests {
                     .unwrap();
                 assert_eq!(effect.id.player_id(), player_id);
                 assert_eq!((effect.duration_ticks, effect.amplifier), (100, 0));
+                assert!(!effect.no_curatives);
                 assert!(resources.interaction_at_contact(block, &[]).is_none());
                 for height in [0.0, -0.1, f64::NAN] {
                     contact.height = height;
@@ -316,6 +317,18 @@ mod tests {
                 contact.source = source;
                 contact.eyes_inside = false;
             }
+            doc["fluids"][0]["interaction"]["effect"]["no_curatives"] = json!(true);
+            let protected =
+                RegisteredFluidResources::from_reader(&registry, doc.to_string().as_bytes())
+                    .unwrap();
+            assert!(
+                protected
+                    .interaction(source)
+                    .unwrap()
+                    .effect
+                    .unwrap()
+                    .no_curatives
+            );
             for bad in [
                 json!({"id":id,"duration_ticks":0,"amplifier":0}),
                 json!({"id":id,"duration_ticks":72001,"amplifier":0}),
@@ -323,6 +336,7 @@ mod tests {
                 json!({"id":"minecraft:instant_damage","duration_ticks":100,"amplifier":0}),
                 json!({"id":"tconstruct:enderference","duration_ticks":100,"amplifier":0}),
                 json!({"id":id,"duration_ticks":100,"amplifier":0,"curatives":[]}),
+                json!({"id":id,"duration_ticks":100,"amplifier":0,"no_curatives":"true"}),
             ] {
                 doc["fluids"][0]["interaction"]["effect"] = bad;
                 assert!(
