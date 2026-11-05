@@ -223,6 +223,10 @@ pub(super) fn item_view(s: &ItemStack) -> ItemView {
             .collect(),
         potion: s.potion().map(str::to_owned),
         custom_name: s.custom_name().is_some(),
+        custom_data: s
+            .data()
+            .and_then(|data| data.other("minecraft:custom_data"))
+            .cloned(),
     }
 }
 impl Game<'_> {
@@ -1417,6 +1421,26 @@ pub(super) fn text_of(v: &Value) -> Text {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn item_view_keeps_an_owned_custom_data_snapshot() {
+        use horizon_world::nbt::Tag;
+        let mut stack = ItemStack::new("example:tool", 1);
+        assert!(item_view(&stack).custom_data.is_none());
+        let custom = Tag::compound([("example:upgrade", Tag::Int(2))]);
+        stack
+            .data_mut()
+            .set_other("minecraft:custom_data", Some(custom.clone()));
+        let view = item_view(&stack);
+        assert_eq!(view.custom_data.as_ref(), Some(&custom));
+        let cloned = view.clone();
+        stack.data_mut().set_other("minecraft:custom_data", None);
+        assert!(item_view(&stack).custom_data.is_none());
+        assert_eq!(view.custom_data, Some(custom.clone()));
+        assert_eq!(cloned.custom_data, Some(custom));
+        assert_eq!(view.id, "example:tool");
+        assert_eq!(view.count, 1);
+    }
 
     fn recipes(n: usize) -> Toast {
         Toast::recipe(
