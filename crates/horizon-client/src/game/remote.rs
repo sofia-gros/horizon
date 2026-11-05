@@ -7964,6 +7964,12 @@ impl Game<'_> {
         // pick/empty contents decide whether the click succeeds (a failed
         // fill or pickup leaves the hand alone), and the blocks it sets are
         // this use's prediction.
+        if let Some(success) = self.with_hand(hand, |g| g.registered_bucket_preview(&held)) {
+            if success {
+                self.with_hand(hand, Game::swing_arm);
+            }
+            return success;
+        }
         if &*held.item == "minecraft:bucket"
             || horizon_client::items::bucket_contents(&held.item).is_some()
         {
@@ -8058,6 +8064,9 @@ impl Game<'_> {
     /// one against, `mayUseItemAt`), BottleItem.use (water to fill from) and
     /// BoatItem.use (a block or fluid surface with room for the boat).
     fn use_finds_no_target(&self, held: &ItemStack) -> bool {
+        if let Some(success) = self.registered_bucket_preview(held) {
+            return !success;
+        }
         let id = &*held.item;
         let facts = |pos: [i32; 3]| {
             self.res

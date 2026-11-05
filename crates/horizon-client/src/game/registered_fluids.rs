@@ -107,3 +107,132 @@ impl Game<'_> {
         result
     }
 }
+
+impl Game<'_> {
+    pub(super) fn registered_bucket(&self, item: &str) -> bool {
+        self.res
+            .rest()
+            .registered_fluids
+            .as_ref()
+            .is_some_and(|r| r.bucket_fluid(item).is_some())
+    }
+    pub(super) fn registered_source_at(&self, pos: [i32; 3]) -> bool {
+        self.res
+            .rest()
+            .registered_fluids
+            .as_ref()
+            .and_then(|r| {
+                r.catalog
+                    .from_block(self.world.block(pos[0], pos[1], pos[2]))
+            })
+            .is_some_and(|s| s.is_source())
+    }
+    /// Client-side result only. Authoritative mutation and inventory correction
+    /// arrive from the server; custom buckets do not predict native fluid IDs.
+    pub(super) fn registered_bucket_preview(&self, stack: &ItemStack) -> Option<bool> {
+        let resources = self.res.rest().registered_fluids.as_ref()?;
+        if resources.bucket_fluid(&stack.item).is_some() {
+            return Some(self.may_build() && self.pick().is_some());
+        }
+        if &*stack.item == "minecraft:bucket"
+            && self
+                .bucket_hit()
+                .is_some_and(|h| self.registered_source_at(h.pos))
+        {
+            return Some(self.may_build());
+        }
+        None
+    }
+    /// Returns None for native buckets so their existing path stays unchanged.
+    pub(super) fn use_registered_bucket(&mut self, stack: &ItemStack) -> Result<Option<UseResult>> {
+        let Some(resources) = self.res.rest().registered_fluids.clone() else {
+            return Ok(None);
+        };
+        let source = resources.bucket_fluid(&stack.item);
+        let filling = source.is_none() && &*stack.item == "minecraft:bucket";
+        if source.is_none() && !filling {
+            return Ok(None);
+        }
+        let hit = if filling {
+            self.bucket_hit()
+        } else {
+            self.pick()
+        };
+        let Some(hit) = hit else {
+            return Ok(source.map(|_| UseResult::Pass));
+        };
+        if filling && !self.registered_source_at(hit.pos) {
+            return Ok(None);
+        }
+        if !self.may_build() {
+            return Ok(Some(UseResult::Fail));
+        }
+        let target = if filling { hit.pos } else { hit.beside() };
+        let mut canceled = false;
+        self.native_fill_bucket(stack, target, &mut canceled);
+        if canceled || (!filling && self.bucket_empty_cancelled(stack, target)) {
+            return Ok(Some(UseResult::Fail));
+        }
+        // Resolve the return item before removing a source.
+        let returned = if let Some(source) = source {
+            let _ = resources.catalog.name(source)?;
+            "minecraft:bucket".to_owned()
+        } else {
+            let Some(fluid) = resources
+                .catalog
+                .from_block(self.world.block(target[0], target[1], target[2]))
+            else {
+                return Ok(Some(UseResult::Fail));
+            };
+            resources.bucket(fluid.id())?.to_owned()
+        };
+        let Some(mut queue) = self.registered_fluid_ticks.take() else {
+            return Ok(Some(UseResult::Fail));
+        };
+        self.registered_fluid_active = true;
+        let pos = BlockPos::new(target[0], target[1], target[2]);
+        let result = self.with_level(
+            |behaviours, level, native| -> Result<(bool, std::io::Result<()>)> {
+                let mut adapter = RegisteredLevel::new(
+                    behaviours,
+                    level,
+                    native,
+                    &resources.catalog,
+                    &mut queue,
+                )?;
+                let changed = if let Some(source) = source {
+                    resources.flow.place_source(&mut adapter, pos, source)?
+                } else {
+                    resources.flow.pickup_source(&mut adapter, pos)?.is_some()
+                };
+                Ok((changed, adapter.finish()))
+            },
+        );
+        self.registered_fluid_ticks = Some(queue);
+        self.registered_fluid_active = false;
+        let (changed, scheduled) = result?;
+        if !changed {
+            scheduled?;
+            return Ok(Some(UseResult::Fail));
+        }
+        // Inventory follows a committed block even if scheduling reports an
+        // invariant failure: returning early here would duplicate a container.
+        if filling || !self.creative {
+            self.filled_result(ItemStack::new(returned, 1));
+        }
+        scheduled?;
+        self.award_stat("used", &stack.item, 1);
+        self.post_block_game_event(
+            if filling {
+                "minecraft:fluid_pickup"
+            } else {
+                "minecraft:fluid_place"
+            },
+            target,
+            self.sculk_actor(),
+            None,
+        );
+        self.process_level_events()?;
+        Ok(Some(UseResult::Success { swing: true }))
+    }
+}

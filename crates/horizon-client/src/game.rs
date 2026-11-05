@@ -12435,11 +12435,18 @@ impl Game<'_> {
                 let state = self.world.block(b[0], b[1], b[2]);
                 let f = self.res.facts().get(state);
                 let face = [last[0] - b[0], last[1] - b[1], last[2] - b[2]];
-                if f.fluid != Fluid::None
-                    && f.fluid_level == 8
-                    && !f.fluid_falling
-                    && !f.waterlogged
-                    && f.render_shape != horizon_client::blocks::RenderShape::Model
+                let registered = self
+                    .res
+                    .rest()
+                    .registered_fluids
+                    .as_ref()
+                    .and_then(|r| r.catalog.from_block(state));
+                if registered.is_some_and(|s| s.is_source())
+                    || (f.fluid != Fluid::None
+                        && f.fluid_level == 8
+                        && !f.fluid_falling
+                        && !f.waterlogged
+                        && f.render_shape != horizon_client::blocks::RenderShape::Model)
                 {
                     if !first {
                         return Some(Hit {
@@ -12449,7 +12456,17 @@ impl Game<'_> {
                         });
                     }
                     let above = self.world.block(b[0], b[1] + 1, b[2]);
-                    let same_above = self.res.facts().get(above).fluid == f.fluid;
+                    let same_above = if let Some(fluid) = registered {
+                        self.res.rest().registered_fluids.as_ref().is_some_and(|r| {
+                            r.catalog.from_block(above).is_some_and(|other| {
+                                r.catalog
+                                    .same_family(fluid.id(), other.id())
+                                    .unwrap_or(false)
+                            })
+                        })
+                    } else {
+                        self.res.facts().get(above).fluid == f.fluid
+                    };
                     if let Some((face, point)) =
                         clip_start_source(origin, dir, self.reach(), b, same_above)
                     {
@@ -12459,7 +12476,11 @@ impl Game<'_> {
                             point,
                         });
                     }
-                } else if !first && !self.res.facts().is_air(state) && f.fluid == Fluid::None {
+                } else if !first
+                    && !self.res.facts().is_air(state)
+                    && f.fluid == Fluid::None
+                    && registered.is_none()
+                {
                     return Some(Hit {
                         pos: b,
                         face,
@@ -12896,9 +12917,12 @@ impl Game<'_> {
         // BucketItem has no useOn: a guest's UseItemOn leaves it to UseItem.
         let bucket = horizon_client::items::bucket_contents(&stack.item);
         if matches!(self.guest_use, Some(GuestUse::OnBlock(_)))
-            && (item == "bucket" || bucket.is_some())
+            && (item == "bucket" || bucket.is_some() || self.registered_bucket(&stack.item))
         {
             return Ok(UseResult::Pass);
+        }
+        if let Some(result) = self.use_registered_bucket(stack)? {
+            return Ok(result);
         }
         if item == "bucket" {
             let Some(hit) = self.bucket_hit() else {
