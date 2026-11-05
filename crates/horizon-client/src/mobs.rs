@@ -69,6 +69,7 @@ pub mod rabbit;
 pub mod raider;
 pub mod random_textures;
 pub mod ravager;
+mod registered_fluids;
 pub mod render;
 pub mod riders;
 pub mod seen_grid;
@@ -1329,6 +1330,12 @@ pub enum MobEvent {
         count: u32,
     },
     Sound(&'static str, [f64; 3], f32, f32),
+    /// Additional accepted-hit burn audio, retaining the mob sound category.
+    RegisteredFluidBurnSound {
+        at: [f64; 3],
+        pitch: f32,
+        hostile: bool,
+    },
     /// `Entity.sendBubbleColumnParticles`: a mob at the top of the bubble column
     /// block at `pos` (the splash and bubble particles over it).
     BubbleColumnParticles {
@@ -2524,6 +2531,9 @@ pub struct MobWorld<'a> {
     pub facts: &'a BlockFacts,
     /// Fluid states and flow facts, for the currents that push mobs.
     pub fluid_tables: &'a crate::motion::FluidResources,
+    /// Opt-in custom liquid contacts, separate from native water/lava identity.
+    pub registered_fluids:
+        Option<&'a horizon_world::registered_fluids::resources::RegisteredFluidResources<'a>>,
     pub movement: &'a horizon_world::movement_properties::BoundMovementProperties,
     pub collision: &'a BlockCollisionRegistry<'a>,
     pub data: &'a MobData,
@@ -2866,6 +2876,15 @@ impl Mob {
         let mut amount = if reflected { 1000.0 } else { amount };
         if self.species() == Species::Armadillo {
             amount = armadillo::reduce_damage(self, amount);
+        }
+        // Match living_hurt::hurt_server's pre-hook Fire Resistance guard.
+        // This also protects the periodic OnFire damage after fluid ignition.
+        if source.is_fire()
+            && self.extra.effects.iter().any(|(id, ticks, _)| {
+                *id == "minecraft:fire_resistance" && (*ticks > 0 || *ticks == -1)
+            })
+        {
+            return false;
         }
         // LivingEntity.hurtServer, past its guards: a native mod's hook.
         if crate::health::hurt_server_canceled(

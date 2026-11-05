@@ -611,7 +611,7 @@ use them need `"hooks": 49`.
 
 API 50 adds damage a mod can change or cancel through `native_living_incoming_damage` (NeoForge's
 `LivingIncomingDamageEvent`): where `LivingEntity.hurtServer` starts, once its guards passed (invulnerable, dead or
-dying, fire with fire resistance; Horizon's mobs don't check the fire resistance effect there yet), with the hurt
+dying, fire with fire resistance), with the hurt
 entity's id and type (`minecraft:player` for a player), the damage type (`minecraft:fall`), the source's causing
 entity (`causing`, vanilla's `DamageSource.getEntity`: a skeleton for its arrow) and direct entity (`direct`,
 `getDirectEntity`: the arrow; the attacker itself in melee), and the amount. The entity ids are 0 for none, and for
