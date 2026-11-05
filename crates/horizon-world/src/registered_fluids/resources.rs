@@ -35,6 +35,52 @@ struct Document {
     fluids: Vec<Definition>,
 }
 
+/// Merge one mod-owned declaration into the aggregate resource document.
+/// Full registry and policy validation follows after content block tables exist.
+pub fn append_declaration(
+    document: &mut serde_json::Value,
+    owner: &str,
+    bytes: &[u8],
+) -> io::Result<()> {
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|e| invalid(e.to_string()))?;
+    let declaration: Definition =
+        serde_json::from_value(value.clone()).map_err(|e| invalid(e.to_string()))?;
+    for name in [
+        &declaration.source,
+        &declaration.flowing,
+        &declaration.block,
+        &declaration.bucket,
+    ] {
+        if !valid_name(name)
+            || name
+                .split_once(':')
+                .is_none_or(|(namespace, _)| namespace != owner)
+        {
+            return Err(invalid(
+                "registered fluid identifiers must belong to the declaring mod",
+            ));
+        }
+    }
+    if document.get("format").and_then(serde_json::Value::as_u64) != Some(1) {
+        return Err(invalid("unsupported registered-fluid aggregate format"));
+    }
+    let fluids = document
+        .get_mut("fluids")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| invalid("missing aggregate fluid array"))?;
+    for existing in fluids.iter() {
+        for key in ["source", "flowing"] {
+            let id = existing.get(key).and_then(serde_json::Value::as_str);
+            if id == Some(declaration.source.as_str()) || id == Some(declaration.flowing.as_str()) {
+                return Err(invalid("duplicate registered fluid identity"));
+            }
+        }
+    }
+    fluids.push(value);
+    Ok(())
+}
+
 pub struct RegisteredFluidResources<'r> {
     pub catalog: Arc<RegisteredFluids<'r>>,
     pub flow: RegisteredFlow<'r, 'r>,
@@ -151,6 +197,23 @@ mod tests {
     }
     fn document() -> serde_json::Value {
         json!({"format":1,"fluids":[{"source":"test:liquid","flowing":"test:flowing_liquid","block":"test:liquid","bucket":"test:liquid_bucket","policy":{"drop_off":3,"slope_distance":3,"tick_delay":30,"source_conversion":false},"visual":{"still":"test:block/liquid_still","flowing":"test:block/liquid_flow","tint":16777215,"emission":12}}]})
+    }
+    #[test]
+    fn content_merge_rejects_foreign_or_duplicate_ids_without_mutating_aggregate() {
+        let definition = document()["fluids"][0].clone();
+        let mut aggregate = serde_json::json!({"format":1,"fluids":[]});
+        append_declaration(&mut aggregate, "test", definition.to_string().as_bytes()).unwrap();
+        let before = aggregate.clone();
+        assert!(
+            append_declaration(&mut aggregate, "test", definition.to_string().as_bytes()).is_err()
+        );
+        assert_eq!(aggregate, before);
+        assert!(
+            append_declaration(&mut aggregate, "other", definition.to_string().as_bytes()).is_err()
+        );
+        assert_eq!(aggregate, before);
+        RegisteredFluidResources::from_reader(&registry(), aggregate.to_string().as_bytes())
+            .unwrap();
     }
     #[test]
     fn declarations_bind_same_identity_for_flow_visuals_and_buckets() {

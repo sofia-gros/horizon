@@ -2335,11 +2335,31 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
     let mut worldgen: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
     let mut additions: BTreeMap<&str, Vec<Addition>> = BTreeMap::new();
     let mut modifiers = Vec::new();
+    let fluid_path = horizon_world::registered_fluids::resources::RESOURCE_PATH;
+    let mut registered_fluids: serde_json::Value = match fs::read(base.join(fluid_path)) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            serde_json::json!({"format":1,"fluids":[]})
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let mut added_fluids = false;
     for m in mods {
         let declarations = format!("data/{}/horizon/", m.id);
         let mut reader = m.content.reader()?;
         for file in &m.content.files {
             let bytes = reader.read(file)?;
+            if file.starts_with(&format!("data/{}/registered_fluid/", m.id))
+                && file.ends_with(".json")
+            {
+                horizon_world::registered_fluids::resources::append_declaration(
+                    &mut registered_fluids,
+                    &m.id,
+                    &bytes,
+                )
+                .map_err(|e| format!("{file}: {e}"))?;
+                added_fluids = true;
+            }
             let is_tag = file.starts_with("data/") && file.contains("/tags/");
             if is_tag && file.ends_with(".json") {
                 let doc: J = serde_json::from_slice(&bytes).map_err(|e| format!("{file}: {e}"))?;
@@ -2374,6 +2394,17 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
                 }
             }
         }
+    }
+    if added_fluids {
+        let registry = horizon_world::registry::BlockRegistry::from_facts_json(fs::File::open(
+            out.join("facts.json"),
+        )?)?;
+        let bytes = serde_json::to_vec(&registered_fluids)?;
+        horizon_world::registered_fluids::resources::RegisteredFluidResources::from_reader(
+            &registry,
+            bytes.as_slice(),
+        )?;
+        overlay.write(fluid_path, &bytes)?;
     }
     // A tag naming an id nobody registers fails as a whole in vanilla, and
     // carried-over mods name blocks left out or other mods' ids: such
