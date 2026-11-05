@@ -385,6 +385,7 @@ impl PlayerEffects {
                 || self.get("conduit_power").is_some(),
             breath_of_the_nautilus: self.get("breath_of_the_nautilus").is_some(),
             protection: Vec::new(),
+            bounce_on_fall: false,
         }
     }
     /// Attribute modifiers of active effects: (attribute, id, amount, operation).
@@ -413,6 +414,8 @@ impl PlayerEffects {
 /// Effect and equipment facts the movement and damage kernels query.
 #[derive(Clone, Debug, Default)]
 pub struct StatusFlags {
+    /// Explicit native-mod opt-in; vanilla effects never enable this.
+    pub bounce_on_fall: bool,
     pub jump_boost: Option<i32>,
     pub slow_falling: bool,
     pub levitation: Option<i32>,

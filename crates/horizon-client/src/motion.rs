@@ -293,6 +293,8 @@ pub struct PlayerMotion {
     pub fall_distance: f64,
     /// The block fallOn currently running, consumed by its damage call.
     pub(crate) block_landing: Option<(BlockStateId, BlockPos, f64)>,
+    /// A mod landing rebound applied after collision restitution.
+    pub(crate) pending_effect_bounce: Option<Vec3>,
     pub stuck_multiplier: Vec3,
     /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
     /// block has pushed this entity this tick (0.51 at most on any axis).
@@ -549,6 +551,7 @@ impl PlayerMotion {
             history: MovementHistory::default(),
             fall_distance: 0.0,
             block_landing: None,
+            pending_effect_bounce: None,
             stuck_multiplier: Vec3::ZERO,
             piston: Default::default(),
             yaw: 0.0,
@@ -2084,7 +2087,9 @@ impl MotionWorld<'_, '_, '_> {
     /// horizontal displacement.
     pub fn move_self(&mut self, movement: Vec3) -> Result<()> {
         let before = self.player.position;
+        self.player.pending_effect_bounce = None;
         entity_move::move_entity(self, MoverType::SelfMovement, movement)?;
+        self.finish_effect_bounce();
         let dx = (self.player.position.x - before.x) as f32;
         let dz = (self.player.position.z - before.z) as f32;
         self.update_auto_jump(dx, dz)
@@ -2431,7 +2436,9 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
             resolved_movement: resolved,
             fall_distance: self.player.fall_distance,
         };
-        movement_restitution::restitute_movement(self, input)
+        movement_restitution::restitute_movement(self, input)?;
+        self.finish_effect_bounce();
+        Ok(())
     }
     fn client_side(&mut self) -> Result<bool> {
         Ok(false)
@@ -4150,6 +4157,49 @@ mod tests {
                 w.player.health.flash_health_change(25.0);
                 assert_eq!(w.player.health.hurt.cooldown, 10);
             }
+        }
+    }
+
+    #[test]
+    fn explicit_effect_bounce_survives_landing_restitution() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        for (enabled, crouching) in [(false, false), (true, false), (true, true)] {
+            let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 20.0, 20.5)).unwrap();
+            player.fall_distance = 8.0;
+            player.velocity.y = -0.8;
+            player.status.bounce_on_fall = enabled;
+            player.shift_key_down = crouching;
+            let mut w = MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            };
+            w.move_self(Vec3::new(0.0, -30.0, 0.0)).unwrap();
+            if enabled && !crouching {
+                assert!(w.player.velocity.y > 0.0);
+                assert_eq!(w.player.health.health(), 20.0);
+                assert!(!w.player.ground.on_ground);
+                assert!(w.player.health.sync_velocity);
+            } else {
+                assert_eq!(w.player.velocity.y, 0.0);
+                assert!(w.player.ground.on_ground);
+                assert!(w.player.health.health() < 20.0);
+            }
+            assert_eq!(w.player.fall_distance, 0.0);
+            assert!(w.player.pending_effect_bounce.is_none());
         }
     }
     #[test]

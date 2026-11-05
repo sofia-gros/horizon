@@ -168,6 +168,13 @@ BlueMap is licensed under the MIT license:
 
 ## SlimeKnights registered-fluid behavior
 
+`crates/horizon-world/src/fall_bounce.rs` adapts the landing thresholds,
+suppressed damage multiplier and server/client rebound arithmetic from
+`ModifierEvents.bounceOnFall` in the same TConstruct revision below. Changes:
+pure opt-in response, finite-input guards and host post-restitution application.
+Source momentum preservation and audio are not included in this slice.
+
+
 `crates/horizon-client/src/motion/registered_fluids.rs` adapts the family-height
 check, ignition and lava-type damage of `BurningLiquidBlock.entityInside`, and
 the matching-family status-effect contact of `MobEffectLiquidBlock.entityInside`, from

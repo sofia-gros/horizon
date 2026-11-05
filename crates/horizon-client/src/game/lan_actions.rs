@@ -4183,6 +4183,7 @@ impl Game<'_> {
                     let pos = w.legacy_on_position()?;
                     let state = w.block_state(pos)?;
                     w.check_fall_damage(moved[1], on_ground, state, pos)?;
+                    w.finish_effect_bounce();
                     w.check_movement_statistics(movement)
                 })();
                 if landed.is_err() {
