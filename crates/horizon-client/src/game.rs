@@ -4040,6 +4040,11 @@ impl Game<'_> {
         let mut cells = horizon_client::entities::ItemCells::new(&items);
         // A LAN or server guest only shows the host's items.
         let merging = self.remote.is_none();
+        let registered = if merging {
+            self.res.rest().registered_fluids.clone()
+        } else {
+            None
+        };
         let obstacles = horizon_client::entities::ObstacleGrid::new(self.item_entity_collisions());
         let mut nearby = Vec::new();
         let mut bubble_tops = Vec::new();
@@ -4145,11 +4150,14 @@ impl Game<'_> {
                 cells.remove(i, item.position);
                 continue;
             }
+            let mut registered_burns = 0;
             let environment = item.environment_tick(
                 &self.world,
                 self.res.facts(),
                 self.pack.assets.registry,
                 world_items!(self),
+                registered.as_deref(),
+                &mut registered_burns,
             );
             if environment.should_play_lava_hurt_sound(item.ticks) {
                 let pitch = 2.0 + self.world.random.next_float() * 0.4;
@@ -4159,6 +4167,23 @@ impl Game<'_> {
                     0.4,
                     pitch,
                 );
+            }
+            for _ in 0..registered_burns {
+                let pitch = 2.0f32 + self.world.random.next_float() * 0.4f32;
+                let at = [item.position.x, item.position.y, item.position.z];
+                const SOUND: &str = "minecraft:entity.generic.burn";
+                self.audio.play_on_unshared(6, SOUND, Some(at), 0.4, pitch);
+                if self.lan.is_some() || self.serving.is_some() || self.options.dedicated.is_some()
+                {
+                    self.creatures.lan_sounds.push(creatures::NativeSound {
+                        dimension: self.dim.id(),
+                        sound: SOUND.to_owned(),
+                        at,
+                        source: 6,
+                        volume: 0.4,
+                        pitch,
+                    });
+                }
             }
             if !environment.alive {
                 removed[i] = true;

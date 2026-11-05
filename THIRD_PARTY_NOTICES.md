@@ -311,3 +311,12 @@ The optional registered-fluid path-node declaration and its mob path adapter in
 [`f4e77d43f39ba1047bf93ae816b7e1beaab514c2`](https://github.com/SlimeKnights/TinkersConstruct/blob/f4e77d43f39ba1047bf93ae816b7e1beaab514c2/src/main/java/slimeknights/tconstruct/fluids/TinkerFluids.java),
 Copyright (c) 2022 SlimeKnights, MIT (license reproduced above). The Rust adapter
 is original host integration. No Forge implementation was read or copied.
+
+The dropped-item registered-fluid adapter in
+`crates/horizon-client/src/entities/registered_fluids.rs` adapts
+Tinkers' Construct `BurningLiquidBlock.entityInside` at
+[`f4e77d43f39ba1047bf93ae816b7e1beaab514c2`](https://github.com/SlimeKnights/TinkersConstruct/blob/f4e77d43f39ba1047bf93ae816b7e1beaab514c2/src/main/java/slimeknights/tconstruct/fluids/block/BurningLiquidBlock.java),
+Copyright (c) 2022 SlimeKnights, MIT (license reproduced above). It retains
+positive family-height gating, ignition before lava damage, and the accepted-hit
+sound. The Rust item/world integration is original; no Forge implementation was
+read or copied.

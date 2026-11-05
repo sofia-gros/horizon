@@ -89,6 +89,7 @@ fn slime_at(world: &World, facts: &BlockFacts, x: i32, y: i32, z: i32) -> bool {
 }
 
 mod fluids;
+mod registered_fluids;
 pub use fluids::update_entity_fluids;
 
 #[derive(Clone, Debug)]
@@ -169,12 +170,19 @@ impl ItemEntity {
             ),
         )
     }
+    /// Registered sounds are accumulated separately from native lava's cadence.
+    /// The caller initializes the count to zero. Keeping this work inside this
+    /// entry point preserves native-mod HEAD cancellation (e.g. Worldbound).
     pub fn environment_tick(
         &mut self,
         world: &World,
         facts: &BlockFacts,
         registry: &horizon_world::registry::BlockRegistry,
         items: &crate::items::Items,
+        registered: Option<
+            &horizon_world::registered_fluids::resources::RegisteredFluidResources<'_>,
+        >,
+        registered_burns: &mut u32,
     ) -> ItemEnvironmentTick {
         let at = world.block(
             self.position.x.floor() as i32,
@@ -218,6 +226,20 @@ impl ItemEntity {
             && !items.resists_cactus(&self.stack)
         {
             self.health -= 1;
+        }
+        if let Some(resources) = registered {
+            let lava_resistant = items.resists_fire(&self.stack, "minecraft:lava");
+            let hits = registered_fluids::burn_contacts(
+                self,
+                resources,
+                fire_immune,
+                lava_resistant,
+                |p| {
+                    (world.loaded(p.x, p.z) && (world.bottom_y()..world.top_y()).contains(&p.y))
+                        .then(|| world.block(p.x, p.y, p.z))
+                },
+            );
+            *registered_burns = registered_burns.saturating_add(hits);
         }
         ItemEnvironmentTick {
             alive: self.health > 0,
@@ -1693,7 +1715,7 @@ mod fire_environment_tests {
         };
         let mut wood = make("minecraft:oak_planks");
         let mut metal = make("minecraft:netherite_ingot");
-        let first = wood.environment_tick(&world, &facts, assets.registry, &items);
+        let first = wood.environment_tick(&world, &facts, assets.registry, &items, None, &mut 0);
         assert!(first.alive && first.lava_hurt);
         assert!(
             !first.should_play_lava_hurt_sound(1),
@@ -1704,7 +1726,7 @@ mod fire_environment_tests {
             wood.fire_ticks > 0,
             "lava contact must ignite dropped items"
         );
-        let last = wood.environment_tick(&world, &facts, assets.registry, &items);
+        let last = wood.environment_tick(&world, &facts, assets.registry, &items, None, &mut 0);
         assert!(
             !last.alive && last.lava_hurt,
             "lethal lava damage still emits burn sound"
@@ -1714,7 +1736,8 @@ mod fire_environment_tests {
             "the lethal hit must always play the sound"
         );
         for _ in 0..40 {
-            let result = metal.environment_tick(&world, &facts, assets.registry, &items);
+            let result =
+                metal.environment_tick(&world, &facts, assets.registry, &items, None, &mut 0);
             assert!(result.alive && !result.lava_hurt);
             assert!(!result.should_play_lava_hurt_sound(10));
         }
@@ -1729,7 +1752,8 @@ mod fire_environment_tests {
             )
             .unwrap();
         let mut burning = make("minecraft:oak_planks");
-        let result = burning.environment_tick(&world, &facts, assets.registry, &items);
+        let result =
+            burning.environment_tick(&world, &facts, assets.registry, &items, None, &mut 0);
         assert!(result.alive && !result.lava_hurt);
         assert!(burning.fire_ticks > 0);
         world
@@ -1744,7 +1768,7 @@ mod fire_environment_tests {
             )
             .unwrap();
         let mut soul = make("minecraft:oak_planks");
-        soul.environment_tick(&world, &facts, assets.registry, &items);
+        soul.environment_tick(&world, &facts, assets.registry, &items, None, &mut 0);
         assert_eq!(soul.health, 3);
         let mut stand = ArmorStand::new(2, at, 0.0);
         world
