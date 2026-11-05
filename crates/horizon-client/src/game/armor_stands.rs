@@ -819,9 +819,9 @@ impl Game<'_> {
             a.previous = a.position;
             a.previous_yaw = a.yaw;
             let in_water = a.update_fluids(&self.world, &self.res.motion().fluids);
-            if let Some(resources) = registered.as_deref() {
-                a.update_registered_fluids(&self.world, &self.res.motion().fluids, resources);
-            }
+            let registered_travel = registered.as_deref().and_then(|resources| {
+                a.update_registered_fluids(&self.world, &self.res.motion().fluids, resources)
+            });
             let (world, registry, facts, collision) = (
                 &self.world,
                 self.pack.assets.registry,
@@ -838,6 +838,7 @@ impl Game<'_> {
                 &mut scene,
                 facts,
                 in_water,
+                registered_travel,
                 &mut |bounds, velocity| {
                     horizon_client::motion::bubble_column_push_over(
                         world,
