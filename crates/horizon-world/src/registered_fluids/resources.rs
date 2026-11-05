@@ -1,3 +1,5 @@
+// Upward texture selection follows Mantle, Copyright (c) 2022 SlimeKnights.
+// MIT License. Full source and notice are in THIRD_PARTY_NOTICES.md.
 //! Validated resource declarations shared by simulation, bucket and rendering
 //! adapters. Absence leaves vanilla unchanged; malformed declarations fail load.
 use super::interaction::InteractionPolicy;
@@ -18,6 +20,16 @@ pub struct FluidVisual {
     pub flowing: String,
     pub tint: u32,
     pub emission: u8,
+}
+impl FluidVisual {
+    /// Mantle ClientInvertedFluidType uses an inverted world flowing sprite;
+    /// still textures and the underlying surface-height geometry are unchanged.
+    pub fn flowing_texture(&self, direction: VerticalFlow) -> std::borrow::Cow<'_, str> {
+        match direction {
+            VerticalFlow::Down => std::borrow::Cow::Borrowed(&self.flowing),
+            VerticalFlow::Up => std::borrow::Cow::Owned(format!("{}_inverted", self.flowing)),
+        }
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -98,17 +110,6 @@ impl<'r> RegisteredFluidResources<'r> {
             serde_json::from_reader(reader).map_err(|e| invalid(e.to_string()))?;
         if document.format != 1 {
             return Err(invalid("unsupported registered-fluid resource format"));
-        }
-        // Simulation support alone cannot safely enable inverted world content:
-        // surface geometry, immersion and currents still assume downward flow.
-        if document
-            .fluids
-            .iter()
-            .any(|d| d.policy.vertical_direction == VerticalFlow::Up)
-        {
-            return Err(invalid(
-                "inverted registered fluids need rendering, contact and current support",
-            ));
         }
         // Never run two simulators over vanilla liquid blocks or steal native
         // bucket use. Native-container integration needs a separate explicit path.
@@ -390,7 +391,8 @@ mod tests {
         }
     }
     #[test]
-    fn upward_content_is_gated_until_geometry_and_contact_are_supported() {
+    fn upward_content_selects_inverted_flow_art_without_mirroring_contacts() {
+        use horizon_core::geometry::{Aabb, Vec3};
         let registry = registry();
         let mut value = document();
         // Old declarations still default to ordinary downward behavior.
@@ -402,9 +404,31 @@ mod tests {
             RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).is_ok()
         );
         value["fluids"][0]["policy"]["vertical_direction"] = json!("up");
-        assert!(
-            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).is_err()
+        let resources =
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).unwrap();
+        let source = resources.catalog.id("test:liquid").unwrap();
+        let (visual, _) = resources.visual(BlockStateId(0)).unwrap();
+        assert_eq!(
+            visual.flowing_texture(resources.flow.vertical_direction(source).unwrap()),
+            "test:block/liquid_flow_inverted"
         );
+        assert_eq!(
+            visual.flowing_texture(VerticalFlow::Down),
+            "test:block/liquid_flow"
+        );
+        // Mantle's type changes only the flowing texture; InvertedFluid does
+        // not override height/shape, so contact stays at the bottom of the cell.
+        let bounds = Aabb::new(Vec3::new(0.1, 0.0, 0.1), Vec3::new(0.9, 1.0, 0.9));
+        for (eye_y, immersed) in [(0.05, true), (0.95, false)] {
+            let contacts = resources
+                .catalog
+                .contacts(bounds, Vec3::new(0.5, eye_y, 0.5), 100, |p| {
+                    (p.x == 0 && p.y == 0 && p.z == 0).then_some(BlockStateId(0))
+                })
+                .unwrap();
+            assert_eq!(contacts[0].height, f64::from(8.0f32 / 9.0));
+            assert_eq!(contacts[0].eyes_inside, immersed);
+        }
         value["fluids"][0]["policy"]["vertical_direction"] = json!("sideways");
         assert!(
             RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).is_err()

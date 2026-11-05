@@ -5,7 +5,7 @@
 use super::*;
 use horizon_world::{
     fluid_flow::{FlowSample, FluidFlowWorld, flow_at_sample},
-    registered_fluids::{RegisteredFluidState, RegisteredFluids, interaction::InteractionPolicy},
+    registered_fluids::{RegisteredFluidState, interaction::InteractionPolicy},
 };
 
 #[derive(Clone, Copy)]
@@ -15,6 +15,7 @@ enum Sample {
     Liquid {
         state: RegisteredFluidState,
         source: horizon_world::registered_fluids::RegisteredFluidId,
+        up: bool,
     },
 }
 impl FlowSample for Sample {
@@ -33,10 +34,13 @@ impl FlowSample for Sample {
     fn falling(self) -> bool {
         matches!(self, Self::Liquid { state, .. } if state.falling())
     }
+    fn flows_up(self) -> bool {
+        matches!(self, Self::Liquid { up: true, .. })
+    }
 }
 struct CurrentWorld<'a, 'r> {
     scene: &'a World,
-    catalog: &'a RegisteredFluids<'r>,
+    resources: &'a horizon_world::registered_fluids::resources::RegisteredFluidResources<'r>,
     fluids: &'a fluids::FluidResources,
 }
 impl CurrentWorld<'_, '_> {
@@ -53,16 +57,20 @@ impl FluidFlowWorld<Sample> for CurrentWorld<'_, '_> {
         let Some(block) = self.loaded_block(p) else {
             return Ok(Sample::Other);
         };
-        Ok(if let Some(state) = self.catalog.from_block(block) {
-            Sample::Liquid {
-                state,
-                source: self.catalog.source(state.id())?,
-            }
-        } else if self.fluids.fluid(block).kind() == horizon_world::fluid::FluidKind::Empty {
-            Sample::Empty
-        } else {
-            Sample::Other
-        })
+        Ok(
+            if let Some(state) = self.resources.catalog.from_block(block) {
+                Sample::Liquid {
+                    state,
+                    source: self.resources.catalog.source(state.id())?,
+                    up: self.resources.flow.vertical_direction(state.id())?
+                        == horizon_world::registered_flow::VerticalFlow::Up,
+                }
+            } else if self.fluids.fluid(block).kind() == horizon_world::fluid::FluidKind::Empty {
+                Sample::Empty
+            } else {
+                Sample::Other
+            },
+        )
     }
     fn block(&mut self, p: BlockPos) -> std::io::Result<Self::Block> {
         Ok(self.loaded_block(p))
@@ -94,7 +102,7 @@ impl MotionWorld<'_, '_, '_> {
         let scene = &*self.scene;
         let mut world = CurrentWorld {
             scene,
-            catalog: &resources.catalog,
+            resources: &resources,
             fluids: &self.resources.fluids,
         };
         let eyes = Vec3::new(
