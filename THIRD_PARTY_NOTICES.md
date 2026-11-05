@@ -327,3 +327,11 @@ explicit `canExtinguish(true)` policy in MIT Tinkers' Construct
 [`f4e77d43f39ba1047bf93ae816b7e1beaab514c2`](https://github.com/SlimeKnights/TinkersConstruct/blob/f4e77d43f39ba1047bf93ae816b7e1beaab514c2/src/main/java/slimeknights/tconstruct/fluids/TinkerFluids.java),
 Copyright (c) 2022 SlimeKnights (MIT license above). The host phase integration
 is original Rust code; no Forge implementation was read or copied.
+
+Registered dropped-item current forces in `entities/fluids.rs` and
+`entities/registered_fluids.rs` consume the explicit motion-scale policy in
+MIT Tinkers' Construct `TinkerFluids.cool()` and `hot()` at
+[`f4e77d43f39ba1047bf93ae816b7e1beaab514c2`](https://github.com/SlimeKnights/TinkersConstruct/blob/f4e77d43f39ba1047bf93ae816b7e1beaab514c2/src/main/java/slimeknights/tconstruct/fluids/TinkerFluids.java),
+Copyright (c) 2022 SlimeKnights (MIT license above). This is original wiring to
+the host's existing current sampler and non-player current target; no Forge
+implementation was read or copied.

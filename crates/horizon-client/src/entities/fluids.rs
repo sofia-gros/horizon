@@ -15,6 +15,7 @@ use horizon_world::{
     },
     fluid::{FluidHeightWorld, FluidKind, FluidState},
     fluid_flow::{FluidFlowWorld, flow_at},
+    registered_fluids::resources::RegisteredFluidResources,
     registry::BlockStateId,
 };
 type Error = std::convert::Infallible;
@@ -66,6 +67,35 @@ pub fn update_entity_fluids(
     (water_height, lava_height)
 }
 impl ItemEntity {
+    /// Native water/lava currents run first. Registered currents are opt-in and
+    /// run before item movement without changing the native immersion heights.
+    pub(super) fn update_registered_fluids(
+        &mut self,
+        world: &World,
+        fluids: &FluidResources,
+        resources: &RegisteredFluidResources<'_>,
+    ) {
+        let bounds = self.bounds();
+        let eye_y = self.position.y + f64::from(0.2125f32);
+        let Ok(contacts) = crate::motion::registered_fluid_contacts_with_flow(
+            world,
+            resources,
+            fluids,
+            bounds.deflate(Vec3::new(0.001, 0.001, 0.001)),
+            Vec3::new(self.position.x, eye_y, self.position.z),
+        ) else {
+            return;
+        };
+        let mut scene = EntityFluidWorld {
+            bounds,
+            position: self.position,
+            eye_y,
+            velocity: &mut self.velocity,
+            world,
+            fluids,
+        };
+        let _ = super::registered_fluids::apply_currents(&mut scene, resources, &contacts);
+    }
     pub(super) fn update_fluids(&mut self, world: &World, fluids: &FluidResources) -> (f64, f64) {
         update_entity_fluids(
             self.bounds(),
