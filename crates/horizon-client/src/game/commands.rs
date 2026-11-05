@@ -2384,6 +2384,15 @@ impl Game<'_> {
         if previous == state {
             return Ok(false);
         }
+        if !self.with_level(|_, level, _| {
+            horizon_world::level::LevelAccess::allow_block_removal(
+                level,
+                horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
+                previous,
+            )
+        }) {
+            return Ok(false);
+        }
         // A different block replaces the block entity (Level.setBlock).
         let (old, new) = (
             self.res.facts().get(previous).name.clone(),
@@ -2392,27 +2401,33 @@ impl Game<'_> {
         // The command clears the old block entity without its side effects
         // (UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS); the new block gets a fresh one.
         let key = (pos[0], pos[1], pos[2]);
+        // Do not clear the live entity before the guarded write: a failed
+        // write must leave both block and inventory intact. Let the common
+        // removal path clear it only after commit, with item spills suppressed.
+        let flags = if strict {
+            horizon_world::level::flags::UPDATE_CLIENTS
+                | horizon_world::level::flags::UPDATE_SKIP_ALL_SIDEEFFECTS
+        } else {
+            horizon_world::level::flags::UPDATE_ALL
+                | horizon_world::level::flags::UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS
+        };
+        let changed = self.with_level(|b, level, ticks| {
+            b.set_block(
+                level,
+                ticks,
+                horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
+                state,
+                flags,
+            )
+        });
+        if !changed {
+            return Ok(false);
+        }
         if old != new {
             self.jukebox_removed(pos);
-            self.world.block_entities.remove(&key);
         }
-        if strict {
-            self.with_level(|b, level, ticks| {
-                b.set_block(
-                    level,
-                    ticks,
-                    horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
-                    state,
-                    horizon_world::level::flags::UPDATE_CLIENTS
-                        | horizon_world::level::flags::UPDATE_SKIP_ALL_SIDEEFFECTS,
-                );
-            });
-            self.process_level_events()
-                .map_err(|e| CommandError::new(Text::literal(e.to_string())))?;
-        } else {
-            self.level_set(pos, state)
-                .map_err(|e| CommandError::new(Text::literal(e.to_string())))?;
-        }
+        self.process_level_events()
+            .map_err(|e| CommandError::new(Text::literal(e.to_string())))?;
         // LevelChunk.setBlockState creates it when the block, not the state, is still
         // there after onPlace: a powered hopper turns itself `enabled=false`.
         let landed = self.world.block(pos[0], pos[1], pos[2]);

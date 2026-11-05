@@ -17,6 +17,13 @@ use crate::{
 use horizon_core::{geometry::Direction, position::BlockPos, random::RandomSource};
 use std::cmp::Ordering;
 
+#[derive(Clone, Copy)]
+enum RetractAction {
+    ClearHead,
+    Pull,
+    FinishMoving(BlockPos),
+}
+
 /// `PistonMovingBlockEntity` state, owned by [`Ticks::moving_pistons`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MovingPiston {
@@ -182,6 +189,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             .position(|(p, _)| *p == pos)?;
         Some(self.ticks.moving_pistons.remove(index).1)
     }
+    // A moving entity owns the carried block until replacement commits.
+    // Check both the shell and carried state before removing or advancing it.
+    fn moving_piston_removal_allowed(&self, pos: BlockPos, piston: MovingPiston) -> bool {
+        self.level.allow_block_removal(pos, self.state(pos))
+            && self.level.allow_block_removal(pos, piston.moved_state)
+    }
     /// `PistonMovingBlockEntity.finalTick`.
     fn moving_piston_final_tick(&mut self, pos: BlockPos) {
         let Some(piston) = self.moving_piston(pos) else {
@@ -190,6 +203,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         // finalTick: `progressO < 1.0 || level.isClientSide` — a client
         // finishes its copy even at full progress.
         if piston.progress_o >= 1.0 && !self.level.is_client_side() {
+            return;
+        }
+        if !self.moving_piston_removal_allowed(pos, piston) {
             return;
         }
         self.remove_moving_piston(pos);
@@ -213,6 +229,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let Some(mut piston) = self.moving_piston(pos) else {
             return;
         };
+        if !self.moving_piston_removal_allowed(pos, piston) {
+            return;
+        }
         let b = self.b;
         piston.last_ticked = self.level.game_time();
         piston.progress_o = piston.progress;
@@ -696,6 +715,38 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         Some(true)
     }
+    fn piston_retract_action(
+        &self,
+        pos: BlockPos,
+        direction: Direction,
+        event: i32,
+        sticky: bool,
+    ) -> RetractAction {
+        if !sticky {
+            return RetractAction::ClearHead;
+        }
+        let two = rel_n(pos, direction, 2);
+        let state = self.state(two);
+        let b = self.b;
+        if b.is_block(state, b.named.moving_piston) {
+            if let Some(entity) = self.moving_piston(two) {
+                if entity.direction == direction && entity.extending {
+                    return RetractAction::FinishMoving(two);
+                }
+            }
+        }
+        let is_piston =
+            b.is_block(state, b.named.piston) || b.is_block(state, b.named.sticky_piston);
+        if event == 1
+            && !b.is_air(state)
+            && self.is_pushable(state, two, direction.opposite(), false, direction)
+            && (b.facts(state).push == PushReaction::PushPull || is_piston)
+        {
+            RetractAction::Pull
+        } else {
+            RetractAction::ClearHead
+        }
+    }
     /// `PistonBaseBlock.triggerEvent`.
     fn piston_trigger_event(
         &mut self,
@@ -707,25 +758,32 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let p = b.props;
         let direction = b.facing(state);
-        // Check the full write footprint before finalTick, base/head writes,
-        // drops or moving-piston entities. A denied payload must not leave a
-        // half-retracted piston or duplicate a destroyed block's drops.
-        if matches!(a, 0 | 1 | 2) {
+        let extended_state = b.table.set_bool(state, p.extended, true);
+        let sticky = self.is_sticky_piston(state);
+        let retract = self.piston_retract_action(pos, direction, a, sticky);
+        // Preflight only writes this event will attempt. Normal retractions
+        // and event-2 no-pull retractions must not consult untouched payloads.
+        if matches!(a, 0..=2) {
             let mut affected = vec![pos, rel(pos, direction)];
-            if a != 0 {
-                affected.push(rel_n(pos, direction, 2));
+            if a == 0 || matches!(retract, RetractAction::Pull) {
+                if let Some((push, destroy, movement)) = self.piston_resolve(pos, direction, a == 0)
+                {
+                    affected.extend(push.iter().flat_map(|at| [*at, rel(*at, movement)]));
+                    affected.extend(destroy);
+                }
             }
-            if let Some((push, destroy, movement)) = self.piston_resolve(pos, direction, a == 0) {
-                affected.extend(push.iter().flat_map(|at| [*at, rel(*at, movement)]));
-                affected.extend(destroy);
-            }
-            // finalTick can expose a moving block before retraction. Check
-            // that projected state too, not only the moving-piston shell.
             if a != 0 {
-                for at in [rel(pos, direction), rel_n(pos, direction, 2)] {
+                let mut finishing = vec![rel(pos, direction)];
+                if let RetractAction::FinishMoving(two) = retract {
+                    finishing.push(two);
+                }
+                for at in finishing {
                     if let Some(moving) = self.moving_piston(at) {
-                        if !self.level.allow_block_removal(at, moving.moved_state) {
-                            return false;
+                        if moving.progress_o < 1.0 || self.level.is_client_side() {
+                            if !self.moving_piston_removal_allowed(at, moving) {
+                                return false;
+                            }
+                            affected.push(at);
                         }
                     }
                 }
@@ -734,8 +792,6 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 return false;
             }
         }
-        let extended_state = b.table.set_bool(state, p.extended, true);
-        let sticky = self.is_sticky_piston(state);
         // A pull the level refused isn't sent: clients, who aren't asked,
         // would replay it, so they get the blocks' changes instead.
         let mut refused = false;
@@ -789,41 +845,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             );
             self.update_neighbors_at(pos, b.named.moving_piston);
             self.update_neighbour_shapes(moving, pos, 2, super::flags::UPDATE_LIMIT);
-            if sticky {
-                let two = rel_n(pos, direction, 2);
-                let moving_state = self.state(two);
-                let mut piston_piece = false;
-                if b.is_block(moving_state, b.named.moving_piston) {
-                    if let Some(entity) = self.moving_piston(two) {
-                        if entity.direction == direction && entity.extending {
-                            self.moving_piston_final_tick(two);
-                            piston_piece = true;
-                        }
-                    }
+            match retract {
+                RetractAction::FinishMoving(two) => self.moving_piston_final_tick(two),
+                RetractAction::Pull => {
+                    refused = self
+                        .piston_move_blocks(pos, direction, false, sticky)
+                        .is_none();
                 }
-                if !piston_piece {
-                    let is_piston = b.is_block(moving_state, b.named.piston)
-                        || b.is_block(moving_state, b.named.sticky_piston);
-                    if a != 1
-                        || b.is_air(moving_state)
-                        || !self.is_pushable(
-                            moving_state,
-                            two,
-                            direction.opposite(),
-                            false,
-                            direction,
-                        )
-                        || (b.facts(moving_state).push != PushReaction::PushPull && !is_piston)
-                    {
-                        self.remove_block(rel(pos, direction), false);
-                    } else {
-                        refused = self
-                            .piston_move_blocks(pos, direction, false, sticky)
-                            .is_none();
-                    }
+                RetractAction::ClearHead => {
+                    self.remove_block(rel(pos, direction), false);
                 }
-            } else {
-                self.remove_block(rel(pos, direction), false);
             }
             let pitch = self.random().next_float() * 0.15 + 0.6;
             self.emit(LevelEvent::Sound {

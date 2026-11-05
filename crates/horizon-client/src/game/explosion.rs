@@ -990,6 +990,7 @@ impl Game<'_> {
             self.pending.record_saved(pos, &tag);
         }
         if !is_tnt {
+            let snapshot = self.block_removal_snapshot(pos);
             let dynamic = self.pending.dynamic(pos);
             // LootContextParams.EXPLOSION_RADIUS under DESTROY_WITH_DECAY: the
             // tables' survives_explosion and explosion_decay draw from their
@@ -1012,6 +1013,18 @@ impl Game<'_> {
                 )
             });
             self.native_block_drops(pos, state, None, None, Some(radius), &mut drops);
+            if self.block_removal_snapshot(pos) != snapshot
+                || !self.with_level(|_, level, _| {
+                    horizon_world::level::LevelAccess::allow_block_removal(
+                        level,
+                        horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
+                        state,
+                    )
+                })
+            {
+                self.pending.clear(pos);
+                return Ok(());
+            }
             for mut stack in drops {
                 if &*stack.item == "minecraft:air" || stack.count == 0 {
                     continue;

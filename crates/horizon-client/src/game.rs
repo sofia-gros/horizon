@@ -1109,6 +1109,15 @@ impl GameLevel<'_> {
             .collect()
     }
 }
+#[derive(PartialEq)]
+struct BlockRemovalSnapshot {
+    state: BlockStateId,
+    live: Option<horizon_world::nbt::Tag>,
+    saved: Option<horizon_world::nbt::Tag>,
+    sources: Vec<horizon_world::nbt::Tag>,
+    name: Option<String>,
+}
+
 impl LevelAccess for GameLevel<'_> {
     // A shared pre-mutation boundary for mods to override. Unlike the removal
     // notification, this runs before loot, storage and piston-side effects.
@@ -3875,6 +3884,37 @@ impl Game<'_> {
             None => spill::saved_entity(&self.world, pos),
         }
     }
+    /// Stable block/inventory evidence around native mutation callbacks. Keep
+    /// opaque source tags as well as the live inventory's current encoding.
+    fn block_removal_snapshot(&self, pos: [i32; 3]) -> BlockRemovalSnapshot {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let name = &self.res.facts().get(state).name;
+        let sources = self
+            .world
+            .chunks
+            .get(&(pos[0] >> 4, pos[2] >> 4))
+            .and_then(|chunk| chunk.saved.as_deref())
+            .map(|saved| {
+                saved
+                    .block_entity_sources
+                    .iter()
+                    .filter(|(at, _)| *at == (pos[0], pos[1], pos[2]))
+                    .map(|(_, tag)| tag.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        BlockRemovalSnapshot {
+            state,
+            live: self.loot_block_entity(pos, name),
+            saved: spill::saved_entity(&self.world, pos),
+            sources,
+            name: self
+                .world
+                .block_names
+                .get(&(pos[0], pos[1], pos[2]))
+                .cloned(),
+        }
+    }
     /// Where a loot roll at `origin` happens, for a mod's own loot kinds:
     /// the block entity it may copy from, and this level as
     /// `LootContext.getLevel` gives it (`Level.isRaining`: rain above 0.2;
@@ -5826,9 +5866,17 @@ impl Game<'_> {
         }
         // Native mods, once the game allowed the break: a canceled one keeps
         // the block, and a guest's acknowledgement puts it back in its world.
+        let snapshot = self.block_removal_snapshot(pos);
         let mut canceled = false;
         self.native_destroy_block(pos, state, &mut canceled);
         if canceled {
+            return Ok(());
+        }
+        if self.block_removal_snapshot(pos) != snapshot
+            || !self.with_level(|_, level, _| {
+                level.allow_block_removal(BlockPos::new(pos[0], pos[1], pos[2]), state)
+            })
+        {
             return Ok(());
         }
         self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
