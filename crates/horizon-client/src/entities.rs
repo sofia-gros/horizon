@@ -193,6 +193,11 @@ impl ItemEntity {
         let fire_immune = items.resists_fire(&self.stack, "minecraft:in_fire");
         if fluid == Fluid::Water || fire_immune {
             self.fire_ticks = 0;
+        } else if let Some(resources) = registered {
+            registered_fluids::extinguish(self, resources, |p| {
+                (world.loaded(p.x, p.z) && (world.bottom_y()..world.top_y()).contains(&p.y))
+                    .then(|| world.block(p.x, p.y, p.z))
+            });
         }
         if self.fire_ticks > 0 {
             if self.fire_ticks % 20 == 0
