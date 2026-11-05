@@ -301,6 +301,7 @@ pub struct PlayerMotion {
     pub(crate) block_landing: Option<(BlockStateId, BlockPos, f64)>,
     /// A mod landing rebound applied after collision restitution.
     pub(crate) pending_effect_bounce: Option<Vec3>,
+    pub(crate) effect_bounce_momentum: Option<horizon_world::bounce_momentum::Momentum>,
     pub stuck_multiplier: Vec3,
     /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
     /// block has pushed this entity this tick (0.51 at most on any axis).
@@ -453,6 +454,11 @@ fn attribute_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("movement attribute: {error:?}"))
 }
 impl PlayerMotion {
+    /// Clear transient mod-bounce continuation when a server spectator skips
+    /// ordinary movement ticks. Does not change vanilla velocity or effects.
+    pub fn clear_effect_bounce_momentum(&mut self) {
+        self.effect_bounce_momentum = None;
+    }
     /// `ServerGamePacketListenerImpl.handleMovePlayer`: the movement the client
     /// sent is the server copy's own delta movement. A glide's wall hit reads it
     /// as the speed the glide had (`LivingEntity.handleFallFlyingCollisions`'s
@@ -558,6 +564,7 @@ impl PlayerMotion {
             fall_distance: 0.0,
             block_landing: None,
             pending_effect_bounce: None,
+            effect_bounce_momentum: None,
             stuck_multiplier: Vec3::ZERO,
             piston: Default::default(),
             yaw: 0.0,
@@ -1071,6 +1078,7 @@ impl MotionWorld<'_, '_, '_> {
         direction: [f32; 2],
         jumping: bool,
     ) -> Result<()> {
+        self.tick_effect_bounce_momentum()?;
         // Entity.baseTick
         self.player.was_in_powder_snow = self.player.in_powder_snow;
         self.player.in_powder_snow = false;
@@ -4182,6 +4190,7 @@ mod tests {
             let mut scene = World::test_scene(&assets, &render, 2).unwrap();
             let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 20.0, 20.5)).unwrap();
             player.fall_distance = 8.0;
+            player.velocity.x = 0.4;
             player.velocity.y = -0.8;
             player.status.bounce_on_fall = enabled;
             player.shift_key_down = crouching;
@@ -4199,7 +4208,19 @@ mod tests {
                 assert_eq!(w.player.health.health(), 20.0);
                 assert!(!w.player.ground.on_ground);
                 assert!(w.player.health.sync_velocity);
+                assert!(w.player.effect_bounce_momentum.is_some());
+                w.player.health.advance_clock();
+                w.player.status.bounce_on_fall = false;
+                w.player.velocity.x = 0.1;
+                let rebound_y = w.player.velocity.y;
+                w.tick_effect_bounce_momentum().unwrap();
+                assert!((w.player.velocity.x - 0.4).abs() < 1e-7);
+                assert_eq!(w.player.velocity.y, rebound_y);
+                w.player.fall_flying = true;
+                w.tick_effect_bounce_momentum().unwrap();
+                assert!(w.player.effect_bounce_momentum.is_none());
             } else {
+                assert!(w.player.effect_bounce_momentum.is_none());
                 assert_eq!(w.player.velocity.y, 0.0);
                 assert!(w.player.ground.on_ground);
                 assert!(w.player.health.health() < 20.0);

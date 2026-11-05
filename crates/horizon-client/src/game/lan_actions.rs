@@ -4127,7 +4127,12 @@ impl Game<'_> {
             if !g.effects.list.is_empty() {
                 self.as_guest(host, conn, |game| game.tick_mob_effects());
             }
-            self.as_guest(host, conn, |game| game.handle_shoulder_entities());
+            self.as_guest(host, conn, |game| {
+                if let Some(player) = game.player.as_mut() {
+                    player.clear_effect_bounce_momentum();
+                }
+                game.handle_shoulder_entities();
+            });
             return;
         }
         let in_wall = !g.sleeping && self.in_wall(g.position, g.dimensions());
@@ -4157,6 +4162,7 @@ impl Game<'_> {
             w.player.health.advance_clock();
             let _ = w.fluid_base_tick();
             w.player.ground.on_ground = from_ground;
+            let _ = w.tick_effect_bounce_momentum();
             // Player.aiStep: a flying player that isn't riding starts every tick
             // with no fall distance, so flying down in creative and switching to
             // survival lands without the flight's distance.
