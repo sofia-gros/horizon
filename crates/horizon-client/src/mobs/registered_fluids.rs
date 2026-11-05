@@ -132,6 +132,13 @@ mod tests {
         registry: &'r BlockRegistry,
         effect: Option<&str>,
     ) -> RegisteredFluidResources<'r> {
+        resources_with_motion(registry, effect, [0.0, 0.0])
+    }
+    fn resources_with_motion<'r>(
+        registry: &'r BlockRegistry,
+        effect: Option<&str>,
+        scales: [f64; 2],
+    ) -> RegisteredFluidResources<'r> {
         let effect = effect
             .map(|id| json!({"id":id,"duration_ticks":100,"amplifier":0,"no_curatives":true}));
         let burn = effect.is_none().then(|| json!({"seconds":10,"damage":3.0}));
@@ -141,7 +148,7 @@ mod tests {
             "policy":{"drop_off":1,"slope_distance":4,"tick_delay":5,"source_conversion":false},
             "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
             "interaction":{"travel":{"acceleration":0.02,"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
-                "motion_scale":0.0,"can_swim":false,"can_drown":false,"extinguishes":name == "hot" && effect.is_some(),
+                "motion_scale":scales[usize::from(name == "other")],"can_swim":false,"can_drown":false,"extinguishes":name == "hot" && effect.is_some(),
                 "fall_distance_scale":1.0,"burn":burn,"effect":effect}
         })).collect();
         RegisteredFluidResources::from_reader(
@@ -169,6 +176,106 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+    fn current_contact(
+        resources: &RegisteredFluidResources<'_>,
+        state: u32,
+        vector: Vec3,
+    ) -> Contact {
+        let mut current = horizon_world::entity_fluid::CurrentAccumulator::default();
+        current.height = 0.8;
+        current.accumulate(vector);
+        Contact {
+            source: resources
+                .catalog
+                .source(
+                    resources
+                        .catalog
+                        .from_block(BlockStateId(state))
+                        .unwrap()
+                        .id(),
+                )
+                .unwrap(),
+            height: 0.8,
+            eyes_inside: false,
+            current,
+        }
+    }
+    #[test]
+    fn registered_currents_use_nonplayer_direction_and_each_familys_scale() {
+        let registry = registry();
+        let resources = resources_with_motion(&registry, None, [0.01, 0.02]);
+        let mut m = mob();
+        let mut east = current_contact(&resources, 1, Vec3::new(3.0, 0.0, 4.0));
+        east.current.accumulate(Vec3::new(3.0, 0.0, 4.0));
+        let north = current_contact(&resources, 16, Vec3::new(0.0, 0.0, -8.0));
+        m.push_registered_currents(&resources, &[east, north]);
+        assert!((m.velocity.x - 0.006).abs() < 1e-12);
+        assert!((m.velocity.z + 0.012).abs() < 1e-12);
+        assert_eq!(m.velocity.y, 0.0);
+        assert!(!m.fluids.in_water && !m.fluids.in_lava);
+        assert!(m.outbox.is_empty());
+    }
+    #[test]
+    fn registered_currents_keep_existing_species_push_immunity() {
+        use super::super::Species as S;
+        let registry = registry();
+        let resources = resources_with_motion(&registry, None, [0.01, 0.0]);
+        let contact = current_contact(&resources, 0, Vec3::new(1.0, 0.0, 0.0));
+        for species in [
+            S::Tadpole,
+            S::Cod,
+            S::Salmon,
+            S::TropicalFish,
+            S::Pufferfish,
+            S::Squid,
+            S::GlowSquid,
+            S::Dolphin,
+            S::Turtle,
+            S::Axolotl,
+            S::Frog,
+            S::Nautilus,
+            S::ZombieNautilus,
+        ] {
+            let mut m = mob();
+            Arc::make_mut(&mut m.kind).species = species;
+            m.push_registered_currents(&resources, &[contact]);
+            assert_eq!(m.velocity, Vec3::ZERO, "{species:?}");
+        }
+        let mut m = mob();
+        Arc::make_mut(&mut m.kind).flags.fire_immune = true;
+        m.push_registered_currents(&resources, &[contact]);
+        assert_eq!(m.velocity.x, 0.01, "fire immunity is not current immunity");
+    }
+    #[test]
+    fn zero_policy_eye_only_and_cancelled_currents_do_not_push() {
+        let registry = registry();
+        let resources = resources_with_motion(&registry, None, [0.01, 0.0]);
+        let mut eye = current_contact(&resources, 0, Vec3::new(1.0, 0.0, 0.0));
+        eye.height = 0.0;
+        eye.eyes_inside = true;
+        let zero_policy = current_contact(&resources, 16, Vec3::new(1.0, 0.0, 0.0));
+        let mut cancelled = current_contact(&resources, 0, Vec3::new(1.0, 0.0, 0.0));
+        cancelled.current.accumulate(Vec3::new(-1.0, 0.0, 0.0));
+        let mut m = mob();
+        m.push_registered_currents(&resources, &[eye, zero_policy, cancelled]);
+        assert_eq!(m.velocity, Vec3::ZERO);
+    }
+    #[test]
+    fn registered_currents_keep_minimum_drift_and_vertical_direction() {
+        let registry = registry();
+        let scale = 0.0023333333333333335;
+        let resources = resources_with_motion(&registry, None, [scale, 0.0]);
+        for direction in [-1.0, 1.0] {
+            let contact = current_contact(&resources, 8, Vec3::new(0.0, direction * 6.0, 0.0));
+            let mut m = mob();
+            m.push_registered_currents(&resources, &[contact]);
+            assert_eq!(m.velocity.y, direction * 0.0045000000000000005);
+            m.velocity = Vec3::new(0.01, 0.0, 0.0);
+            m.push_registered_currents(&resources, &[contact]);
+            assert_eq!(m.velocity.y, direction * scale);
+            assert_eq!(m.velocity.x, 0.01);
+        }
     }
     #[test]
     fn burn_requires_matching_positive_body_contact_and_obeys_damage_result() {

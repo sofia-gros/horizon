@@ -295,3 +295,11 @@ Copyright (c) 2022 SlimeKnights, MIT; full notice above. The host adapter uses
 its existing mob water/rain fire-clearing phase and sound handling, with
 registered family geometry. Forge's generic-fluid implementation was not read
 or copied; exact source event-phase equivalence is not claimed.
+
+The mob current adapter in `mobs/living.rs` consumes the explicit motion-scale
+policy declared by MIT Tinkers' Construct `TinkerFluids.cool()` and `hot()` at
+[`f4e77d43f39ba1047bf93ae816b7e1beaab514c2`](https://github.com/SlimeKnights/TinkersConstruct/blob/f4e77d43f39ba1047bf93ae816b7e1beaab514c2/src/main/java/slimeknights/tconstruct/fluids/TinkerFluids.java).
+Copyright (c) 2022 SlimeKnights; full MIT notice above. Changes: shared existing
+loaded-only player flow sampling and Horizon's native non-player current target
+and species push predicate. No Forge implementation was read or copied; exact
+source tick-phase and mixed-fluid order equivalence are not claimed.

@@ -53,3 +53,6 @@ Standard Poison/Slowness/Blindness contacts are covered by the later
 
 Registered cool-fluid mob extinguishing is covered by the later
 `registered-mob-fluid-extinguish.md` slice.
+
+Registered-fluid mob current forces are covered by the later
+`registered-mob-fluid-currents.md` slice; custom travel and drowning remain open.
