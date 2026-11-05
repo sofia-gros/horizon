@@ -1,8 +1,9 @@
 // Fluid contact is adapted from Tinkers' Construct, Copyright (c) 2022 SlimeKnights.
 // MIT License. The full notice is retained in THIRD_PARTY_NOTICES.md.
-// Changed: declarative per-family policy and Horizon player health/effect dispatch.
+// Changed: declarative policy and Horizon player health/effect/sound dispatch.
 //! Identity-preserving custom-liquid player travel and contact effects.
 use super::*;
+use horizon_core::random::RandomSource;
 use horizon_world::{
     fluid_flow::{FlowSample, FluidFlowWorld, flow_at_sample},
     registered_fluids::{RegisteredFluidState, interaction::InteractionPolicy},
@@ -18,6 +19,7 @@ enum Sample {
         up: bool,
     },
 }
+
 impl FlowSample for Sample {
     fn is_empty(self) -> bool {
         matches!(self, Self::Empty)
@@ -197,9 +199,111 @@ impl MotionWorld<'_, '_, '_> {
                 .push(MotionEvent::RegisteredFluidEffect(fluid.id()));
         }
         if let Some(burn) = burn {
-            self.player.ignite_for_ticks(i32::from(burn.seconds) * 20)?;
-            self.environment_hurt("minecraft:lava", burn.damage)?;
+            self.registered_fluid_burn(burn)?;
         }
         Ok(())
+    }
+    fn registered_fluid_burn(
+        &mut self,
+        burn: horizon_world::registered_fluids::interaction::BurnContact,
+    ) -> Result<()> {
+        self.player.ignite_for_ticks(i32::from(burn.seconds) * 20)?;
+        if self.environment_hurt_result("minecraft:lava", burn.damage)? {
+            // Source draws from level.random only if hurt returned true. Keep
+            // f32 operations and do not substitute the generic hurt sound.
+            let pitch = 2.0f32 + self.scene.random.next_float() * 0.4f32;
+            self.player
+                .events
+                .push(MotionEvent::RegisteredFluidBurnSound {
+                    position: self.player.position,
+                    pitch,
+                });
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_world::registered_fluids::interaction::BurnContact;
+
+    #[test]
+    fn accepted_fluid_burns_alone_emit_sound_and_draw_pitch() {
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION)
+            });
+        if !root.join("movement-properties.nbt").exists() {
+            eprintln!("skipped registered-fluid burn audio: prepared resources unavailable");
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let burn = BurnContact {
+            seconds: 10,
+            damage: 5.0,
+        };
+        for mode in 0..5 {
+            let mut scene = World::test_scene(&assets, &render, 7).unwrap();
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+            player.invulnerable = mode == 1;
+            player.spectator = mode == 2;
+            player.client_side = mode == 3;
+            player.status.fire_resistance = mode == 4;
+            let mut expected_random = scene.random.clone();
+            let mut w = MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            };
+            w.registered_fluid_burn(burn).unwrap();
+            let sounds = |events: &[MotionEvent]| {
+                events
+                    .iter()
+                    .filter_map(|event| match event {
+                        MotionEvent::RegisteredFluidBurnSound { position, pitch } => {
+                            Some((*position, *pitch))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            if mode == 0 {
+                assert_eq!(w.player.health.health(), 15.0);
+                let pitch = 2.0f32 + expected_random.next_float() * 0.4f32;
+                assert_eq!(sounds(&w.player.events), vec![(w.player.position, pitch)]);
+                w.player.events.clear();
+                // A second equal hit inside the damage cooldown is rejected.
+                w.registered_fluid_burn(burn).unwrap();
+                assert!(sounds(&w.player.events).is_empty());
+                // A stronger cooldown hit is accepted without a new hurt
+                // animation, and still gets the source's extra burn sound.
+                w.registered_fluid_burn(BurnContact {
+                    damage: 6.0,
+                    ..burn
+                })
+                .unwrap();
+                assert_eq!(w.player.health.health(), 14.0);
+                let pitch = 2.0f32 + expected_random.next_float() * 0.4f32;
+                assert_eq!(sounds(&w.player.events), vec![(w.player.position, pitch)]);
+            } else {
+                assert!(sounds(&w.player.events).is_empty());
+                assert_eq!(w.player.health.health(), 20.0);
+            }
+            assert_eq!(
+                w.scene.random.next_float(),
+                expected_random.next_float(),
+                "rejected damage must not consume the pitch random draw"
+            );
+        }
     }
 }

@@ -1056,6 +1056,9 @@ impl Game<'_> {
                     source,
                 }) => self.guest_damage_broadcast(host, conn, source),
                 MotionEvent::HurtSound(sound) => self.guest_hurt_sound(host, conn, sound),
+                MotionEvent::RegisteredFluidBurnSound { position, pitch } => {
+                    self.guest_registered_fluid_burn_sound(host, conn, position, pitch);
+                }
                 _ => {}
             }
         }
@@ -1120,6 +1123,24 @@ impl Game<'_> {
         let source = horizon_client::settings::sound_source(sound) as i32;
         self.audio.play_unshared(sound, Some(at), 1.0, 1.0);
         host.hub.sound(sound, at, 1.0, 1.0, source, Some(conn));
+    }
+
+    fn guest_registered_fluid_burn_sound(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        position: Vec3,
+        pitch: f32,
+    ) {
+        const SOUND: &str = "minecraft:entity.generic.burn";
+        const PLAYER_SOURCE: usize = 7;
+        let at = [position.x, position.y, position.z];
+        self.audio
+            .play_on_unshared(PLAYER_SOURCE, SOUND, Some(at), 0.4, pitch);
+        // Player.playSound excludes that player. Do not send it back as if it
+        // were a block sound; the ordinary hurt packet remains independent.
+        host.hub
+            .sound(SOUND, at, 0.4, pitch, PLAYER_SOURCE as i32, Some(conn));
     }
 
     /// `ServerLevel.players()` in turn: the host's own player, then each
@@ -4326,6 +4347,10 @@ impl Game<'_> {
                 // reaches every player around but the hurt one, whose own
                 // client plays it from handleDamageEvent (#4149).
                 MotionEvent::HurtSound(sound) => self.guest_hurt_sound(host, conn, sound),
+                // BurningLiquidBlock's additional accepted-hit sound.
+                MotionEvent::RegisteredFluidBurnSound { position, pitch } => {
+                    self.guest_registered_fluid_burn_sound(host, conn, position, pitch);
+                }
                 // LivingEntity.checkFallDamage: the crumbs reach every player.
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
                     state,

@@ -234,6 +234,12 @@ pub enum MotionEvent {
     /// Carries the catalog-scoped family, not an owned effect name. Only the
     /// authoritative player dispatcher resolves and applies it.
     RegisteredFluidEffect(horizon_world::registered_fluids::RegisteredFluidId),
+    /// BurningLiquidBlock's extra generic burn sound, only for accepted damage.
+    /// Carries the source float pitch drawn once at the contact position.
+    RegisteredFluidBurnSound {
+        position: Vec3,
+        pitch: f32,
+    },
     /// `ServerPlayer.checkFallDamage` after a mace smash: block particles
     /// from the landing block, more the further the fall.
     SmashLanding {

@@ -176,11 +176,14 @@ Source momentum preservation and audio are not included in this slice.
 
 
 `crates/horizon-client/src/motion/registered_fluids.rs` adapts the family-height
-check, ignition and lava-type damage of `BurningLiquidBlock.entityInside`, and
+check, ignition, lava-type damage and accepted-hit burn sound/pitch of
+`BurningLiquidBlock.entityInside`, and
 the matching-family status-effect contact of `MobEffectLiquidBlock.entityInside`, from
 [Tinkers' Construct f4e77d43](https://github.com/SlimeKnights/TinkersConstruct/tree/f4e77d43f39ba1047bf93ae816b7e1beaab514c2).
 Changes: explicit resource policies, catalog-scoped identity, and Horizon player
-health/effect dispatch. `crates/horizon-client/src/game/registered_fluids.rs`
+health/effect dispatch. The sound uses the source f32 pitch draw and player
+sound category, through an explicit motion event and authoritative LAN dispatch.
+`crates/horizon-client/src/game/registered_fluids.rs`
 also follows the source's empty curative-item list by setting an explicit
 per-instance opt-out from generic consumable cures. Host merge/persistence
 mechanics are original; mixed-source equivalence remains unverified.
