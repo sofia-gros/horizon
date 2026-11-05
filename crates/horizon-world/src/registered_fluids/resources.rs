@@ -42,6 +42,34 @@ impl FluidFog {
         Ok(())
     }
 }
+/// Standalone camera texture, without `textures/` or `.png`; tint comes from
+/// the fluid visual. Only opaque RGB tints are supported by that visual schema.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FluidCamera {
+    pub texture: String,
+    pub opacity: f32,
+}
+impl FluidCamera {
+    fn validate(&self) -> io::Result<()> {
+        let safe_path = self
+            .texture
+            .split_once(':')
+            .is_some_and(|(namespace, path)| {
+                !matches!(namespace, "." | "..")
+                    && path.split('/').all(|part| !matches!(part, "" | "." | ".."))
+            });
+        if !valid_name(&self.texture)
+            || !safe_path
+            || !self.opacity.is_finite()
+            || self.opacity <= 0.0
+            || self.opacity > 1.0
+        {
+            return Err(invalid("invalid registered-fluid camera overlay"));
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FluidVisual {
@@ -51,6 +79,8 @@ pub struct FluidVisual {
     pub emission: u8,
     #[serde(default)]
     pub fog: Option<FluidFog>,
+    #[serde(default)]
+    pub camera: Option<FluidCamera>,
 }
 impl FluidVisual {
     /// Mantle ClientInvertedFluidType uses an inverted world flowing sprite;
@@ -79,6 +109,29 @@ struct Definition {
 struct Document {
     format: u32,
     fluids: Vec<Definition>,
+}
+
+/// The GUI atlas needs standalone camera textures without loading a second
+/// block registry. Only explicitly declared, validated paths are returned.
+pub fn camera_textures(root: &Path) -> io::Result<std::collections::BTreeSet<String>> {
+    let file = match File::open(root.join(RESOURCE_PATH)) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(error) => return Err(error),
+    };
+    let document: Document = serde_json::from_reader(io::BufReader::new(file))
+        .map_err(|error| invalid(error.to_string()))?;
+    if document.format != 1 {
+        return Err(invalid("unsupported registered-fluid resource format"));
+    }
+    let mut textures = std::collections::BTreeSet::new();
+    for definition in document.fluids {
+        if let Some(camera) = definition.visual.camera {
+            camera.validate()?;
+            textures.insert(camera.texture);
+        }
+    }
+    Ok(textures)
 }
 
 /// Merge one mod-owned declaration into the aggregate resource document.
@@ -182,6 +235,9 @@ impl<'r> RegisteredFluidResources<'r> {
             if let Some(fog) = definition.visual.fog {
                 fog.validate()?;
             }
+            if let Some(camera) = &definition.visual.camera {
+                camera.validate()?;
+            }
             let id = catalog
                 .id(&definition.source)
                 .ok_or_else(|| invalid("missing registered source"))?;
@@ -279,9 +335,22 @@ impl<'r> RegisteredFluidResources<'r> {
     pub fn fog_at_with_colors(
         &self,
         camera: [f64; 3],
-        mut block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+        block: impl FnMut(BlockPos) -> Option<BlockStateId>,
         color: impl FnOnce(&str) -> Option<u32>,
     ) -> Option<FluidFog> {
+        let visual = self.visual_at(camera, block)?;
+        let mut fog = visual.fog?;
+        if fog.calculate_color && fog.color.is_none() {
+            fog.color = color(&visual.still).filter(|&rgb| rgb <= 0x00ff_ffff);
+        }
+        Some(fog)
+    }
+    /// Shared eye/camera immersion without requiring fog to be declared.
+    pub fn visual_at(
+        &self,
+        camera: [f64; 3],
+        mut block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+    ) -> Option<&FluidVisual> {
         if camera
             .iter()
             .any(|&v| !v.is_finite() || v < f64::from(i32::MIN) || v >= f64::from(i32::MAX))
@@ -294,7 +363,6 @@ impl<'r> RegisteredFluidResources<'r> {
             camera[2].floor() as i32,
         );
         let (visual, fluid) = self.visual(block(pos)?)?;
-        let mut fog = visual.fog?;
         let above = block(BlockPos::new(pos.x, pos.y + 1, pos.z))
             .and_then(|state| self.catalog.from_block(state));
         let height = if above.is_some_and(|above| {
@@ -309,10 +377,15 @@ impl<'r> RegisteredFluidResources<'r> {
         if camera[1] >= f64::from(pos.y) + height {
             return None;
         }
-        if fog.calculate_color && fog.color.is_none() {
-            fog.color = color(&visual.still).filter(|&rgb| rgb <= 0x00ff_ffff);
-        }
-        Some(fog)
+        Some(visual)
+    }
+    pub fn camera_at(
+        &self,
+        eyes: [f64; 3],
+        block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+    ) -> Option<(&FluidCamera, u32)> {
+        let visual = self.visual_at(eyes, block)?;
+        Some((visual.camera.as_ref()?, visual.tint))
     }
     pub fn visual(&self, state: BlockStateId) -> Option<(&FluidVisual, RegisteredFluidState)> {
         let fluid = self.catalog.from_block(state)?;
@@ -420,6 +493,35 @@ mod tests {
                 .color,
             Some(0x478a33)
         );
+    }
+    #[test]
+    fn camera_overlays_validate_paths_and_do_not_require_fog() {
+        let registry = registry();
+        let mut value = document();
+        value["fluids"][0]["visual"]["camera"] =
+            json!({"texture":"test:fluid/camera","opacity":0.1});
+        let resources =
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).unwrap();
+        let block = |p: BlockPos| (p.y == 0).then_some(BlockStateId(0));
+        let (camera, tint) = resources.camera_at([0.5, 0.5, 0.5], block).unwrap();
+        assert_eq!(
+            (&*camera.texture, camera.opacity, tint),
+            ("test:fluid/camera", 0.1, 0xffffff)
+        );
+        assert!(resources.camera_at([0.5, 0.99, 0.5], block).is_none());
+        for camera in [
+            json!({"texture":"test:fluid/camera","opacity":0}),
+            json!({"texture":"test:fluid/camera","opacity":1.1}),
+            json!({"texture":"test:../camera","opacity":0.1}),
+            json!({"texture":"..:camera","opacity":0.1}),
+            json!({"texture":"test:/camera","opacity":0.1}),
+        ] {
+            value["fluids"][0]["visual"]["camera"] = camera;
+            assert!(
+                RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes())
+                    .is_err()
+            );
+        }
     }
     #[test]
     fn interaction_policy_binds_flowing_identity_and_rejects_bad_numbers() {
