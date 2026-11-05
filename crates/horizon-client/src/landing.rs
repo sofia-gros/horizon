@@ -316,6 +316,32 @@ impl MotionWorld<'_, '_, '_> {
                 &mut cancel,
             );
         }
+        // A mod effect may request bounce independently of the landing block.
+        // Prepare the velocity now, then apply it after native restitution has
+        // finished zeroing/reflecting the collision velocity.
+        if !cancel
+            && contact.is_some()
+            && self.player.status.bounce_on_fall
+            && !self.player.server_copy
+        {
+            use horizon_world::fall_bounce::{Response, response};
+            match response(
+                self.player.status.bounce_on_fall,
+                self.player.fall_distance,
+                self.player.velocity,
+                self.player.attribute("minecraft:step_height")?,
+                self.player.attribute("minecraft:gravity")?,
+                self.player.shift_key_down,
+                self.player.client_side,
+            ) {
+                Response::Unchanged => {}
+                Response::Suppressed => multiplier = 0.5,
+                Response::Bounce(velocity) => {
+                    self.player.pending_effect_bounce = Some(velocity);
+                    cancel = true;
+                }
+            }
+        }
         // A canceled fall still lands on the block (`Block.fallOn`).
         if cancel {
             if let Some((state, position, original_distance)) = contact {
@@ -332,6 +358,18 @@ impl MotionWorld<'_, '_, '_> {
             distance,
             multiplier,
         )
+    }
+    /// Apply a requested mod rebound once, after native collision handling.
+    /// The guest movement path has no restitution phase and calls this directly.
+    pub fn finish_effect_bounce(&mut self) {
+        if let Some(velocity) = self.player.pending_effect_bounce.take() {
+            self.player.velocity = velocity;
+            self.player.fall_distance = 0.0;
+            if !self.player.client_side {
+                self.player.ground.on_ground = false;
+                self.player.health.sync_velocity = true;
+            }
+        }
     }
     /// `Entity.propagateFallToPassengers`: the call on this player, whose
     /// vehicle fell `distance` blocks at `multiplier`, so the player takes
