@@ -286,3 +286,12 @@ per-family policies, deferred authoritative mob application, current host
 entity-tag immunity checks, and host active-instance curative metadata. Only
 Poison, Slowness and Blindness are enabled here. No Forge implementation was
 read or copied. Hidden effect-chain and exact event-order parity are unverified.
+
+
+The mob extinguishing adapter consumes the explicit `canExtinguish(true)`
+policy declared by MIT Tinkers' Construct `TinkerFluids.cool()` at
+[`f4e77d43f39ba1047bf93ae816b7e1beaab514c2`](https://github.com/SlimeKnights/TinkersConstruct/blob/f4e77d43f39ba1047bf93ae816b7e1beaab514c2/src/main/java/slimeknights/tconstruct/fluids/TinkerFluids.java).
+Copyright (c) 2022 SlimeKnights, MIT; full notice above. The host adapter uses
+its existing mob water/rain fire-clearing phase and sound handling, with
+registered family geometry. Forge's generic-fluid implementation was not read
+or copied; exact source event-phase equivalence is not claimed.

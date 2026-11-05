@@ -43,10 +43,13 @@ CI inspection, version checks or merge.
 
 Exact source event-order equivalence remains unverified: this implementation
 uses a current-box snapshot during the host's existing swept block-contact pass.
-Passenger shielding, custom mob currents/travel, drowning/extinguishing, custom status
+Passenger shielding, custom mob currents/travel, drowning, custom status
 effects, separately simulated dragon parts, dropped items/projectiles and mixing
 remain separate work. Live damage/death, network audio and save/reload behavior
 still require the final integration pass. This does not complete #379.
 
 Standard Poison/Slowness/Blindness contacts are covered by the later
 `registered-mob-fluid-effects.md` slice.
+
+Registered cool-fluid mob extinguishing is covered by the later
+`registered-mob-fluid-extinguish.md` slice.

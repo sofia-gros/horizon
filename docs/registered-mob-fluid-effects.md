@@ -48,6 +48,9 @@ Brief static review, rustfmt and whitespace inspection only. Synthetic contact,
 active-policy/curing and NBT round-trip regressions are written but **not run**.
 No tests, builds, CI inspection, version checks or merge. Live effect behavior,
 network/persistence integration and exact source event ordering remain
-unverified. Mob movement, drowning/extinguishing, passenger shielding, custom
+unverified. Mob movement, drowning, passenger shielding, custom
 mob effects, dropped items/projectiles and mixing remain outside this slice.
 The #379 high-priority world-fluid item is still incomplete.
+
+Registered cool-fluid mob extinguishing is covered by the later
+`registered-mob-fluid-extinguish.md` slice.

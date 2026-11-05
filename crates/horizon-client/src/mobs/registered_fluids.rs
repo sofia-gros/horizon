@@ -37,6 +37,24 @@ fn sample(
         .unwrap_or_default()
 }
 
+/// Policy-only opt-in to the mob's existing water/rain fire-clearing phase.
+/// A burning mob needs body contact, not eye immersion or native water tags.
+pub(super) fn extinguishes(m: &Mob, w: &MobWorld<'_>) -> bool {
+    if m.fire_ticks <= 0 {
+        return false;
+    }
+    w.registered_fluids
+        .is_some_and(|resources| can_extinguish(resources, &contacts(m, w)))
+}
+fn can_extinguish(resources: &RegisteredFluidResources<'_>, contacts: &[Contact]) -> bool {
+    contacts.iter().any(|contact| {
+        contact.height > 0.0
+            && resources
+                .interaction(contact.source)
+                .is_some_and(|policy| policy.extinguishes)
+    })
+}
+
 pub(super) fn inside(
     m: &mut Mob,
     resources: Option<&RegisteredFluidResources<'_>>,
@@ -123,7 +141,7 @@ mod tests {
             "policy":{"drop_off":1,"slope_distance":4,"tick_delay":5,"source_conversion":false},
             "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
             "interaction":{"travel":{"acceleration":0.02,"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
-                "motion_scale":0.0,"can_swim":false,"can_drown":false,"extinguishes":false,
+                "motion_scale":0.0,"can_swim":false,"can_drown":false,"extinguishes":name == "hot" && effect.is_some(),
                 "fall_distance_scale":1.0,"burn":burn,"effect":effect}
         })).collect();
         RegisteredFluidResources::from_reader(
@@ -245,6 +263,53 @@ mod tests {
             assert_eq!(m.health, 10.0);
             assert_eq!(m.fire_ticks, 0);
         }
+    }
+    #[test]
+    fn only_positive_body_contact_with_an_extinguishing_family_clears_fire() {
+        let registry = registry();
+        let resources = resources_with_effect(&registry, Some("minecraft:poison"));
+        let mut m = mob();
+        let mut events = Vec::new();
+        m.fire_ticks = 200;
+        let no = sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(16)));
+        assert!(
+            !can_extinguish(&resources, &no),
+            "different nonextinguishing family"
+        );
+        assert!(!can_extinguish(&resources, &[]));
+        let yes = sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(1)));
+        assert!(!yes[0].eyes_inside, "only the body needs to be immersed");
+        assert!(can_extinguish(&resources, &yes));
+        let mut expected = m.random.clone();
+        let pitch = 1.6 + (expected.next_float() - expected.next_float()) * 0.4;
+        super::super::ai::extinguish_environment_fire(
+            &mut m,
+            can_extinguish(&resources, &yes),
+            &mut events,
+        );
+        assert_eq!(m.fire_ticks, 0);
+        assert!(
+            matches!(events.as_slice(), [MobEvent::Sound("entity.generic.extinguish_fire", _, volume, got)]
+            if *volume == 0.7 && *got == pitch)
+        );
+        assert_eq!(m.random.next_float(), expected.next_float());
+        // Remaining in the liquid causes neither another sound nor another draw.
+        let mut expected = m.random.clone();
+        super::super::ai::extinguish_environment_fire(&mut m, true, &mut events);
+        assert_eq!(events.len(), 1);
+        assert_eq!(m.random.next_float(), expected.next_float());
+        // Being above a shallow source of that same family is not body contact.
+        m.position.y = 0.2;
+        let shallow = sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(7)));
+        assert!(!can_extinguish(&resources, &shallow));
+        assert!(!can_extinguish(
+            &resources,
+            &sample(&m, &resources, |_| None)
+        ));
+        // Negative immunity countdowns are never promoted to zero by a wet tick.
+        m.fire_ticks = -3;
+        super::super::ai::extinguish_environment_fire(&mut m, true, &mut events);
+        assert_eq!(m.fire_ticks, -3);
     }
     #[test]
     fn active_contact_curative_policy_survives_weaker_updates_and_generic_curing() {
