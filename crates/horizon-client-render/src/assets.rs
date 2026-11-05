@@ -74,6 +74,11 @@ impl TerrainBlockStates for Properties {
 pub struct Assets {
     /// Leaked once per process: shared by world generation threads.
     pub registry: &'static BlockRegistry,
+    pub registered_fluids: Option<
+        std::sync::Arc<
+            horizon_world::registered_fluids::resources::RegisteredFluidResources<'static>,
+        >,
+    >,
     pub properties: Properties,
     pub material_states: [BlockStateId; 6],
     /// Block names in `#minecraft:blocks_fluid_flow` (fluid flow vectors).
@@ -189,8 +194,14 @@ impl Assets {
         // past vanilla's 16-bit global palette.
         crate::chunk::set_block_states(registry.len());
         let registry: &'static BlockRegistry = Box::leak(Box::new(registry));
+        let registered_fluids =
+            horizon_world::registered_fluids::resources::RegisteredFluidResources::load(
+                registry, root,
+            )?
+            .map(std::sync::Arc::new);
         Ok(Self {
             registry,
+            registered_fluids,
             properties,
             material_states,
             blocks_fluid_flow,

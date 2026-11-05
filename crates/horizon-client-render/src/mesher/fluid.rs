@@ -12,9 +12,61 @@ use horizon_core::{
 };
 use horizon_world::{
     fluid::{FluidKind, FluidState},
-    fluid_flow::{FluidFlowWorld, flow_at},
+    fluid_flow::{FlowSample, FluidFlowWorld, flow_at_sample},
 };
 use std::{convert::Infallible, sync::OnceLock};
+
+/// Custom families carry catalog-scoped IDs, never native water/lava aliases.
+#[derive(Clone, Copy)]
+pub(super) enum Sample {
+    Native(FluidState),
+    Registered {
+        source: horizon_world::registered_fluids::RegisteredFluidId,
+        amount: u8,
+        falling: bool,
+    },
+}
+impl From<FluidState> for Sample {
+    fn from(value: FluidState) -> Self {
+        Self::Native(value)
+    }
+}
+impl Sample {
+    pub(super) fn water(self) -> bool {
+        matches!(self, Self::Native(s) if matches!(s.kind(), FluidKind::Water | FluidKind::FlowingWater))
+    }
+}
+impl FlowSample for Sample {
+    fn is_empty(self) -> bool {
+        matches!(self, Self::Native(s) if s.kind() == FluidKind::Empty)
+    }
+    fn same_family(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Native(a), Self::Native(b)) => a.kind().same_family(b.kind()),
+            (Self::Registered { source: a, .. }, Self::Registered { source: b, .. }) => a == b,
+            _ => false,
+        }
+    }
+    fn own_height(self) -> f32 {
+        match self {
+            Self::Native(s) => s.own_height(),
+            Self::Registered { amount, .. } => f32::from(amount) / 9.0,
+        }
+    }
+    fn falling(self) -> bool {
+        match self {
+            Self::Native(s) => s.falling(),
+            Self::Registered { falling, .. } => falling,
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub(super) struct Visual {
+    pub still: u16,
+    pub flowing: u16,
+    pub tint: u32,
+    pub emission: u8,
+}
 
 /// `FluidRenderer.MAX_FLUID_HEIGHT`.
 const MAX_HEIGHT: f32 = 0.888_888_9;
@@ -164,10 +216,10 @@ impl FlowView<'_> {
         self.pad.blocks[pi(p.x, p.y, p.z)]
     }
 }
-impl FluidFlowWorld for FlowView<'_> {
+impl FluidFlowWorld<Sample> for FlowView<'_> {
     type Error = Infallible;
     type Block = u32;
-    fn fluid(&mut self, p: BlockPos) -> Result<FluidState, Infallible> {
+    fn fluid(&mut self, p: BlockPos) -> Result<Sample, Infallible> {
         Ok(self.info[self.id(p) as usize].fluid)
     }
     fn block(&mut self, p: BlockPos) -> Result<u32, Infallible> {
@@ -210,8 +262,7 @@ pub(super) fn tesselate(
     let info = &tables.info;
     let at = |p: [i32; 3]| &info[pad.blocks[pi(p[0], p[1], p[2])] as usize];
     let me = at([x, y, z]);
-    let kind = me.fluid.kind();
-    let same = |s: &Info| s.fluid.kind().same_family(kind);
+    let same = |s: &Info| s.fluid.same_family(me.fluid);
     let neighbor = |d: Direction| {
         let [dx, dy, dz] = d.normal();
         at([x + dx, y + dy, z + dz])
@@ -231,13 +282,17 @@ pub(super) fn tesselate(
     if !render_up && !render_down && !sides.iter().any(|&s| s) {
         return;
     }
-    let water = matches!(kind, FluidKind::Water | FluidKind::FlowingWater);
-    let tint = if water {
+    let water = me.fluid.water();
+    let tint = if let Some(v) = me.registered_visual {
+        v.tint
+    } else if water {
         water_color & 0xFF_FFFF
     } else {
         0xFF_FFFF
     };
-    let emission = if water {
+    let emission = if let Some(v) = me.registered_visual {
+        crate::mesher::hdr_tier("", v.emission)
+    } else if water {
         0
     } else {
         crate::mesher::hdr_tier("lava", 15)
@@ -310,7 +365,9 @@ pub(super) fn tesselate(
             lighting::coords(pad, at(above), above),
         ))
     };
-    let (still, flow, overlay) = if water {
+    let (still, flow, overlay) = if let Some(v) = me.registered_visual {
+        (v.still, v.flowing, None)
+    } else if water {
         (
             tables.water_still,
             tables.water_flow,
@@ -319,7 +376,7 @@ pub(super) fn tesselate(
     } else {
         (tables.lava_still, tables.lava_flow, None)
     };
-    let target = if water {
+    let target = if water || me.registered_visual.is_some() {
         &mut out.translucent
     } else {
         &mut out.solid
@@ -352,7 +409,7 @@ pub(super) fn tesselate(
         sw -= EPSILON;
         se -= EPSILON;
         ne -= EPSILON;
-        let flow_vector = flow_at(
+        let flow_vector = flow_at_sample(
             &mut FlowView { pad, info },
             me.fluid,
             BlockPos::new(x, y, z),
@@ -498,5 +555,63 @@ mod tests {
         assert_eq!(coverage(&slab, Direction::South), 0.5);
         assert_eq!(coverage(&slab, Direction::Down), 1.0);
         assert_eq!(coverage(&slab, Direction::Up), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod registered_tests {
+    use super::*;
+    use horizon_world::{
+        registered_fluids::{LiquidFamily, RegisteredFluids},
+        registry::BlockRegistry,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn samples_keep_catalog_identity_separate_from_native_water() {
+        let rows: Vec<_> = (0..16).map(|level| json!(["test:liquid",false,true,"",{"id":"test:liquid","properties":{"level":level.to_string()}}])).collect();
+        let registry = BlockRegistry::from_facts_json(
+            json!({"states":rows,"defaults":{"test:liquid":0}})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap();
+        let make = || {
+            RegisteredFluids::new(
+                &registry,
+                [LiquidFamily {
+                    source: "test:liquid".into(),
+                    flowing: "test:flowing_liquid".into(),
+                    block: "test:liquid".into(),
+                }],
+            )
+            .unwrap()
+        };
+        let a = make();
+        let b = make();
+        let source = a.id("test:liquid").unwrap();
+        let full = Sample::Registered {
+            source,
+            amount: 8,
+            falling: false,
+        };
+        let flowing = Sample::Registered {
+            source,
+            amount: 4,
+            falling: true,
+        };
+        let foreign = Sample::Registered {
+            source: b.id("test:liquid").unwrap(),
+            amount: 8,
+            falling: false,
+        };
+        let water = Sample::from(FluidState::from_json(r#"{"id":"minecraft:water"}"#).unwrap());
+        assert!(full.same_family(flowing));
+        assert!(!full.same_family(foreign));
+        assert!(!full.same_family(water));
+        assert!(!full.water());
+        assert!(!full.is_empty());
+        assert_eq!(flowing.own_height(), 4.0 / 9.0);
+        assert!(flowing.falling());
     }
 }

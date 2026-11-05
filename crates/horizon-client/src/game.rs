@@ -19985,15 +19985,12 @@ fn load_world_rest(
     );
     progress.set(8);
     let _tail = startup::step("rest.tail");
-    let registered_fluids =
-        horizon_world::registered_fluids::resources::RegisteredFluidResources::load(
-            registry, root,
-        )?;
+    let registered_fluids = assets.registered_fluids.clone();
     if let Some(fluids) = &registered_fluids {
         fluids.validate_buckets(|id| items.get(id).is_some())?;
     }
     Ok(WorldRest {
-        registered_fluids: registered_fluids.map(Arc::new),
+        registered_fluids,
         stations,
         items,
         recipes,
