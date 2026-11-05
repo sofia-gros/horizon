@@ -109,6 +109,7 @@ pub mod player_hurt;
 pub mod player_travel;
 pub mod powder_snow_collision;
 pub mod region;
+pub mod registered_flow;
 pub mod registered_fluids;
 pub mod registry;
 pub mod registry_collision_scan;
