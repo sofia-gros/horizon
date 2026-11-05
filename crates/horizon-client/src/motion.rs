@@ -231,8 +231,9 @@ pub enum MotionEvent {
     /// wither rose; the server adds its Wither unless peaceful.
     InsideWitherRose,
     /// A matching registered-fluid body contact requests a sustained effect.
-    /// Only the authoritative player dispatcher applies it.
-    RegisteredFluidEffect(horizon_world::registered_fluids::interaction::EffectContact),
+    /// Carries the catalog-scoped family, not an owned effect name. Only the
+    /// authoritative player dispatcher resolves and applies it.
+    RegisteredFluidEffect(horizon_world::registered_fluids::RegisteredFluidId),
     /// `ServerPlayer.checkFallDamage` after a mace smash: block particles
     /// from the landing block, more the further the fall.
     SmashLanding {

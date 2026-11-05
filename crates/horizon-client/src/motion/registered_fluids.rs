@@ -161,7 +161,7 @@ impl MotionWorld<'_, '_, '_> {
             .filter_map(|c| {
                 resources
                     .interaction(c.source)
-                    .copied()
+                    .cloned()
                     .map(|p| (c.height, p))
             })
             .max_by(|a, b| a.0.total_cmp(&b.0))
@@ -188,12 +188,15 @@ impl MotionWorld<'_, '_, '_> {
         else {
             return Ok(());
         };
-        if let Some(effect) = policy.effect {
+        let burn = policy.burn;
+        if policy.effect.is_some()
+            && let Some(fluid) = resources.catalog.from_block(state)
+        {
             self.player
                 .events
-                .push(MotionEvent::RegisteredFluidEffect(effect));
+                .push(MotionEvent::RegisteredFluidEffect(fluid.id()));
         }
-        if let Some(burn) = policy.burn {
+        if let Some(burn) = burn {
             self.player.ignite_for_ticks(i32::from(burn.seconds) * 20)?;
             self.environment_hurt("minecraft:lava", burn.damage)?;
         }

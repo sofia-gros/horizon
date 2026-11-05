@@ -24,26 +24,35 @@ pub struct BurnContact {
     pub seconds: u16,
     pub damage: f32,
 }
-/// Only the sustained vanilla effects with a player dispatcher are accepted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-pub enum ContactEffect {
-    #[serde(rename = "minecraft:poison")]
-    Poison,
-    #[serde(rename = "minecraft:slowness")]
-    Slowness,
-    #[serde(rename = "minecraft:blindness")]
-    Blindness,
-}
-impl ContactEffect {
-    pub fn player_id(self) -> &'static str {
-        match self {
-            Self::Poison => "poison",
-            Self::Slowness => "slowness",
-            Self::Blindness => "blindness",
+/// A sustained vanilla effect or a namespaced effect declared by an enabled
+/// content mod. Resource consumers must resolve it before enabling the fluid.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct ContactEffect(std::sync::Arc<str>);
+impl TryFrom<String> for ContactEffect {
+    type Error = &'static str;
+    fn try_from(id: String) -> Result<Self, Self::Error> {
+        if !super::valid_name(&id)
+            || (id.starts_with("minecraft:")
+                && !matches!(
+                    id.as_str(),
+                    "minecraft:poison" | "minecraft:slowness" | "minecraft:blindness"
+                ))
+        {
+            return Err("invalid or unsupported registered-fluid effect id");
         }
+        Ok(Self(id.into()))
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+impl ContactEffect {
+    pub fn id(&self) -> &str {
+        &self.0
+    }
+    pub fn player_id(&self) -> &str {
+        self.0.strip_prefix("minecraft:").unwrap_or(self.0.as_ref())
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EffectContact {
     pub id: ContactEffect,
@@ -53,7 +62,7 @@ pub struct EffectContact {
     #[serde(default)]
     pub no_curatives: bool,
 }
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InteractionPolicy {
     pub travel: TravelPolicy,
@@ -66,7 +75,7 @@ pub struct InteractionPolicy {
     pub effect: Option<EffectContact>,
 }
 impl InteractionPolicy {
-    pub fn validate(self) -> io::Result<()> {
+    pub fn validate(&self) -> io::Result<()> {
         let t = self.travel;
         if [
             f64::from(t.acceleration),
@@ -87,6 +96,7 @@ impl InteractionPolicy {
             })
             || self
                 .effect
+                .as_ref()
                 .is_some_and(|e| !(1..=72_000).contains(&e.duration_ticks))
         {
             return Err(invalid("invalid registered fluid interaction policy"));
@@ -152,10 +162,10 @@ mod tests {
         assert!((v.x - 0.2).abs() < 1e-12);
         assert!((v.y + 0.085).abs() < 1e-12);
         assert!((v.z + 0.2).abs() < 1e-12);
-        let mut bad = p;
+        let mut bad = p.clone();
         bad.motion_scale = f64::NAN;
         assert!(bad.validate().is_err());
-        bad = p;
+        bad = p.clone();
         bad.travel.horizontal_drag = 1.01;
         assert!(bad.validate().is_err());
         bad = p;

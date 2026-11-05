@@ -2400,10 +2400,14 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
             out.join("facts.json"),
         )?)?;
         let bytes = serde_json::to_vec(&registered_fluids)?;
-        horizon_world::registered_fluids::resources::RegisteredFluidResources::from_reader(
-            &registry,
-            bytes.as_slice(),
-        )?;
+        let fluids =
+            horizon_world::registered_fluids::resources::RegisteredFluidResources::from_reader(
+                &registry,
+                bytes.as_slice(),
+            )?;
+        fluids.validate_effects(|id| {
+            id.starts_with("minecraft:") || plan.effects.iter().any(|effect| effect.id == id)
+        })?;
         overlay.write(fluid_path, &bytes)?;
     }
     // A tag naming an id nobody registers fails as a whole in vanilla, and
