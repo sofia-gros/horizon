@@ -17,6 +17,8 @@ const HORIZONTAL: [Direction; 4] = [
     Direction::West,
     Direction::East,
 ];
+// Scope this cache to one spread decision: no result survives world mutation.
+type SlopeCache = HashMap<(BlockPos, u8, u8), u16>;
 #[derive(Clone, Copy, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FlowPolicy {
@@ -88,7 +90,7 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
         for (id, policy) in policies {
             let source = result.fluids.source(id)?;
             if !(1..=8).contains(&policy.drop_off)
-                || policy.slope_distance > 4
+                || policy.slope_distance > 8
                 || policy.tick_delay <= 0
             {
                 return Err(invalid("invalid registered liquid flow policy"));
@@ -230,7 +232,12 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
         distance: u8,
         from: Direction,
         policy: FlowPolicy,
+        cache: &mut SlopeCache,
     ) -> u16 {
+        let key = (pos, distance, from as u8);
+        if let Some(&result) = cache.get(&key) {
+            return result;
+        }
         let mut lowest = 1000;
         for direction in HORIZONTAL {
             if direction == from {
@@ -242,6 +249,7 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
             };
             if self.pass(world, id, pos, state, direction, next) {
                 if self.hole(world, id, next_pos, next) {
+                    cache.insert(key, u16::from(distance));
                     return u16::from(distance);
                 }
                 if distance < policy.slope_distance {
@@ -253,10 +261,12 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
                         distance + 1,
                         direction.opposite(),
                         policy,
+                        cache,
                     ));
                 }
             }
         }
+        cache.insert(key, lowest);
         lowest
     }
     /// Neighbor scheduling also occurs after pickup/removal, so flowing cells
@@ -325,6 +335,7 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
         }
         let mut lowest = 1000;
         let mut targets = Vec::new();
+        let mut slopes = SlopeCache::new();
         for direction in HORIZONTAL {
             let at = rel(pos, direction);
             let Some(target) = world.block(at) else {
@@ -350,6 +361,7 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
                     1,
                     direction.opposite(),
                     policy,
+                    &mut slopes,
                 )
             };
             if distance < lowest {
@@ -498,6 +510,7 @@ mod tests {
     use crate::{nbt::Tag, registered_fluids::scheduling::RegisteredFluidScheduler};
     use horizon_core::{position::ChunkPos, ticks::TickPriority};
     use serde_json::json;
+    use std::cell::Cell;
     fn registry() -> BlockRegistry {
         let mut states = vec![
             json!(["minecraft:air", true, false, "", "minecraft:air"]),
@@ -546,6 +559,7 @@ mod tests {
         deny: Option<BlockPos>,
         floor: bool,
         acceptance: HashMap<BlockPos, RegisteredFluidId>,
+        reads: Cell<usize>,
     }
     impl<'a, 'r> World<'a, 'r> {
         fn new(fluids: &'a RegisteredFluids<'r>) -> Self {
@@ -565,6 +579,7 @@ mod tests {
                 deny: None,
                 floor: true,
                 acceptance: HashMap::new(),
+                reads: Cell::new(0),
             }
         }
         fn run(&mut self, flow: &RegisteredFlow<'_, '_>) {
@@ -586,6 +601,7 @@ mod tests {
     }
     impl RegisteredFlowWorld for World<'_, '_> {
         fn block(&self, pos: BlockPos) -> Option<BlockStateId> {
+            self.reads.set(self.reads.get() + 1);
             if !(-12..=12).contains(&pos.x)
                 || !(-12..=12).contains(&pos.z)
                 || !(0..=4).contains(&pos.y)
@@ -828,6 +844,104 @@ mod tests {
             BlockPos::new(0, 1, 1),
         ] {
             assert_eq!(world.block(at), Some(BlockStateId(0)));
+        }
+    }
+    #[test]
+    fn extended_slope_finds_far_holes_without_reusing_stale_results() {
+        let registry = registry();
+        let fluids = catalog(&registry);
+        let id = fluids.id("test:one").unwrap();
+        for (distance, finds_hole) in [(4, false), (8, true)] {
+            let mut rules = policy();
+            rules.slope_distance = distance;
+            let flow = RegisteredFlow::new(&fluids, [(id, rules)]).unwrap();
+            let mut world = World::new(&fluids);
+            let origin = BlockPos::new(0, 1, 0);
+            let hole = BlockPos::new(9, 0, 0);
+            world.cells.insert(hole, BlockStateId(0));
+            flow.place_source(&mut world, origin, id).unwrap();
+            flow.tick(&mut world, origin, id).unwrap();
+            assert!(
+                fluids
+                    .from_block(world.block(BlockPos::new(1, 1, 0)).unwrap())
+                    .is_some()
+            );
+            for at in [
+                BlockPos::new(-1, 1, 0),
+                BlockPos::new(0, 1, -1),
+                BlockPos::new(0, 1, 1),
+            ] {
+                assert_eq!(
+                    fluids.from_block(world.block(at).unwrap()).is_some(),
+                    !finds_hole
+                );
+            }
+            // Close the hole between ticks. Cached decisions must not survive.
+            world.cells.insert(hole, BlockStateId(1));
+            flow.tick(&mut world, origin, id).unwrap();
+            assert!(
+                fluids
+                    .from_block(world.block(BlockPos::new(-1, 1, 0)).unwrap())
+                    .is_some()
+            );
+        }
+    }
+    #[test]
+    fn extended_slope_flat_search_is_bounded_and_excessive_policy_is_rejected() {
+        let registry = registry();
+        let fluids = catalog(&registry);
+        let id = fluids.id("test:one").unwrap();
+        let mut rules = policy();
+        rules.slope_distance = 8;
+        let flow = RegisteredFlow::new(&fluids, [(id, rules)]).unwrap();
+        let mut world = World::new(&fluids);
+        let origin = BlockPos::new(0, 1, 0);
+        flow.place_source(&mut world, origin, id).unwrap();
+        world.reads.set(0);
+        flow.tick(&mut world, origin, id).unwrap();
+        assert!(
+            world.reads.get() < 50_000,
+            "repeated cyclic searches must be cached"
+        );
+        for direction in HORIZONTAL {
+            assert!(
+                fluids
+                    .from_block(world.block(rel(origin, direction)).unwrap())
+                    .is_some()
+            );
+        }
+        rules.slope_distance = 9;
+        assert!(RegisteredFlow::new(&fluids, [(id, rules)]).is_err());
+    }
+    #[test]
+    fn glass_drop_eight_falls_but_does_not_spread_across_the_floor() {
+        let registry = registry();
+        let fluids = catalog(&registry);
+        let id = fluids.id("test:one").unwrap();
+        let mut rules = policy();
+        rules.drop_off = 8;
+        rules.slope_distance = 8;
+        let flow = RegisteredFlow::new(&fluids, [(id, rules)]).unwrap();
+        let mut world = World::new(&fluids);
+        let origin = BlockPos::new(0, 3, 0);
+        flow.place_source(&mut world, origin, id).unwrap();
+        world.run(&flow);
+        for y in 1..=2 {
+            let at = BlockPos::new(0, y, 0);
+            assert!(
+                fluids
+                    .from_block(world.block(at).unwrap())
+                    .unwrap()
+                    .falling()
+            );
+            for direction in HORIZONTAL {
+                assert_eq!(world.block(rel(at, direction)), Some(BlockStateId(0)));
+            }
+        }
+        assert_eq!(flow.pickup_source(&mut world, origin).unwrap(), Some(id));
+        world.run(&flow);
+        for y in 1..=3 {
+            assert_eq!(world.block(BlockPos::new(0, y, 0)), Some(BlockStateId(0)));
         }
     }
     #[test]

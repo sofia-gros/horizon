@@ -6,8 +6,13 @@ renderer, immersion or bucket-inventory adapter enables it.
 
 `RegisteredFlow` executes the existing host FlowingFluid transition and spread
 ordering with catalog-scoped identities. Every family needs an explicit policy:
-drop-off, slope-search distance (bounded to four), tick delay and source
+drop-off, slope-search distance (bounded to eight), tick delay and source
 conversion. There is no implicit lava policy, burning or solidification.
+The extended bound admits TConstruct's glass policy (drop eight, slope eight,
+tick delay thirty) without substituting a different liquid's parameters.
+Slope results are cached by cell, distance and incoming direction for one spread
+decision, avoiding repeated cyclic searches. The cache is not consulted after
+world mutations and is never retained between ticks or liquid families.
 Inverted flow and fluid-specific interactions need separate source-verified
 policies/adapters and are not represented by this downward-flow implementation.
 
