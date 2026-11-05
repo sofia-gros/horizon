@@ -732,6 +732,21 @@ impl Mob {
                 let _ = lava.apply_to(&mut pushed, lava_scale);
             }
         }
+        if self.pushed_by_fluid()
+            && let Some(resources) = w.registered_fluids
+        {
+            // Keep registered identities separate and never read absent chunks.
+            // Invalid/oversized sampling fails closed before applying any push.
+            if let Ok(contacts) = crate::motion::registered_fluid_contacts_with_flow(
+                w.world,
+                resources,
+                w.fluid_tables,
+                self.bounds().deflate(Vec3::new(0.001, 0.001, 0.001)),
+                Vec3::new(self.position.x, self.eye_y(), self.position.z),
+            ) {
+                self.push_registered_currents(resources, &contacts);
+            }
+        }
         if self.fluids.in_water {
             self.fall_distance = 0.0;
             if !was_touching_water && !self.first_tick {
@@ -741,6 +756,26 @@ impl Mob {
                     &mut Splash { mob: self, events },
                     1_000_000,
                 );
+            }
+        }
+    }
+    /// The native non-player current target preserves normalization, the
+    /// minimum drift and finite-addition filtering for each configured family.
+    pub(super) fn push_registered_currents(
+        &mut self,
+        resources: &horizon_world::registered_fluids::resources::RegisteredFluidResources<'_>,
+        contacts: &[horizon_world::registered_fluids::contact::Contact],
+    ) {
+        if !self.pushed_by_fluid() {
+            return;
+        }
+        let mut pushed = Pushed(&mut self.velocity);
+        for contact in contacts {
+            if contact.height > 0.0
+                && let Some(policy) = resources.interaction(contact.source)
+                && policy.motion_scale > 0.0
+            {
+                let _ = contact.current.apply_to(&mut pushed, policy.motion_scale);
             }
         }
     }

@@ -56,6 +56,7 @@ pub use fluids::{
     BubbleColumn, FluidResources, FluidTags, LAVA, PlayerFluids, RiddenBoat, WATER,
     bubble_column_at, bubble_column_push, bubble_column_push_over, bubble_column_surfaces,
 };
+pub(crate) use registered_fluids::contacts_with_flow as registered_fluid_contacts_with_flow;
 
 pub struct MotionResources {
     pub attributes: Arc<Catalog>,

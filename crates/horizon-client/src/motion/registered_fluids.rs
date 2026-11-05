@@ -92,6 +92,35 @@ impl FluidFlowWorld<Sample> for CurrentWorld<'_, '_> {
         Ok(state.is_none_or(|s| self.fluids.sturdy(s, d)))
     }
 }
+/// Shared loaded-only current sampling for players and authoritative mobs.
+/// Callers own passenger shielding and pass an already deflated body box.
+pub(crate) fn contacts_with_flow(
+    scene: &World,
+    resources: &horizon_world::registered_fluids::resources::RegisteredFluidResources<'_>,
+    fluids: &FluidResources,
+    bounds: Aabb,
+    eyes: Vec3,
+) -> io::Result<Vec<horizon_world::registered_fluids::contact::Contact>> {
+    let mut world = CurrentWorld {
+        scene,
+        resources,
+        fluids,
+    };
+    resources.catalog.contacts_with_flow(
+        bounds,
+        eyes,
+        8192,
+        |p| {
+            let layout = scene.layout();
+            (scene.loaded(p.x, p.z) && p.y >= layout.min_y() && p.y < layout.max_y())
+                .then(|| scene.block(p.x, p.y, p.z))
+        },
+        |p| {
+            let sample = world.fluid(p)?;
+            flow_at_sample(&mut world, sample, p)
+        },
+    )
+}
 impl MotionWorld<'_, '_, '_> {
     pub(super) fn update_registered_fluids(&mut self) -> Result<()> {
         self.player.fluids.registered.clear();
@@ -102,11 +131,6 @@ impl MotionWorld<'_, '_, '_> {
             return Ok(());
         }
         let scene = &*self.scene;
-        let mut world = CurrentWorld {
-            scene,
-            resources: &resources,
-            fluids: &self.resources.fluids,
-        };
         let eyes = Vec3::new(
             self.player.position.x,
             self.player.position.y + f64::from(self.player.dimensions.eye_height),
@@ -123,20 +147,7 @@ impl MotionWorld<'_, '_, '_> {
             }
             bounds = Aabb::new(Vec3::new(lo.x, lo.y.max(boat.max_y), lo.z), hi);
         }
-        let contacts = resources.catalog.contacts_with_flow(
-            bounds,
-            eyes,
-            8192,
-            |p| {
-                let layout = scene.layout();
-                (scene.loaded(p.x, p.z) && p.y >= layout.min_y() && p.y < layout.max_y())
-                    .then(|| scene.block(p.x, p.y, p.z))
-            },
-            |p| {
-                let sample = world.fluid(p)?;
-                flow_at_sample(&mut world, sample, p)
-            },
-        )?;
+        let contacts = contacts_with_flow(scene, &resources, &self.resources.fluids, bounds, eyes)?;
         for contact in &contacts {
             if contact.height <= 0.0 {
                 continue;
