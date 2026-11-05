@@ -1,3 +1,6 @@
+// Registered bucket behavior follows Tinkers' Construct, Copyright (c) 2022 SlimeKnights.
+// MIT License; full notice in THIRD_PARTY_NOTICES.md.
+// Changed: data-driven family lookup, bounded host transfer and stacked remainders.
 //! Dispenser behaviours: `DispenserBlock.getDispenseMethod(..).dispense` with
 //! every `DispenseItemBehavior` registration of vanilla that Horizon has the
 //! entities for. A behaviour returns what is left in the slot and the level
@@ -100,6 +103,27 @@ fn shrink(mut stack: ItemStack) -> Option<ItemStack> {
 }
 /// A dispenser's answer: the slot's new content and the level event played.
 type Dispensed = (Option<ItemStack>, i32);
+
+/// A block mutation can commit before a scheduling error is discovered. Keep
+/// its inventory result even in that case, then surface the error to the caller.
+pub(super) struct DispenseOutcome {
+    remaining: Option<ItemStack>,
+    completion: Result<()>,
+    pub(super) process_events: bool,
+}
+impl DispenseOutcome {
+    pub(super) fn ready(remaining: Option<ItemStack>) -> Self {
+        Self {
+            remaining,
+            completion: Ok(()),
+            process_events: false,
+        }
+    }
+    pub(super) fn commit(self, apply: impl FnOnce(Option<ItemStack>)) -> Result<()> {
+        apply(self.remaining);
+        self.completion
+    }
+}
 
 /// None keeps vanilla's behaviour; an explicit empty remainder consumes the stack.
 fn mod_dispensed(answer: Option<NativeDispensed>) -> Option<Dispensed> {
@@ -622,7 +646,7 @@ impl Game<'_> {
         pos: Pos,
         facing: Direction,
         stack: ItemStack,
-    ) -> Result<Option<ItemStack>> {
+    ) -> Result<DispenseOutcome> {
         let mut answer = None;
         if self.serving.is_some() || self.options.dedicated.is_some() {
             self.native_dispense_item(
@@ -647,7 +671,10 @@ impl Game<'_> {
                 self.dispenser_event(event, pos, 0);
                 self.dispenser_event(2000, pos, data_value(facing));
             }
-            return Ok(left);
+            return Ok(DispenseOutcome::ready(left));
+        }
+        if let Some(outcome) = self.dispense_registered_bucket(pos, facing, &stack)? {
+            return Ok(outcome);
         }
         let item = stack.item.to_string();
         let (left, event) = match item.as_str() {
@@ -702,7 +729,7 @@ impl Game<'_> {
         }
         self.dispenser_event(event, pos, 0);
         self.dispenser_event(2000, pos, data_value(facing));
-        Ok(left)
+        Ok(DispenseOutcome::ready(left))
     }
     /// `DispenserBlock.getDefaultDispenseMethod`: equipment, spawn eggs, or a drop.
     fn dispense_default_method(
@@ -1273,6 +1300,87 @@ impl Game<'_> {
     }
 
     // ---- buckets ----
+
+    /// Content-registered buckets use the cell directly in front of a dispenser,
+    /// never a player's hit, permissions, creative flag or player-only callback.
+    /// Native dispense overrides have already had first refusal.
+    fn dispense_registered_bucket(
+        &mut self,
+        pos: Pos,
+        facing: Direction,
+        stack: &ItemStack,
+    ) -> Result<Option<DispenseOutcome>> {
+        let Some(resources) = self.res.rest().registered_fluids.clone() else {
+            return Ok(None);
+        };
+        let source = resources.bucket_fluid(&stack.item);
+        let filling = source.is_none() && &*stack.item == "minecraft:bucket";
+        if source.is_none() && !filling {
+            return Ok(None);
+        }
+        let target = Self::pos_of(offset(pos, facing));
+        let target_fluid = resources
+            .catalog
+            .from_block(self.block_at((target.x, target.y, target.z)));
+        if filling && target_fluid.is_none() {
+            return Ok(None);
+        }
+        if self.remote.is_some() {
+            return Ok(Some(DispenseOutcome::ready(Some(stack.clone()))));
+        }
+        // Resolve the filled item before removing anything. Flowing liquid never
+        // produces a bucket, and must not fall through to a native water alias.
+        let returned = if source.is_some() {
+            Some("minecraft:bucket".to_owned())
+        } else if let Some(fluid) = target_fluid.filter(|fluid| fluid.is_source()) {
+            Some(resources.bucket(fluid.id())?.to_owned())
+        } else {
+            None
+        };
+        let (changed, scheduled) = if returned.is_some() {
+            self.change_registered_source(target, source)?
+        } else {
+            (false, Ok(()))
+        };
+        let mut completion = Ok(());
+        let remaining = if changed {
+            completion = scheduled.map_err(Into::into);
+            let remaining = self.consume_with_remainder(
+                pos,
+                facing,
+                stack.clone(),
+                ItemStack::new(returned.expect("resolved container"), 1),
+            );
+            self.post_block_game_event(
+                if filling {
+                    "minecraft:fluid_pickup"
+                } else {
+                    "minecraft:fluid_place"
+                },
+                [target.x, target.y, target.z],
+                None,
+                None,
+            );
+            remaining
+        } else {
+            scheduled?;
+            if filling {
+                // Empty-bucket failure calls execute: one outer click/animation.
+                self.default_execute(pos, facing, stack.clone())
+            } else {
+                // TConstruct's full-bucket failure calls the nested dispense:
+                // retain its extra click/animation, just like native full buckets.
+                self.dispense_default(pos, facing, stack.clone())
+            }
+        };
+        self.dispenser_event(CLICK, pos, 0);
+        self.dispenser_event(2000, pos, data_value(facing));
+        Ok(Some(DispenseOutcome {
+            remaining,
+            completion,
+            process_events: changed,
+        }))
+    }
 
     /// The filled bucket behaviour: `DispensibleContainerItem.emptyContents`.
     fn dispense_filled_bucket(
@@ -2248,6 +2356,34 @@ pub(super) fn tipped_effect(stack: &ItemStack) -> Option<(&'static str, i32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dispenser_commits_inventory_before_reporting_post_mutation_error() {
+        let mut slot = Some(ItemStack::new("example:molten_bucket", 1));
+        let mut changed = false;
+        let outcome = DispenseOutcome {
+            remaining: Some(ItemStack::new("minecraft:bucket", 1)),
+            completion: Err(std::io::Error::other("scheduling failed after placement").into()),
+            process_events: true,
+        };
+        let result = outcome.commit(|remaining| {
+            slot = remaining;
+            changed = true;
+        });
+        assert!(result.is_err());
+        assert!(changed, "the container is dirtied even on deferred failure");
+        assert_eq!(slot, Some(ItemStack::new("minecraft:bucket", 1)));
+
+        DispenseOutcome::ready(None)
+            .commit(|remaining| slot = remaining)
+            .unwrap();
+        assert_eq!(slot, None, "ordinary empty remainders still clear the slot");
+        let stack = ItemStack::new("minecraft:bucket", 15);
+        DispenseOutcome::ready(Some(stack.clone()))
+            .commit(|remaining| slot = remaining)
+            .unwrap();
+        assert_eq!(slot, Some(stack));
+    }
 
     #[test]
     fn mod_dispenser_answers_preserve_fallback_and_own_consumption() {
