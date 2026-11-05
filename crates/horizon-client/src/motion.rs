@@ -240,6 +240,11 @@ pub enum MotionEvent {
         position: Vec3,
         pitch: f32,
     },
+    /// An explicitly configured mod effect bounce or corrected sharp turn.
+    EffectBounceSound {
+        sound: &'static str,
+        position: Vec3,
+    },
     /// `ServerPlayer.checkFallDamage` after a mace smash: block particles
     /// from the landing block, more the further the fall.
     SmashLanding {
@@ -302,6 +307,7 @@ pub struct PlayerMotion {
     /// A mod landing rebound applied after collision restitution.
     pub(crate) pending_effect_bounce: Option<Vec3>,
     pub(crate) effect_bounce_momentum: Option<horizon_world::bounce_momentum::Momentum>,
+    pub(crate) effect_bounce_sound: Option<&'static str>,
     pub stuck_multiplier: Vec3,
     /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
     /// block has pushed this entity this tick (0.51 at most on any axis).
@@ -458,6 +464,7 @@ impl PlayerMotion {
     /// ordinary movement ticks. Does not change vanilla velocity or effects.
     pub fn clear_effect_bounce_momentum(&mut self) {
         self.effect_bounce_momentum = None;
+        self.effect_bounce_sound = None;
     }
     /// `ServerGamePacketListenerImpl.handleMovePlayer`: the movement the client
     /// sent is the server copy's own delta movement. A glide's wall hit reads it
@@ -565,6 +572,7 @@ impl PlayerMotion {
             block_landing: None,
             pending_effect_bounce: None,
             effect_bounce_momentum: None,
+            effect_bounce_sound: None,
             stuck_multiplier: Vec3::ZERO,
             piston: Default::default(),
             yaw: 0.0,
@@ -4193,6 +4201,7 @@ mod tests {
             player.velocity.x = 0.4;
             player.velocity.y = -0.8;
             player.status.bounce_on_fall = enabled;
+            player.status.bounce_sound = Some("example:bounce");
             player.shift_key_down = crouching;
             let mut w = MotionWorld {
                 entities: &[],
@@ -4209,18 +4218,45 @@ mod tests {
                 assert!(!w.player.ground.on_ground);
                 assert!(w.player.health.sync_velocity);
                 assert!(w.player.effect_bounce_momentum.is_some());
+                let sounds = |events: &[MotionEvent]| {
+                    events
+                        .iter()
+                        .filter(|e| {
+                            matches!(
+                                e,
+                                MotionEvent::EffectBounceSound {
+                                    sound: "example:bounce",
+                                    ..
+                                }
+                            )
+                        })
+                        .count()
+                };
+                assert_eq!(sounds(&w.player.events), 1);
                 w.player.health.advance_clock();
                 w.player.status.bounce_on_fall = false;
+                w.player.status.bounce_sound = None;
                 w.player.velocity.x = 0.1;
                 let rebound_y = w.player.velocity.y;
                 w.tick_effect_bounce_momentum().unwrap();
                 assert!((w.player.velocity.x - 0.4).abs() < 1e-7);
                 assert_eq!(w.player.velocity.y, rebound_y);
+                w.player.health.advance_clock();
+                w.player.velocity.x = 0.0;
+                w.player.velocity.z = 0.1;
+                w.tick_effect_bounce_momentum().unwrap();
+                assert_eq!(sounds(&w.player.events), 2);
                 w.player.fall_flying = true;
                 w.tick_effect_bounce_momentum().unwrap();
                 assert!(w.player.effect_bounce_momentum.is_none());
             } else {
                 assert!(w.player.effect_bounce_momentum.is_none());
+                assert!(
+                    !w.player
+                        .events
+                        .iter()
+                        .any(|e| matches!(e, MotionEvent::EffectBounceSound { .. }))
+                );
                 assert_eq!(w.player.velocity.y, 0.0);
                 assert!(w.player.ground.on_ground);
                 assert!(w.player.health.health() < 20.0);

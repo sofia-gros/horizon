@@ -386,6 +386,7 @@ impl PlayerEffects {
             breath_of_the_nautilus: self.get("breath_of_the_nautilus").is_some(),
             protection: Vec::new(),
             bounce_on_fall: false,
+            bounce_sound: None,
         }
     }
     /// Attribute modifiers of active effects: (attribute, id, amount, operation).
@@ -416,6 +417,8 @@ impl PlayerEffects {
 pub struct StatusFlags {
     /// Explicit native-mod opt-in; vanilla effects never enable this.
     pub bounce_on_fall: bool,
+    /// Optional native-mod event for effect landing and momentum turns.
+    pub bounce_sound: Option<&'static str>,
     pub jump_boost: Option<i32>,
     pub slow_falling: bool,
     pub levitation: Option<i32>,

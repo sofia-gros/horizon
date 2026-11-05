@@ -371,6 +371,8 @@ impl MotionWorld<'_, '_, '_> {
                 self.player.effect_bounce_momentum =
                     horizon_world::bounce_momentum::Momentum::new(velocity);
             }
+            self.player.effect_bounce_sound = self.player.status.bounce_sound;
+            self.effect_bounce_sound();
             if !self.player.client_side {
                 self.player.ground.on_ground = false;
                 self.player.health.sync_velocity = true;
@@ -385,7 +387,7 @@ impl MotionWorld<'_, '_, '_> {
         }
         let cancel = self.player.fall_flying || self.player.spectator;
         if cancel {
-            self.player.effect_bounce_momentum = None;
+            self.player.clear_effect_bounce_momentum();
             return Ok(());
         }
         let in_air = !self.player.ground.on_ground
@@ -405,9 +407,19 @@ impl MotionWorld<'_, '_, '_> {
             }
         }
         if !update.active {
-            self.player.effect_bounce_momentum = None;
+            self.player.clear_effect_bounce_momentum();
+        } else if update.turn_sound {
+            self.effect_bounce_sound();
         }
         Ok(())
+    }
+    fn effect_bounce_sound(&mut self) {
+        if let Some(sound) = self.player.effect_bounce_sound {
+            self.player.events.push(MotionEvent::EffectBounceSound {
+                sound,
+                position: self.player.position,
+            });
+        }
     }
     /// `Entity.propagateFallToPassengers`: the call on this player, whose
     /// vehicle fell `distance` blocks at `multiplier`, so the player takes

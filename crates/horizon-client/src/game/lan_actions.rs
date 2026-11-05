@@ -1059,6 +1059,9 @@ impl Game<'_> {
                 MotionEvent::RegisteredFluidBurnSound { position, pitch } => {
                     self.guest_registered_fluid_burn_sound(host, conn, position, pitch);
                 }
+                MotionEvent::EffectBounceSound { sound, position } => {
+                    self.guest_effect_bounce_sound(host, conn, sound, position);
+                }
                 _ => {}
             }
         }
@@ -1141,6 +1144,20 @@ impl Game<'_> {
         // were a block sound; the ordinary hurt packet remains independent.
         host.hub
             .sound(SOUND, at, 0.4, pitch, PLAYER_SOURCE as i32, Some(conn));
+    }
+
+    fn guest_effect_bounce_sound(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        sound: &str,
+        position: Vec3,
+    ) {
+        let at = [position.x, position.y, position.z];
+        // Player sound source, volume/pitch 1; the predicting player hears its
+        // own event locally, so the server packet excludes that connection.
+        self.audio.play_on_unshared(7, sound, Some(at), 1.0, 1.0);
+        host.hub.sound(sound, at, 1.0, 1.0, 7, Some(conn));
     }
 
     /// `ServerLevel.players()` in turn: the host's own player, then each
@@ -4356,6 +4373,9 @@ impl Game<'_> {
                 // BurningLiquidBlock's additional accepted-hit sound.
                 MotionEvent::RegisteredFluidBurnSound { position, pitch } => {
                     self.guest_registered_fluid_burn_sound(host, conn, position, pitch);
+                }
+                MotionEvent::EffectBounceSound { sound, position } => {
+                    self.guest_effect_bounce_sound(host, conn, sound, position);
                 }
                 // LivingEntity.checkFallDamage: the crumbs reach every player.
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
