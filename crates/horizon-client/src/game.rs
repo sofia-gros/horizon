@@ -4090,6 +4090,7 @@ impl Game<'_> {
                 self.collision,
                 no_physics,
                 &self.res.motion().fluids,
+                registered.as_deref(),
                 &nearby,
                 Some(self.border.geometry()),
             );

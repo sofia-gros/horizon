@@ -1,15 +1,34 @@
 // Fluid fire policy follows TConstruct, Copyright (c) 2022 SlimeKnights.
 // MIT License; source and license are in THIRD_PARTY_NOTICES.md.
 // Changed: registered family policies and the host dropped-item damage model.
-//! Authoritative item fire contact, without native fluid aliases.
+//! Authoritative item fluid forces and fire contact, without native aliases.
 use super::ItemEntity;
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_world::{
+    entity_fluid::CurrentTarget,
     registered_fluids::{
         contact::Contact, interaction::BurnContact, resources::RegisteredFluidResources,
     },
     registry::BlockStateId,
 };
+
+/// The existing entity target retains non-player normalization, minimum drift
+/// and finite-delta checks. Fire resistance does not imply current immunity.
+pub(super) fn apply_currents<W: CurrentTarget>(
+    target: &mut W,
+    resources: &RegisteredFluidResources<'_>,
+    contacts: &[Contact],
+) -> Result<(), W::Error> {
+    for contact in contacts {
+        if contact.height > 0.0
+            && let Some(policy) = resources.interaction(contact.source)
+            && policy.motion_scale > 0.0
+        {
+            contact.current.apply_to(target, policy.motion_scale)?;
+        }
+    }
+    Ok(())
+}
 
 /// Clear burning before the ordinary on-fire tick, without changing health.
 /// Native water/fire immunity and native-mod cancellation remain at the caller.
@@ -130,13 +149,20 @@ mod tests {
         registry: &BlockRegistry,
         hot_extinguishes: bool,
     ) -> RegisteredFluidResources<'_> {
+        resources_with_motion(registry, hot_extinguishes, [0.0, 0.0])
+    }
+    fn resources_with_motion(
+        registry: &BlockRegistry,
+        hot_extinguishes: bool,
+        scales: [f64; 2],
+    ) -> RegisteredFluidResources<'_> {
         let fluids:Vec<_> = ["hot", "cool"].map(|name| json!({
             "source":format!("test:{name}"),"flowing":format!("test:flowing_{name}"),
             "block":format!("test:{name}"),"bucket":format!("test:{name}_bucket"),
             "policy":{"drop_off":1,"slope_distance":4,"tick_delay":5,"source_conversion":false},
             "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
             "interaction":{"travel":{"acceleration":0.02,"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
-              "motion_scale":0.0,"can_swim":false,"can_drown":false,"extinguishes":name == "cool" || hot_extinguishes,"fall_distance_scale":0.5,
+              "motion_scale":scales[usize::from(name == "cool")],"can_swim":false,"can_drown":false,"extinguishes":name == "cool" || hot_extinguishes,"fall_distance_scale":0.5,
               "burn":if name == "hot" { json!({"seconds":10,"damage":2.0}) } else { json!(null) }}
         })).into_iter().collect();
         RegisteredFluidResources::from_reader(
@@ -176,6 +202,73 @@ mod tests {
     }
     fn source(p: BlockPos) -> Option<BlockStateId> {
         (p.y == 0).then_some(BlockStateId(0))
+    }
+    struct Velocity(Vec3);
+    impl CurrentTarget for Velocity {
+        type Error = std::convert::Infallible;
+        fn is_player_class(&self) -> bool {
+            false
+        }
+        fn velocity(&mut self) -> Result<Vec3, Self::Error> {
+            Ok(self.0)
+        }
+        fn add_delta_movement(&mut self, delta: Vec3) -> Result<(), Self::Error> {
+            self.0 = Vec3::new(self.0.x + delta.x, self.0.y + delta.y, self.0.z + delta.z);
+            Ok(())
+        }
+    }
+    fn current(r: &RegisteredFluidResources<'_>, name: &str, vector: Vec3) -> Contact {
+        let mut current = horizon_world::entity_fluid::CurrentAccumulator::default();
+        current.height = 0.8;
+        current.accumulate(vector);
+        Contact {
+            source: r.catalog.id(name).unwrap(),
+            height: 0.8,
+            eyes_inside: false,
+            current,
+        }
+    }
+    #[test]
+    fn item_currents_use_each_familys_scale_and_nonplayer_normalization() {
+        let registry = registry();
+        let r = resources_with_motion(&registry, false, [0.01, 0.02]);
+        let contacts = [
+            current(&r, "test:flowing_hot", Vec3::new(3.0, 4.0, 0.0)),
+            current(&r, "test:cool", Vec3::new(0.0, 0.0, -5.0)),
+        ];
+        let mut target = Velocity(Vec3::new(0.1, 0.2, 0.3));
+        apply_currents(&mut target, &r, &contacts).unwrap();
+        assert!((target.0.x - 0.106).abs() < 1e-12);
+        assert!((target.0.y - 0.208).abs() < 1e-12);
+        assert!((target.0.z - 0.28).abs() < 1e-12);
+    }
+    #[test]
+    fn item_currents_keep_stationary_minimum_drift_and_vertical_direction() {
+        let registry = registry();
+        let r = resources_with_motion(&registry, false, [0.0023333333333333335, 0.0]);
+        for (vector, wanted) in [
+            (Vec3::new(0.0, 1.0, 0.0), 0.0045000000000000005),
+            (Vec3::new(0.0, -1.0, 0.0), -0.0045000000000000005),
+        ] {
+            let mut target = Velocity(Vec3::ZERO);
+            apply_currents(&mut target, &r, &[current(&r, "test:hot", vector)]).unwrap();
+            assert_eq!(target.0, Vec3::new(0.0, wanted, 0.0));
+        }
+    }
+    #[test]
+    fn eye_only_zero_scale_and_canceled_currents_leave_velocity_unchanged() {
+        let registry = registry();
+        let r = resources_with_motion(&registry, false, [0.01, 0.0]);
+        let mut eye = current(&r, "test:hot", Vec3::new(1.0, 0.0, 0.0));
+        eye.height = 0.0;
+        eye.eyes_inside = true;
+        let zero = current(&r, "test:cool", Vec3::new(1.0, 0.0, 0.0));
+        let mut canceled = current(&r, "test:hot", Vec3::new(1.0, 0.0, 0.0));
+        canceled.current.accumulate(Vec3::new(-1.0, 0.0, 0.0));
+        let old = Vec3::new(0.1, 0.2, 0.3);
+        let mut target = Velocity(old);
+        apply_currents(&mut target, &r, &[eye, zero, canceled]).unwrap();
+        assert_eq!(target.0, old);
     }
     fn cool(p: BlockPos) -> Option<BlockStateId> {
         (p.y == 0).then_some(BlockStateId(16))

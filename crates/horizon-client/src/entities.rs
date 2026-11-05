@@ -287,6 +287,9 @@ impl ItemEntity {
         collision: &BlockCollisionRegistry<'_>,
         no_physics: bool,
         fluids: &crate::motion::FluidResources,
+        registered: Option<
+            &horizon_world::registered_fluids::resources::RegisteredFluidResources<'_>,
+        >,
         entity_boxes: &[Aabb],
         border: Option<&BorderGeometry>,
     ) -> bool {
@@ -296,6 +299,9 @@ impl ItemEntity {
             self.pickup_delay -= 1;
         }
         let (water_height, lava_height) = self.update_fluids(world, fluids);
+        if let Some(resources) = registered {
+            self.update_registered_fluids(world, fluids, resources);
+        }
         let old_velocity = self.velocity;
         let in_water = water_height > f64::from(0.1f32);
         if in_water {
@@ -2053,6 +2059,7 @@ mod world_border_tests {
                 &collision,
                 false,
                 &fluids,
+                None,
                 &[],
                 border,
             );
@@ -2128,6 +2135,7 @@ mod honey_slide_tests {
                 &collision,
                 false,
                 &fluids,
+                None,
                 &[],
                 None,
             );
@@ -2193,6 +2201,7 @@ mod honey_slide_tests {
                 &collision,
                 false,
                 &fluids,
+                None,
                 &[],
                 None,
             );
@@ -2490,6 +2499,7 @@ mod slime_bounce_tests {
             &collision,
             false,
             &fluids,
+            None,
             &[],
             None,
         );
@@ -2509,6 +2519,7 @@ mod slime_bounce_tests {
             &collision,
             false,
             &fluids,
+            None,
             &[],
             None,
         );
@@ -2602,6 +2613,7 @@ mod entity_collision_tests {
                     &collision,
                     false,
                     &fluids,
+                    None,
                     boxes,
                     None,
                 );
@@ -2651,6 +2663,7 @@ mod entity_collision_tests {
                     &collision,
                     false,
                     &fluids,
+                    None,
                     &[],
                     None,
                 );
