@@ -1856,6 +1856,9 @@ impl Game<'_> {
                     self.particles
                         .send_particles(&options, at, spread, speed, count);
                 }
+                MobEvent::RegisteredFluidEffect { mob, fluid } => {
+                    self.registered_fluid_mob_effect(mob, fluid);
+                }
                 MobEvent::RegisteredFluidBurnSound { at, pitch, hostile } => {
                     let source = if hostile { 5 } else { 6 };
                     const SOUND: &str = "minecraft:entity.generic.burn";

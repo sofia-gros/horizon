@@ -1,4 +1,4 @@
-// Fluid burn contact adapts Tinkers' Construct, Copyright (c) 2022 SlimeKnights.
+// Fluid burn/effect contact adapts Tinkers' Construct, Copyright (c) 2022 SlimeKnights.
 // MIT License. Full notice and source are in THIRD_PARTY_NOTICES.md.
 // Changed: explicit family policy, bounded loaded-only sampling, host mob damage.
 //! Registered liquid block contact for authoritative mobs, without native aliases.
@@ -24,9 +24,6 @@ fn sample(
     resources: &RegisteredFluidResources<'_>,
     block: impl FnMut(BlockPos) -> Option<BlockStateId>,
 ) -> Vec<Contact> {
-    if m.kind.flags.fire_immune {
-        return Vec::new();
-    }
     // This snapshot belongs only to this block-contact pass. Oversized or
     // invalid bounds fail closed rather than scanning unbounded world space.
     resources
@@ -47,15 +44,29 @@ pub(super) fn inside(
     contacts: &[Contact],
     level_random: &mut impl RandomSource,
 ) {
-    // BurningLiquidBlock.entityInside: immunity is checked before ignition;
-    // a different liquid's height must not trigger this block's burn policy.
+    let Some(policy) = resources.and_then(|r| r.interaction_at_contact(state, contacts)) else {
+        return;
+    };
+    // Source effect contact applies to LivingEntity, including fire-immune mobs.
+    // Resolve vanilla immunities and effect registry IDs in the game adapter.
+    if let Some(effect) = &policy.effect
+        && matches!(
+            effect.id.id(),
+            "minecraft:poison" | "minecraft:slowness" | "minecraft:blindness"
+        )
+        && let Some(fluid) = resources.and_then(|r| r.catalog.from_block(state))
+    {
+        m.outbox.push(MobEvent::RegisteredFluidEffect {
+            mob: m.id,
+            fluid: fluid.id(),
+        });
+    }
+    // BurningLiquidBlock checks immunity before ignition. Another family's
+    // height cannot trigger this block's effect or burn policy.
     if m.kind.flags.fire_immune {
         return;
     }
-    let Some(burn) = resources
-        .and_then(|r| r.interaction_at_contact(state, contacts))
-        .and_then(|policy| policy.burn)
-    else {
+    let Some(burn) = policy.burn else {
         return;
     };
     m.ignite_for_ticks(i32::from(burn.seconds) * 20);
@@ -97,6 +108,15 @@ mod tests {
         .unwrap()
     }
     fn resources(registry: &BlockRegistry) -> RegisteredFluidResources<'_> {
+        resources_with_effect(registry, None)
+    }
+    fn resources_with_effect<'r>(
+        registry: &'r BlockRegistry,
+        effect: Option<&str>,
+    ) -> RegisteredFluidResources<'r> {
+        let effect = effect
+            .map(|id| json!({"id":id,"duration_ticks":100,"amplifier":0,"no_curatives":true}));
+        let burn = effect.is_none().then(|| json!({"seconds":10,"damage":3.0}));
         let fluids: Vec<_> = ["hot", "other"].into_iter().map(|name| json!({
             "source":format!("test:{name}"),"flowing":format!("test:flowing_{name}"),
             "block":format!("test:{name}"),"bucket":format!("test:{name}_bucket"),
@@ -104,7 +124,7 @@ mod tests {
             "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
             "interaction":{"travel":{"acceleration":0.02,"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
                 "motion_scale":0.0,"can_swim":false,"can_drown":false,"extinguishes":false,
-                "fall_distance_scale":1.0,"burn":{"seconds":10,"damage":3.0},"effect":null}
+                "fall_distance_scale":1.0,"burn":burn,"effect":effect}
         })).collect();
         RegisteredFluidResources::from_reader(
             registry,
@@ -184,6 +204,71 @@ mod tests {
             }
             assert_eq!(random.next_float(), expected.next_float());
         }
+    }
+    #[test]
+    fn standard_effect_contacts_include_fire_immune_mobs_but_not_other_families() {
+        let registry = registry();
+        for id in [
+            "minecraft:poison",
+            "minecraft:slowness",
+            "minecraft:blindness",
+            "test:custom",
+        ] {
+            let resources = resources_with_effect(&registry, Some(id));
+            let mut m = mob();
+            Arc::make_mut(&mut m.kind).flags.fire_immune = true;
+            let contacts = sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(0)));
+            let mut random = LegacyRandom::new(8);
+            inside(
+                &mut m,
+                Some(&resources),
+                BlockStateId(16),
+                &contacts,
+                &mut random,
+            );
+            assert!(m.outbox.is_empty());
+            inside(
+                &mut m,
+                Some(&resources),
+                BlockStateId(1),
+                &contacts,
+                &mut random,
+            );
+            if id == "test:custom" {
+                assert!(m.outbox.is_empty());
+            } else {
+                assert!(
+                    matches!(m.outbox.as_slice(), [MobEvent::RegisteredFluidEffect { mob: 1, fluid }]
+                    if *fluid == resources.catalog.from_block(BlockStateId(1)).unwrap().id())
+                );
+            }
+            assert_eq!(m.health, 10.0);
+            assert_eq!(m.fire_ticks, 0);
+        }
+    }
+    #[test]
+    fn active_contact_curative_policy_survives_weaker_updates_and_generic_curing() {
+        let mut m = mob();
+        m.add_effect_with_curatives("poison", 100, 0, true);
+        m.add_effect("speed", 200, 0);
+        m.add_effect("poison", 50, 0);
+        m.cure_effects();
+        assert_eq!(m.extra.effects, [("minecraft:poison", 100, 0)]);
+        assert_eq!(m.extra.no_curative_effects, ["minecraft:poison"]);
+        // A longer ordinary active instance takes back ordinary curability.
+        m.add_effect("poison", 200, 0);
+        assert!(m.extra.no_curative_effects.is_empty());
+        m.cure_effects();
+        assert!(m.extra.effects.is_empty());
+        // Stronger instances replace the active policy even when shorter.
+        m.add_effect_with_curatives("slowness", 100, 0, true);
+        m.add_effect("slowness", 20, 1);
+        assert!(m.extra.no_curative_effects.is_empty());
+        // Infinite protected instances are not weakened by finite refreshes.
+        m.add_effect_with_curatives("blindness", -1, 0, true);
+        m.add_effect("blindness", 100, 0);
+        m.cure_effects();
+        assert_eq!(m.extra.effects, [("minecraft:blindness", -1, 0)]);
     }
     #[test]
     fn fire_resistance_rejects_lava_and_afterburn_but_not_unrelated_damage() {

@@ -1004,6 +1004,8 @@ pub struct Extra {
     pub vector: [f64; 3],
     /// Active status effects: (effect id, ticks left, amplifier).
     pub effects: Vec<(&'static str, i32, i32)>,
+    /// Active instances with an explicit empty curative-item policy.
+    pub no_curative_effects: Vec<&'static str>,
     /// The effects above given with `hideParticles`: no swirls for them.
     pub hidden_effects: Vec<&'static str>,
     /// The effects above that are ambient (`MobEffectInstance.isAmbient`: a beacon's), whose swirls
@@ -1330,6 +1332,11 @@ pub enum MobEvent {
         count: u32,
     },
     Sound(&'static str, [f64; 3], f32, f32),
+    /// Source block contact, resolved against the current effect registry/tags.
+    RegisteredFluidEffect {
+        mob: u32,
+        fluid: horizon_world::registered_fluids::RegisteredFluidId,
+    },
     /// Additional accepted-hit burn audio, retaining the mob sound category.
     RegisteredFluidBurnSound {
         at: [f64; 3],
@@ -3421,6 +3428,9 @@ impl Mob {
     }
     pub fn add_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
         let effect = horizon_client_core::potions::namespaced(effect);
+        if self.effect_takes_update(effect, ticks, amplifier) {
+            self.extra.no_curative_effects.retain(|id| *id != effect);
+        }
         // AbsorptionMobEffect.addAttributeModifiers: at least 4 hearts-halves per level.
         if effect == "minecraft:absorption"
             && self
@@ -3445,6 +3455,54 @@ impl Mob {
         } else {
             self.extra.effects.push((effect, ticks, amplifier));
         }
+    }
+    fn effect_takes_update(&self, effect: &str, ticks: i32, amplifier: i32) -> bool {
+        self.extra
+            .effects
+            .iter()
+            .find(|e| e.0 == effect)
+            .is_none_or(|e| {
+                amplifier > e.2 || (amplifier == e.2 && e.1 != -1 && (ticks == -1 || e.1 < ticks))
+            })
+    }
+    /// A visible, nonambient contact instance with explicit curative policy.
+    /// The active instance takes the policy only on the same stronger/longer
+    /// update that replaces its data. Hidden weaker instances remain unsupported.
+    pub fn add_effect_with_curatives(
+        &mut self,
+        effect: &'static str,
+        ticks: i32,
+        amplifier: i32,
+        no_curatives: bool,
+    ) {
+        let effect = horizon_client_core::potions::namespaced(effect);
+        let take = self.effect_takes_update(effect, ticks, amplifier);
+        self.add_effect_with(effect, ticks, amplifier, false, true);
+        if take && no_curatives {
+            self.extra.no_curative_effects.retain(|id| *id != effect);
+            self.extra.no_curative_effects.push(effect);
+        }
+    }
+    /// Generic consumable curing. Commands and direct removals remain unrestricted.
+    /// Callers implementing a mob consumable use this instead of clearing effects.
+    pub fn cure_effects(&mut self) {
+        let protected = &self.extra.no_curative_effects;
+        for &(id, _, amp) in &self.extra.effects {
+            if id == "minecraft:absorption" && !protected.contains(&id) {
+                self.absorption = (self.absorption - 4.0 * (amp + 1) as f32).max(0.0);
+            }
+        }
+        self.extra.effects.retain(|e| protected.contains(&e.0));
+        let effects = &self.extra.effects;
+        self.extra
+            .hidden_effects
+            .retain(|id| effects.iter().any(|e| e.0 == *id));
+        self.extra
+            .ambient_effects
+            .retain(|id| effects.iter().any(|e| e.0 == *id));
+        self.extra
+            .no_curative_effects
+            .retain(|id| effects.iter().any(|e| e.0 == *id));
     }
     pub fn speed_bonus(&self) -> f64 {
         ai::speed_bonus(self)
