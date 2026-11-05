@@ -49,3 +49,6 @@ species-consumed travel paths remain as documented by the earlier slice, while
 any mob reaching the shared jump handler can consume a registered jump policy.
 Custom mob status behavior and exact source/mixed-fluid order remain separate.
 The final integration pass is still required; #379 remains open.
+
+Common mob eye-immersion drowning is covered by the later
+`registered-mob-fluid-drowning.md` slice, with species-specific limits noted there.
