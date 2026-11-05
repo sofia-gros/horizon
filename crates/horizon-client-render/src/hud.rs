@@ -964,6 +964,15 @@ impl HudAtlas {
                 }
             }
         }
+        if full {
+            for texture in horizon_world::registered_fluids::resources::camera_textures(root)? {
+                let (namespace, path) = texture.split_once(':').expect("validated camera texture");
+                let file = root.join(format!("assets/{namespace}/textures/{path}.png"));
+                if !files.contains(&file) {
+                    files.push(file);
+                }
+            }
+        }
         files.retain(|p| {
             let s = p.to_string_lossy();
             !s.contains("title/background") && !s.contains("realms") && !s.contains("presets")

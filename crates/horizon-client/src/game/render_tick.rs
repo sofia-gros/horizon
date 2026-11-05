@@ -348,6 +348,33 @@ impl Game<'_> {
             fog_type(&self.world, self.res.facts(), eye, &self.near_plane()) == FogType::Water;
         let water =
             (in_water && !spectator).then(|| (self.eye_brightness(eye), self.yaw, self.pitch));
+        let registered_fluid = if self.camera_type.first_person() && !spectator {
+            self.res
+                .rest()
+                .registered_fluids
+                .as_ref()
+                .and_then(|resources| {
+                    resources
+                        .camera_at(eye, |pos| {
+                            (self.world.loaded(pos.x, pos.z)
+                                && (self.world.shape.min_y..self.world.shape.max_y())
+                                    .contains(&pos.y))
+                            .then(|| self.world.block(pos.x, pos.y, pos.z))
+                        })
+                        .map(
+                            |(camera, tint)| horizon_client::screen_effects::FluidOverlay {
+                                texture: &camera.texture,
+                                opacity: camera.opacity,
+                                tint,
+                                brightness: self.eye_brightness(eye),
+                                yaw: self.yaw,
+                                pitch: self.pitch,
+                            },
+                        )
+                })
+        } else {
+            None
+        };
         // Hud.extractCameraOverlays; the spyglass scope (and its easing) is
         // drawn on the HUD by draw_spyglass.
         let fx = &self.screen_fx;
@@ -382,6 +409,7 @@ impl Game<'_> {
             partial,
             block_overlay,
             water,
+            registered_fluid,
             on_fire: self.camera_type.first_person()
                 && !self.spectator()
                 && self.player.as_ref().is_some_and(|p| p.fire_ticks > 0),

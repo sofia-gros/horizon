@@ -1,3 +1,6 @@
+// Registered fluid camera quads adapt Mantle FluidRenderer.renderCamera,
+// Copyright (c) 2022 SlimeKnights. MIT; full notice in THIRD_PARTY_NOTICES.md.
+// Changed: host atlas/metadata sampling and HDR world-tint screen quads.
 //! Full-screen camera effects drawn between the world and the HUD:
 //! `ScreenEffectRenderer` (in-wall block texture, underwater overlay, fire)
 //! and the full-screen `Hud` camera overlays laid out by
@@ -49,6 +52,17 @@ pub struct ScreenQuad {
     pub world_tint: bool,
 }
 
+/// A declared first-person fluid overlay, lit at the player's eye.
+#[derive(Clone, Copy)]
+pub struct FluidOverlay<'a> {
+    pub texture: &'a str,
+    pub opacity: f32,
+    pub tint: u32,
+    pub brightness: f32,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
 /// What the camera sees this frame.
 pub struct ScreenInputs<'a> {
     pub sprites: &'a HashMap<String, Rect>,
@@ -60,6 +74,7 @@ pub struct ScreenInputs<'a> {
     pub block_overlay: Option<String>,
     /// Eye in water: (lightmap brightness at the eye, yaw, pitch).
     pub water: Option<(f32, f32, f32)>,
+    pub registered_fluid: Option<FluidOverlay<'a>>,
     pub on_fire: bool,
     /// `Hud.extractCameraOverlays` draws: the full-screen blits become
     /// screen quads (the spyglass, its fills and the nausea swirl do not).
@@ -179,7 +194,33 @@ impl ScreenEffects {
                 0,
             ));
         }
-        if let Some((brightness, yaw, pitch)) = input.water
+        if let Some(fluid) = input.registered_fluid
+            && let Some(rect) = sprite(
+                fluid
+                    .texture
+                    .strip_prefix("minecraft:")
+                    .unwrap_or(fluid.texture),
+            )
+        {
+            let (u, v) = (-fluid.yaw / 64.0, fluid.pitch / 64.0);
+            let uv = [[u + 4.0, v + 4.0], [u, v + 4.0], [u, v], [u + 4.0, v]];
+            let color = [
+                fluid.brightness * ((fluid.tint >> 16) & 255) as f32 / 255.0,
+                fluid.brightness * ((fluid.tint >> 8) & 255) as f32 / 255.0,
+                fluid.brightness * (fluid.tint & 255) as f32 / 255.0,
+                fluid.opacity,
+            ];
+            let name = fluid
+                .texture
+                .strip_prefix("minecraft:")
+                .unwrap_or(fluid.texture);
+            out.push(ScreenQuad {
+                world_tint: true,
+                ..hand_quad(full, uv, rect, color, texture_sampling(name))
+            });
+        }
+        if input.registered_fluid.is_none()
+            && let Some((brightness, yaw, pitch)) = input.water
             && let Some(rect) = sprite("misc/underwater")
         {
             let (u, v) = (-yaw / 64.0, pitch / 64.0);
@@ -346,6 +387,7 @@ mod tests {
             partial: 0.0,
             block_overlay: None,
             water: Some((1.0, 0.0, 0.0)),
+            registered_fluid: None,
             on_fire: false,
             gui_overlays: &[crate::hud_overlays::vignette(320, 240, 1.0, 0.0)],
         };
@@ -400,6 +442,7 @@ mod tests {
             partial: 0.0,
             block_overlay: Some("block/stone".to_owned()),
             water: Some((1.0, 0.0, 0.0)),
+            registered_fluid: None,
             on_fire: false,
             gui_overlays: &[crate::hud_overlays::vignette(320, 240, 1.0, 0.0)],
         });
@@ -408,6 +451,72 @@ mod tests {
         // Only the underwater overlay tints the world; the block in the way covers it.
         let tints: Vec<_> = quads.iter().map(|q| q.world_tint).collect();
         assert_eq!(tints, [false, true, false]);
+    }
+    #[test]
+    fn registered_camera_uses_source_uv_tint_opacity_and_texture_sampling() {
+        let rect = Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 16,
+            h: 16,
+        };
+        let sprites = HashMap::from([
+            ("test:fluid/camera".to_owned(), rect),
+            ("misc/underwater".to_owned(), rect),
+        ]);
+        let flags = HashMap::from([(
+            "test:fluid/camera".to_owned(),
+            TextureFlags {
+                blur: true,
+                clamp: false,
+            },
+        )]);
+        let fluid = FluidOverlay {
+            texture: "test:fluid/camera",
+            opacity: 0.1,
+            tint: 0x804020,
+            brightness: 0.5,
+            yaw: 64.0,
+            pitch: 32.0,
+        };
+        let mut input = ScreenInputs {
+            sprites: &sprites,
+            flags: &flags,
+            aspect: 1.6,
+            partial: 0.0,
+            block_overlay: None,
+            water: None,
+            registered_fluid: Some(fluid),
+            on_fire: false,
+            gui_overlays: &[],
+        };
+        let quads = ScreenEffects::default().build(&input);
+        assert_eq!(quads.len(), 1);
+        let quad = &quads[0];
+        assert!(quad.world_tint);
+        assert_eq!(quad.blend, Blend::Alpha);
+        assert_eq!(quad.sampling, SAMPLE_BLUR);
+        assert_eq!(
+            quad.vertices.map(|v| v.uv),
+            [[3.0, 4.5], [-1.0, 4.5], [-1.0, 0.5], [3.0, 0.5]]
+        );
+        assert_eq!(
+            quad.vertices[0].color,
+            [64.0 / 255.0, 32.0 / 255.0, 16.0 / 255.0, 0.1]
+        );
+        input.water = Some((1.0, 0.0, 0.0));
+        assert_eq!(ScreenEffects::default().build(&input).len(), 1);
+        input.registered_fluid = Some(FluidOverlay {
+            texture: "test:missing",
+            ..fluid
+        });
+        assert!(ScreenEffects::default().build(&input).is_empty());
+        input.registered_fluid = None;
+        assert_eq!(ScreenEffects::default().build(&input).len(), 1);
+        input.water = None;
+        assert!(ScreenEffects::default().build(&input).is_empty());
     }
     #[test]
     fn mcmeta_texture_section() {

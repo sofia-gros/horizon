@@ -32,8 +32,8 @@ The companion content supplies all seventy source ranges: five families at
 -8/24, four at 0.25/4, Glass at 0.25/8, and sixty at 0.25/2. The twelve non-white
 source tints and explicit Queen's Slime color supply thirteen multipliers.
 The other fifty-seven families now opt into runtime still-sprite color
-calculation. Camera overlay sprites remain outside this slice. No texture files
-or game assets are copied by the host change.
+calculation. Standalone camera overlays are described in `registered-fluid-camera.md`. No
+texture files or game assets are copied by these host changes.
 
 Only brief static review, rustfmt and whitespace inspection were performed.
 Added regressions for optional declarations, bad data, camera immersion,

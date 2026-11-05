@@ -255,3 +255,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+Registered-fluid camera quads in
+`crates/horizon-client-render/src/screen_effects.rs` adapt
+[Mantle FluidRenderer.renderCamera at 17c287ad52f7b10154e07fa7570dc7bccd74ca2b](https://github.com/SlimeKnights/Mantle/blob/17c287ad52f7b10154e07fa7570dc7bccd74ca2b/src/main/java/slimeknights/mantle/client/render/FluidRenderer.java).
+Camera texture/opacity declarations follow `FluidTexture` and
+`ClientTextureFluidType` at that revision. Copyright (c) 2022 SlimeKnights;
+the full MIT license immediately above applies. Changes: explicit opt-in
+resource declarations, loaded-only eye sampling, shared atlas metadata and the
+host's HDR world-tint screen pipeline. Only the source's opaque RGB tint case
+is supported; no Forge implementation or game assets were copied.
