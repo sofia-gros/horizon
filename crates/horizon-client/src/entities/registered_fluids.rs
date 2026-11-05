@@ -1,13 +1,51 @@
-// Burning-liquid contact follows TConstruct, Copyright (c) 2022 SlimeKnights.
+// Fluid fire policy follows TConstruct, Copyright (c) 2022 SlimeKnights.
 // MIT License; source and license are in THIRD_PARTY_NOTICES.md.
 // Changed: registered family policies and the host dropped-item damage model.
-//! Authoritative item burn contact, without native fluid aliases.
+//! Authoritative item fire contact, without native fluid aliases.
 use super::ItemEntity;
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_world::{
-    registered_fluids::{interaction::BurnContact, resources::RegisteredFluidResources},
+    registered_fluids::{
+        contact::Contact, interaction::BurnContact, resources::RegisteredFluidResources,
+    },
     registry::BlockStateId,
 };
+
+/// Clear burning before the ordinary on-fire tick, without changing health.
+/// Native water/fire immunity and native-mod cancellation remain at the caller.
+pub(super) fn extinguish(
+    item: &mut ItemEntity,
+    resources: &RegisteredFluidResources<'_>,
+    block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+) {
+    if item.fire_ticks <= 0 {
+        return;
+    }
+    if sample(item, resources, block).is_some_and(|contacts| {
+        contacts.iter().any(|contact| {
+            contact.height > 0.0
+                && resources
+                    .interaction(contact.source)
+                    .is_some_and(|p| p.extinguishes)
+        })
+    }) {
+        item.fire_ticks = 0;
+    }
+}
+
+fn sample(
+    item: &ItemEntity,
+    resources: &RegisteredFluidResources<'_>,
+    block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+) -> Option<Vec<Contact>> {
+    let bounds = item.bounds().deflate(Vec3::new(0.001, 0.001, 0.001));
+    let eyes = Vec3::new(
+        item.position.x,
+        item.position.y + f64::from(0.2125f32),
+        item.position.z,
+    );
+    resources.catalog.contacts(bounds, eyes, 8192, block).ok()
+}
 
 pub(super) fn burn_contacts(
     item: &mut ItemEntity,
@@ -19,15 +57,10 @@ pub(super) fn burn_contacts(
     if item.health <= 0 || fire_immune {
         return 0;
     }
-    let bounds = item.bounds().deflate(Vec3::new(0.001, 0.001, 0.001));
-    let eyes = Vec3::new(
-        item.position.x,
-        item.position.y + f64::from(0.2125f32),
-        item.position.z,
-    );
-    let Ok(contacts) = resources.catalog.contacts(bounds, eyes, 8192, &mut block) else {
+    let Some(contacts) = sample(item, resources, &mut block) else {
         return 0;
     };
+    let bounds = item.bounds().deflate(Vec3::new(0.001, 0.001, 0.001));
     // The sampler has validated finite coordinates and the query budget. An
     // item's fixed 0.25-wide box visits at most eight body cells, never eye-only
     // or above-surface probe cells. Source entityInside can hit once per block.
@@ -91,13 +124,19 @@ mod tests {
         .unwrap()
     }
     fn resources(registry: &BlockRegistry) -> RegisteredFluidResources<'_> {
+        resources_with_hot_extinguishing(registry, false)
+    }
+    fn resources_with_hot_extinguishing(
+        registry: &BlockRegistry,
+        hot_extinguishes: bool,
+    ) -> RegisteredFluidResources<'_> {
         let fluids:Vec<_> = ["hot", "cool"].map(|name| json!({
             "source":format!("test:{name}"),"flowing":format!("test:flowing_{name}"),
             "block":format!("test:{name}"),"bucket":format!("test:{name}_bucket"),
             "policy":{"drop_off":1,"slope_distance":4,"tick_delay":5,"source_conversion":false},
             "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
             "interaction":{"travel":{"acceleration":0.02,"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
-              "motion_scale":0.0,"can_swim":false,"can_drown":false,"extinguishes":false,"fall_distance_scale":0.5,
+              "motion_scale":0.0,"can_swim":false,"can_drown":false,"extinguishes":name == "cool" || hot_extinguishes,"fall_distance_scale":0.5,
               "burn":if name == "hot" { json!({"seconds":10,"damage":2.0}) } else { json!(null) }}
         })).into_iter().collect();
         RegisteredFluidResources::from_reader(
@@ -137,6 +176,81 @@ mod tests {
     }
     fn source(p: BlockPos) -> Option<BlockStateId> {
         (p.y == 0).then_some(BlockStateId(0))
+    }
+    fn cool(p: BlockPos) -> Option<BlockStateId> {
+        (p.y == 0).then_some(BlockStateId(16))
+    }
+    #[test]
+    fn cool_contact_clears_fire_without_healing_or_changing_item_metadata() {
+        let registry = registry();
+        let r = resources(&registry);
+        let mut drop = item(0.8);
+        drop.fire_ticks = 200;
+        drop.health = 2;
+        drop.age = 77;
+        drop.pickup_delay = 14;
+        drop.thrower = Some([1, 2, 3, 4]);
+        drop.target = Some([5, 6, 7, 8]);
+        extinguish(&mut drop, &r, cool);
+        assert_eq!(
+            (drop.fire_ticks, drop.health, drop.age, drop.pickup_delay),
+            (0, 2, 77, 14)
+        );
+        assert_eq!(drop.thrower, Some([1, 2, 3, 4]));
+        assert_eq!(drop.target, Some([5, 6, 7, 8]));
+        assert_eq!(drop.stack.item.as_ref(), "minecraft:oak_planks");
+        assert_eq!(drop.stack.count, 1);
+        extinguish(&mut drop, &r, |_| panic!("unlit items need no query"));
+    }
+    #[test]
+    fn only_the_declared_extinguishing_body_surface_puts_out_fire() {
+        let registry = registry();
+        let r = resources(&registry);
+        for (y, state, expected) in [
+            (0.0, 16, 0),
+            (0.9, 16, 200),
+            (0.0, 23, 0),
+            (0.2, 23, 200),
+            (0.0, 0, 200),
+        ] {
+            let mut drop = item(y);
+            drop.fire_ticks = 200;
+            extinguish(&mut drop, &r, |p| (p.y == 0).then_some(BlockStateId(state)));
+            assert_eq!(drop.fire_ticks, expected, "y={y}, state={state}");
+        }
+        let mut absent = item(0.0);
+        absent.fire_ticks = 200;
+        extinguish(&mut absent, &r, |_| None);
+        assert_eq!(absent.fire_ticks, 200);
+        absent.position.y = f64::NAN;
+        extinguish(&mut absent, &r, |_| panic!("invalid bounds"));
+        assert_eq!(absent.fire_ticks, 200);
+    }
+    #[test]
+    fn cool_then_hot_contact_can_reignite_without_reviving_a_drop() {
+        let registry = registry();
+        let r = resources(&registry);
+        let mut drop = item(0.0);
+        drop.position.x = 1.0;
+        drop.fire_ticks = 200;
+        let mixed = |p: BlockPos| (p.y == 0).then_some(BlockStateId(if p.x == 0 { 16 } else { 0 }));
+        extinguish(&mut drop, &r, mixed);
+        assert_eq!(drop.fire_ticks, 0);
+        assert_eq!(burn_contacts(&mut drop, &r, false, false, mixed), 1);
+        assert_eq!((drop.fire_ticks, drop.health), (200, 3));
+        // Magma's source policy can both extinguish and burn in the same family.
+        let magma_like = resources_with_hot_extinguishing(&registry, true);
+        drop.position.x = 0.5;
+        extinguish(&mut drop, &magma_like, source);
+        assert_eq!((drop.fire_ticks, drop.health), (0, 3));
+        assert_eq!(
+            burn_contacts(&mut drop, &magma_like, false, false, source),
+            1
+        );
+        assert_eq!((drop.fire_ticks, drop.health), (200, 1));
+        drop.health = 0;
+        extinguish(&mut drop, &r, cool);
+        assert_eq!((drop.fire_ticks, drop.health), (0, 0));
     }
     #[test]
     fn contact_ignites_and_damages_each_tick_including_the_lethal_hit() {

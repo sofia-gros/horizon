@@ -320,3 +320,10 @@ Copyright (c) 2022 SlimeKnights, MIT (license reproduced above). It retains
 positive family-height gating, ignition before lava damage, and the accepted-hit
 sound. The Rust item/world integration is original; no Forge implementation was
 read or copied.
+
+Dropped-item extinguishing in `entities/registered_fluids.rs` consumes the
+explicit `canExtinguish(true)` policy in MIT Tinkers' Construct
+`TinkerFluids.cool()` at
+[`f4e77d43f39ba1047bf93ae816b7e1beaab514c2`](https://github.com/SlimeKnights/TinkersConstruct/blob/f4e77d43f39ba1047bf93ae816b7e1beaab514c2/src/main/java/slimeknights/tconstruct/fluids/TinkerFluids.java),
+Copyright (c) 2022 SlimeKnights (MIT license above). The host phase integration
+is original Rust code; no Forge implementation was read or copied.
