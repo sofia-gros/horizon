@@ -20016,6 +20016,7 @@ fn load_world_rest(
     let registered_fluids = assets.registered_fluids.clone();
     if let Some(fluids) = &registered_fluids {
         fluids.validate_buckets(|id| items.get(id).is_some())?;
+        fluids.validate_effects(|id| horizon_client::brewing::effect(id).is_some())?;
     }
     Ok(WorldRest {
         registered_fluids,

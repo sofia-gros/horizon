@@ -17,13 +17,28 @@ impl Game<'_> {
     /// path. Prediction never adds effects locally; normal sync supplies them.
     pub(super) fn registered_fluid_effect(
         &mut self,
-        effect: horizon_world::registered_fluids::interaction::EffectContact,
+        fluid: horizon_world::registered_fluids::RegisteredFluidId,
     ) {
         if self.remote.is_some() || self.spectator() {
             return;
         }
+        let Some(effect) = self
+            .res
+            .rest()
+            .registered_fluids
+            .as_ref()
+            .and_then(|resources| resources.interaction(fluid))
+            .and_then(|policy| policy.effect.as_ref())
+        else {
+            return;
+        };
+        // Resolve to the existing registry-owned static ID, never leak a
+        // per-contact string or treat an unknown declaration as an inert effect.
+        let Some(definition) = horizon_client::brewing::effect(effect.id.player_id()) else {
+            return;
+        };
         let mut instance = horizon_client::effects::EffectInstance::new(
-            effect.id.player_id(),
+            definition.id,
             effect.duration_ticks as i32,
             i32::from(effect.amplifier),
         );

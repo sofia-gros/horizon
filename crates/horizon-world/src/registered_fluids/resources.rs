@@ -186,6 +186,19 @@ impl<'r> RegisteredFluidResources<'r> {
         }
         Ok(())
     }
+    /// Resolve declared contact effects against the enabled effect registry.
+    /// Syntax alone never makes an unknown custom effect usable.
+    pub fn validate_effects(&self, exists: impl Fn(&str) -> bool) -> io::Result<()> {
+        for effect in self.interactions.values().filter_map(|p| p.effect.as_ref()) {
+            if !exists(effect.id.id()) {
+                return Err(invalid(format!(
+                    "registered fluid effect is missing: {}",
+                    effect.id.id()
+                )));
+            }
+        }
+        Ok(())
+    }
     pub fn bucket_fluid(&self, item: &str) -> Option<RegisteredFluidId> {
         self.buckets.get(item).copied()
     }
@@ -204,13 +217,13 @@ impl<'r> RegisteredFluidResources<'r> {
         &self,
         state: BlockStateId,
         contacts: &[super::contact::Contact],
-    ) -> Option<InteractionPolicy> {
+    ) -> Option<&InteractionPolicy> {
         let fluid = self.catalog.from_block(state)?;
         let source = self.catalog.source(fluid.id()).ok()?;
         contacts
             .iter()
             .any(|contact| contact.source == source && contact.height > 0.0)
-            .then(|| self.interaction(source).copied())
+            .then(|| self.interaction(source))
             .flatten()
     }
     pub fn visual(&self, state: BlockStateId) -> Option<(&FluidVisual, RegisteredFluidState)> {
@@ -293,6 +306,7 @@ mod tests {
                     .interaction_at_contact(block, &[contact])
                     .unwrap()
                     .effect
+                    .as_ref()
                     .unwrap();
                 assert_eq!(effect.id.player_id(), player_id);
                 assert_eq!((effect.duration_ticks, effect.amplifier), (100, 0));
@@ -326,6 +340,7 @@ mod tests {
                     .interaction(source)
                     .unwrap()
                     .effect
+                    .as_ref()
                     .unwrap()
                     .no_curatives
             );
@@ -334,7 +349,8 @@ mod tests {
                 json!({"id":id,"duration_ticks":72001,"amplifier":0}),
                 json!({"id":id,"duration_ticks":100,"amplifier":256}),
                 json!({"id":"minecraft:instant_damage","duration_ticks":100,"amplifier":0}),
-                json!({"id":"tconstruct:enderference","duration_ticks":100,"amplifier":0}),
+                json!({"id":"missing_namespace","duration_ticks":100,"amplifier":0}),
+                json!({"id":"bad:Uppercase","duration_ticks":100,"amplifier":0}),
                 json!({"id":id,"duration_ticks":100,"amplifier":0,"curatives":[]}),
                 json!({"id":id,"duration_ticks":100,"amplifier":0,"no_curatives":"true"}),
             ] {
@@ -345,6 +361,60 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn custom_contact_effect_requires_registration_and_keeps_family_policy() {
+        use super::super::contact::Contact;
+        let registry = registry();
+        let mut doc = document();
+        doc["fluids"][0]["interaction"] = json!({"travel":{"acceleration":0.02,
+            "horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
+            "motion_scale":0.0023333333333333335,"can_swim":true,"can_drown":true,
+            "extinguishes":true,"fall_distance_scale":0.5,
+            "effect":{"id":"test:custom_effect","duration_ticks":100,"amplifier":2,
+                      "no_curatives":true}});
+        let bytes = doc.to_string();
+        let resources = RegisteredFluidResources::from_reader(&registry, bytes.as_bytes()).unwrap();
+        assert!(resources.validate_effects(|_| false).is_err());
+        assert!(
+            resources
+                .validate_effects(|id| id == "other:custom_effect")
+                .is_err()
+        );
+        resources
+            .validate_effects(|id| id == "test:custom_effect")
+            .unwrap();
+        let source = resources.catalog.id("test:liquid").unwrap();
+        let flowing = resources.catalog.id("test:flowing_liquid").unwrap();
+        let contact = Contact {
+            source,
+            height: 0.25,
+            eyes_inside: false,
+            current: Default::default(),
+        };
+        for fluid in [
+            resources.catalog.state(source, 8, false).unwrap(),
+            resources.catalog.state(flowing, 4, false).unwrap(),
+        ] {
+            let block = resources.catalog.block(fluid).unwrap();
+            let effect = resources
+                .interaction_at_contact(block, &[contact])
+                .unwrap()
+                .effect
+                .as_ref()
+                .unwrap();
+            assert_eq!(effect.id.player_id(), "test:custom_effect");
+            assert_eq!(
+                (effect.duration_ticks, effect.amplifier, effect.no_curatives),
+                (100, 2, true)
+            );
+            assert!(resources.interaction_at_contact(block, &[]).is_none());
+        }
+        // A request from a replaced catalog cannot select the new catalog's
+        // effect merely because its family has the same textual names/index.
+        let replacement =
+            RegisteredFluidResources::from_reader(&registry, bytes.as_bytes()).unwrap();
+        assert!(replacement.interaction(source).is_none());
     }
     #[test]
     fn content_merge_rejects_foreign_or_duplicate_ids_without_mutating_aggregate() {
