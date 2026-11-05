@@ -365,11 +365,49 @@ impl MotionWorld<'_, '_, '_> {
         if let Some(velocity) = self.player.pending_effect_bounce.take() {
             self.player.velocity = velocity;
             self.player.fall_distance = 0.0;
+            if let Some(momentum) = &mut self.player.effect_bounce_momentum {
+                momentum.refresh(velocity, self.player.client_side);
+            } else {
+                self.player.effect_bounce_momentum =
+                    horizon_world::bounce_momentum::Momentum::new(velocity);
+            }
             if !self.player.client_side {
                 self.player.ground.on_ground = false;
                 self.player.health.sync_velocity = true;
             }
         }
+    }
+    /// Once per supported living-player tick, after fluid observations and
+    /// before travel. A started handler outlives the enabling status effect.
+    pub fn tick_effect_bounce_momentum(&mut self) -> Result<()> {
+        if self.player.effect_bounce_momentum.is_none() {
+            return Ok(());
+        }
+        let cancel = self.player.fall_flying || self.player.spectator;
+        if cancel {
+            self.player.effect_bounce_momentum = None;
+            return Ok(());
+        }
+        let in_air = !self.player.ground.on_ground
+            && !self.player.fluids.was_touching_water
+            && !self.climbable()?;
+        let momentum = self.player.effect_bounce_momentum.as_mut().unwrap();
+        let update = momentum.tick(
+            self.player.health.tick_count,
+            self.player.velocity,
+            in_air,
+            false,
+        );
+        if let Some(velocity) = update.velocity {
+            self.player.velocity = velocity;
+            if !self.player.client_side {
+                self.player.health.sync_velocity = true;
+            }
+        }
+        if !update.active {
+            self.player.effect_bounce_momentum = None;
+        }
+        Ok(())
     }
     /// `Entity.propagateFallToPassengers`: the call on this player, whose
     /// vehicle fell `distance` blocks at `multiplier`, so the player takes

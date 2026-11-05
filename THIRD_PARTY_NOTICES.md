@@ -172,7 +172,11 @@ BlueMap is licensed under the MIT license:
 suppressed damage multiplier and server/client rebound arithmetic from
 `ModifierEvents.bounceOnFall` in the same TConstruct revision below. Changes:
 pure opt-in response, finite-input guards and host post-restitution application.
-Source momentum preservation and audio are not included in this slice.
+`crates/horizon-world/src/bounce_momentum.rs` adapts the horizontal speed
+preservation and stop/end timers of `SlimeBounceHandler` at the same revision.
+Changes: explicit per-player state, finite-input and once-per-host-tick guards,
+with post-restitution landing retained from the earlier slice. Source angle
+tracking/audio and exact event-phase equivalence are not included.
 
 
 `crates/horizon-client/src/motion/registered_fluids.rs` adapts the family-height
