@@ -1190,11 +1190,36 @@ impl Mob {
             self.position.z.floor() as i32,
         );
         let stands_on_fluid = self.kind.flags.lava_walker && w.fluid(x, y, z) == Fluid::Lava;
-        if self.is_in_liquid() && self.affected_by_fluids() && !stands_on_fluid {
-            self.travel_in_fluid(w, input, events);
-        } else {
-            self.travel_in_air(w, input, events);
+        if self.affected_by_fluids() && !stands_on_fluid {
+            if self.is_in_liquid() {
+                self.travel_in_fluid(w, input, events);
+                return;
+            }
+            if let Some(policy) = super::registered_fluids::travel(self, w) {
+                let gravity = self.effective_gravity();
+                let falling = self.velocity.y <= 0.0;
+                self.move_relative(policy.acceleration, input);
+                self.do_move(w, events);
+                self.finish_registered_travel(policy, gravity, falling);
+                return;
+            }
         }
+        self.travel_in_air(w, input, events);
+    }
+    /// Match the existing registered player travel kernel after the ordinary
+    /// collision/block-contact move. Gravity and falling were captured before it.
+    pub(super) fn finish_registered_travel(
+        &mut self,
+        policy: horizon_world::registered_fluids::interaction::TravelPolicy,
+        gravity: f64,
+        falling: bool,
+    ) {
+        self.velocity = fluid_falling(
+            gravity * policy.gravity_scale * 16.0,
+            falling,
+            self.extra.sprinting,
+            policy.damp(self.velocity, 0.0),
+        );
     }
     /// LivingEntity.travelFlying: no gravity, `0.91F` drag in the air,
     /// `0.8F` in water and 0.5 in lava. A happy ghast swims as fast as it
