@@ -1537,6 +1537,7 @@ impl ArmorStand {
         scene: &mut crate::collisions::SceneCollisions,
         facts: &BlockFacts,
         in_water: bool,
+        registered_travel: Option<horizon_world::registered_fluids::interaction::TravelPolicy>,
         push: &mut dyn FnMut(Aabb, &mut Vec3),
         border: Option<&BorderGeometry>,
     ) {
@@ -1564,7 +1565,7 @@ impl ArmorStand {
         // `travelInFluid` reads `isFalling` before the move and any push;
         // `travelInAir` reads ground friction before the move.
         let falling = wanted.y <= 0.0;
-        let friction = if !in_water && self.on_ground {
+        let friction = if !in_water && registered_travel.is_none() && self.on_ground {
             let below = scene.world.block(
                 self.position.x.floor() as i32,
                 (self.position.y - 0.500_001).floor() as i32,
@@ -1637,6 +1638,8 @@ impl ArmorStand {
                     y - 0.08 / 16.0
                 };
             Vec3::new(velocity.x * slow, adjusted, velocity.z * slow)
+        } else if let Some(policy) = registered_travel {
+            registered_fluids::stand_travel_velocity(policy, velocity, falling)
         } else {
             let drag = f64::from(friction * 0.91f32);
             Vec3::new(
@@ -2801,7 +2804,7 @@ mod armor_stand_motion_tests {
             binding: collision,
             subject: None,
         };
-        stand.tick(&mut scene, facts, false, &mut |_, _| {}, None);
+        stand.tick(&mut scene, facts, false, None, &mut |_, _| {}, None);
     }
 
     /// `Entity.collectColliders` (#7080): the world border's wall stops an
@@ -2835,6 +2838,7 @@ mod armor_stand_motion_tests {
                 &mut scene,
                 &facts,
                 false,
+                None,
                 &mut |_, _| {},
                 bordered.then_some(&border),
             );

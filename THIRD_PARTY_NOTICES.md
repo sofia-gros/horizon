@@ -352,3 +352,8 @@ no additional external implementation was read or copied for this wiring.
 Armor-stand fall-distance scaling reuses the registered interaction contract and
 original host entity geometry/current adapters above. It adds no external source
 adaptation; the existing TConstruct policy attribution remains unchanged.
+
+Armor-stand registered-fluid travel is original Rust wiring of the existing
+registered travel contract and native host stand movement/falling kernels.
+No additional external source was read or copied; existing policy attribution
+above remains unchanged.

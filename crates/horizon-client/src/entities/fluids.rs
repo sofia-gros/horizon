@@ -15,7 +15,9 @@ use horizon_world::{
     },
     fluid::{FluidHeightWorld, FluidKind, FluidState},
     fluid_flow::{FluidFlowWorld, flow_at},
-    registered_fluids::{contact::Contact, resources::RegisteredFluidResources},
+    registered_fluids::{
+        contact::Contact, interaction::TravelPolicy, resources::RegisteredFluidResources,
+    },
     registry::BlockStateId,
 };
 type Error = std::convert::Infallible;
@@ -140,17 +142,16 @@ impl ArmorStand {
         };
         Vec3::new(self.position.x, self.position.y + eye, self.position.z)
     }
-    /// Apply registered forces and fall scaling without native water aliases.
+    /// Apply registered forces/fall scaling and select the next travel policy.
     /// The authoritative owner calls this after native currents, before travel.
+    /// The returned policy never implies native water immersion.
     pub fn update_registered_fluids(
         &mut self,
         world: &World,
         fluids: &FluidResources,
         resources: &RegisteredFluidResources<'_>,
-    ) {
-        let Some(bounds) = self.registered_fluid_box() else {
-            return;
-        };
+    ) -> Option<TravelPolicy> {
+        let bounds = self.registered_fluid_box()?;
         let contacts = update_registered_currents(
             bounds,
             self.position,
@@ -169,6 +170,7 @@ impl ArmorStand {
             })
         });
         super::registered_fluids::scale_stand_fall(self, resources, &contacts);
+        super::registered_fluids::stand_travel(resources, &contacts)
     }
     /// `Entity.updateFluidHeightAndDoFluidPushing`: refreshes water and lava
     /// immersion over the stand's deflated box and pushes its velocity by any

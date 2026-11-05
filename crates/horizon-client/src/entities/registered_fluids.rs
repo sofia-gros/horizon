@@ -7,7 +7,9 @@ use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_world::{
     entity_fluid::CurrentTarget,
     registered_fluids::{
-        contact::Contact, interaction::BurnContact, resources::RegisteredFluidResources,
+        contact::Contact,
+        interaction::{BurnContact, TravelPolicy},
+        resources::RegisteredFluidResources,
     },
     registry::BlockStateId,
 };
@@ -95,6 +97,43 @@ pub(super) fn scale_stand_fall(
             stand.enchantment_fall_distance *= policy.fall_distance_scale;
         }
     }
+}
+
+/// Deepest configured body family wins; equal depths keep the last encounter,
+/// matching the existing registered player and common-mob travel adapters.
+pub(super) fn stand_travel(
+    resources: &RegisteredFluidResources<'_>,
+    contacts: &[Contact],
+) -> Option<TravelPolicy> {
+    contacts
+        .iter()
+        .filter(|contact| contact.height > 0.0)
+        .filter_map(|contact| {
+            resources
+                .interaction(contact.source)
+                .map(|policy| (contact.height, policy.travel))
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, policy)| policy)
+}
+
+/// Finish the collision-resolved, block-pushed move with declared drag and the
+/// existing living-fluid falling adjustment. Stands do not sprint or provide
+/// movement input; marker/NoGravity early exits remain in their tick method.
+pub(super) fn stand_travel_velocity(policy: TravelPolicy, velocity: Vec3, falling: bool) -> Vec3 {
+    let mut damped = policy.damp(velocity, 0.0);
+    let gravity = 0.08 * policy.gravity_scale * 16.0;
+    if gravity != 0.0 {
+        damped.y = if falling
+            && (damped.y - 0.005).abs() >= 0.003
+            && (damped.y - gravity / 16.0).abs() < 0.003
+        {
+            -0.003
+        } else {
+            damped.y - gravity / 16.0
+        };
+    }
+    damped
 }
 
 fn extinguishing_contact(resources: &RegisteredFluidResources<'_>, contacts: &[Contact]) -> bool {
@@ -218,12 +257,21 @@ mod tests {
         scales: [f64; 2],
         fall_scales: [f64; 2],
     ) -> RegisteredFluidResources<'_> {
+        resources_with_travel(registry, hot_extinguishes, scales, fall_scales, [0.8, 0.8])
+    }
+    fn resources_with_travel(
+        registry: &BlockRegistry,
+        hot_extinguishes: bool,
+        scales: [f64; 2],
+        fall_scales: [f64; 2],
+        drag: [f64; 2],
+    ) -> RegisteredFluidResources<'_> {
         let fluids:Vec<_> = ["hot", "cool"].map(|name| json!({
             "source":format!("test:{name}"),"flowing":format!("test:flowing_{name}"),
             "block":format!("test:{name}"),"bucket":format!("test:{name}_bucket"),
             "policy":{"drop_off":1,"slope_distance":4,"tick_delay":5,"source_conversion":false},
             "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
-            "interaction":{"travel":{"acceleration":0.02,"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
+            "interaction":{"travel":{"acceleration":0.02,"horizontal_drag":drag[usize::from(name == "cool")],"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
               "motion_scale":scales[usize::from(name == "cool")],"can_swim":false,"can_drown":false,"extinguishes":name == "cool" || hot_extinguishes,"fall_distance_scale":fall_scales[usize::from(name == "cool")],
               "burn":if name == "hot" { json!({"seconds":10,"damage":2.0}) } else { json!(null) }}
         })).into_iter().collect();
@@ -369,6 +417,74 @@ mod tests {
             );
             assert_eq!(stand.health, 20.0);
         }
+    }
+    #[test]
+    fn stand_travel_chooses_deepest_body_family_and_last_equal_depth() {
+        let registry = registry();
+        let r = resources_with_travel(&registry, false, [0.0, 0.0], [0.5, 0.5], [0.8, 0.6]);
+        let mut hot = current(&r, "test:hot", Vec3::ZERO);
+        let mut cool = current(&r, "test:cool", Vec3::ZERO);
+        hot.height = 0.7;
+        cool.height = 0.2;
+        assert_eq!(stand_travel(&r, &[hot, cool]).unwrap().horizontal_drag, 0.8);
+        cool.height = 0.9;
+        assert_eq!(stand_travel(&r, &[hot, cool]).unwrap().horizontal_drag, 0.6);
+        cool.height = hot.height;
+        assert_eq!(stand_travel(&r, &[hot, cool]).unwrap().horizontal_drag, 0.6);
+        assert_eq!(stand_travel(&r, &[cool, hot]).unwrap().horizontal_drag, 0.8);
+        hot.height = 0.0;
+        hot.eyes_inside = true;
+        assert!(stand_travel(&r, &[hot]).is_none());
+        assert!(stand_travel(&r, &[]).is_none());
+    }
+    #[test]
+    fn stand_travel_uses_declared_drag_and_preserves_collision_stopped_axes() {
+        let policy = TravelPolicy {
+            acceleration: 0.02,
+            horizontal_drag: 0.5,
+            vertical_drag: 0.25,
+            gravity_scale: 0.125,
+            jump: 0.04,
+        };
+        let velocity = stand_travel_velocity(policy, Vec3::new(0.0, -0.1, 0.6), true);
+        assert_eq!(velocity.x, 0.0);
+        assert!((velocity.y + 0.035).abs() < 1e-12);
+        assert_eq!(velocity.z, 0.3);
+        let no_gravity_scale = TravelPolicy {
+            gravity_scale: 0.0,
+            ..policy
+        };
+        let velocity = stand_travel_velocity(no_gravity_scale, Vec3::new(0.4, -0.1, 0.0), true);
+        assert_eq!(velocity, Vec3::new(0.2, -0.025, 0.0));
+    }
+    #[test]
+    fn stand_travel_keeps_the_premove_falling_snap_and_surface_gate() {
+        let registry = registry();
+        let r = resources(&registry);
+        let policy = TravelPolicy {
+            gravity_scale: 0.125,
+            ..stand_travel(&r, &[current(&r, "test:hot", Vec3::ZERO)]).unwrap()
+        };
+        // A block push can turn the velocity upward after falling was sampled.
+        assert_eq!(
+            stand_travel_velocity(policy, Vec3::new(0.0, 0.0125, 0.0), true).y,
+            -0.003
+        );
+        assert!(
+            stand_travel_velocity(policy, Vec3::new(0.0, 0.0125, 0.0), false)
+                .y
+                .abs()
+                < 1e-12
+        );
+        let mut stand = ArmorStand::new(7, Vec3::new(0.5, 0.2, 0.5), 0.0);
+        let contacts = stand_contacts(&stand, &r, |p| (p.y == 0).then_some(BlockStateId(7)));
+        assert!(stand_travel(&r, &contacts).is_none());
+        stand.position.y = 0.0;
+        let contacts = stand_contacts(&stand, &r, |p| (p.y == 0).then_some(BlockStateId(7)));
+        assert!(stand_travel(&r, &contacts).is_some());
+        stand.marker = true;
+        let contacts = stand_contacts(&stand, &r, |_| panic!("marker has no travel contact"));
+        assert!(stand_travel(&r, &contacts).is_none());
     }
     #[test]
     fn stand_fall_scales_once_per_family_even_across_source_and_flowing_cells() {
