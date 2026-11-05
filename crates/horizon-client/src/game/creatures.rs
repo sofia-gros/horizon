@@ -7032,6 +7032,7 @@ pub(super) fn melee(kind: horizon_client::mobs::DamageKind) -> bool {
 pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, caused: bool) -> &'static str {
     use horizon_client::mobs::DamageKind as K;
     match kind {
+        K::Native(source) => source.name(),
         K::PlayerAttack => "minecraft:player_attack",
         K::MaceSmash => "minecraft:mace_smash",
         K::Spear => "minecraft:spear",
@@ -7581,5 +7582,30 @@ mod knockback_tests {
         // the raw strength, and the push that follows is halved.
         assert_eq!(push(9203, 0.5), (0.0, 0.2, -0.2));
         assert_eq!(seen(9203)[0].2.strength, 0.4);
+    }
+}
+
+#[cfg(test)]
+mod native_damage_identity_tests {
+    #[test]
+    fn native_environmental_identity_reaches_hooks_and_loot_without_a_vanilla_alias() {
+        use horizon_client::mobs::{Damage, DamageKind, native_damage::NativeDamage};
+        let catalog = horizon_world::damage_source::Catalog::from_json(
+            &serde_json::json!({"data_version": horizon_world::DATA_VERSION, "types": [{
+                "id":"example:environment", "message_id":"example.environment",
+                "exhaustion":"3dcccccd", "scaling":"never", "effects":"burning",
+                "death_message_type":"default"
+            }]}),
+            &serde_json::json!({}),
+        )
+        .unwrap();
+        let custom = NativeDamage::from_catalog(&catalog, "example:environment").unwrap();
+        let source = Damage::of(DamageKind::Native(custom));
+        assert_eq!(super::source_damage_type(source), "example:environment");
+        assert!(!super::melee(source.kind));
+        assert_eq!(
+            super::damage_type(DamageKind::Magic, false),
+            "minecraft:magic"
+        );
     }
 }

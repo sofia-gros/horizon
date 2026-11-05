@@ -190,19 +190,22 @@ pub fn protection(m: &Mob, kind: DamageKind) -> f32 {
 pub fn protection_points(g: &Gear, kind: DamageKind) -> f32 {
     // Protection's `damage_protection` skips only #bypasses_invulnerability;
     // plain `generic` damage (the `/damage` default) is protected like any other.
-    if kind.bypasses_invulnerability() {
+    if kind.bypasses_invulnerability()
+        || matches!(kind, DamageKind::Native(source) if source.in_tag("minecraft:bypasses_enchantments") || source.in_tag("minecraft:bypasses_effects"))
+    {
         return 0.0;
     }
-    let fire = matches!(
-        kind,
-        DamageKind::OnFire
-            | DamageKind::InFire
-            | DamageKind::Campfire
-            | DamageKind::HotFloor
-            | DamageKind::Lava
-            | DamageKind::Fireball
-            | DamageKind::SulfurCubeHot
-    );
+    let fire = matches!(kind, DamageKind::Native(source) if source.in_tag("minecraft:is_fire"))
+        || matches!(
+            kind,
+            DamageKind::OnFire
+                | DamageKind::InFire
+                | DamageKind::Campfire
+                | DamageKind::HotFloor
+                | DamageKind::Lava
+                | DamageKind::Fireball
+                | DamageKind::SulfurCubeHot
+        );
     let projectile = matches!(
         kind,
         DamageKind::Arrow
