@@ -168,6 +168,15 @@ BlueMap is licensed under the MIT license:
 
 ## SlimeKnights registered-fluid behavior
 
+`crates/horizon-client/src/game/dispenser.rs` follows the registered bucket
+behavior in `TinkerFluids.commonSetup` at the TConstruct revision below: target
+the facing cell, return an empty bucket after placement, and use the nested
+default dispenser fallback on failure. Changes: data-driven family registration,
+the bounded host source transaction, host stacked-container remainder insertion,
+and inventory commit before deferred scheduling errors. Existing host empty-bucket
+pickup and native override behavior are reused. No fluid-specific sound or
+extra-content behavior is inferred.
+
 `crates/horizon-world/src/fall_bounce.rs` adapts the landing thresholds,
 suppressed damage multiplier and server/client rebound arithmetic from
 `ModifierEvents.bounceOnFall` in the same TConstruct revision below. Changes:

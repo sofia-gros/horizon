@@ -178,6 +178,44 @@ impl Game<'_> {
         }
         None
     }
+    /// A shared player/dispenser transaction. Callers resolve the returned item
+    /// first, then commit their inventory before propagating `finish` errors.
+    pub(super) fn change_registered_source(
+        &mut self,
+        pos: BlockPos,
+        source: Option<horizon_world::registered_fluids::RegisteredFluidId>,
+    ) -> Result<(bool, std::io::Result<()>)> {
+        if self.remote.is_some() {
+            return Ok((false, Ok(())));
+        }
+        let Some(resources) = self.res.rest().registered_fluids.clone() else {
+            return Ok((false, Ok(())));
+        };
+        let Some(mut queue) = self.registered_fluid_ticks.take() else {
+            return Ok((false, Ok(())));
+        };
+        self.registered_fluid_active = true;
+        let result = self.with_level(
+            |behaviours, level, native| -> Result<(bool, std::io::Result<()>)> {
+                let mut adapter = RegisteredLevel::new(
+                    behaviours,
+                    level,
+                    native,
+                    &resources.catalog,
+                    &mut queue,
+                )?;
+                let changed = if let Some(source) = source {
+                    resources.flow.place_source(&mut adapter, pos, source)?
+                } else {
+                    resources.flow.pickup_source(&mut adapter, pos)?.is_some()
+                };
+                Ok((changed, adapter.finish()))
+            },
+        );
+        self.registered_fluid_ticks = Some(queue);
+        self.registered_fluid_active = false;
+        result
+    }
     /// Returns None for native buckets so their existing path stays unchanged.
     pub(super) fn use_registered_bucket(&mut self, stack: &ItemStack) -> Result<Option<UseResult>> {
         let Some(resources) = self.res.rest().registered_fluids.clone() else {
@@ -221,31 +259,8 @@ impl Game<'_> {
             };
             resources.bucket(fluid.id())?.to_owned()
         };
-        let Some(mut queue) = self.registered_fluid_ticks.take() else {
-            return Ok(Some(UseResult::Fail));
-        };
-        self.registered_fluid_active = true;
         let pos = BlockPos::new(target[0], target[1], target[2]);
-        let result = self.with_level(
-            |behaviours, level, native| -> Result<(bool, std::io::Result<()>)> {
-                let mut adapter = RegisteredLevel::new(
-                    behaviours,
-                    level,
-                    native,
-                    &resources.catalog,
-                    &mut queue,
-                )?;
-                let changed = if let Some(source) = source {
-                    resources.flow.place_source(&mut adapter, pos, source)?
-                } else {
-                    resources.flow.pickup_source(&mut adapter, pos)?.is_some()
-                };
-                Ok((changed, adapter.finish()))
-            },
-        );
-        self.registered_fluid_ticks = Some(queue);
-        self.registered_fluid_active = false;
-        let (changed, scheduled) = result?;
+        let (changed, scheduled) = self.change_registered_source(pos, source)?;
         if !changed {
             scheduled?;
             return Ok(Some(UseResult::Fail));

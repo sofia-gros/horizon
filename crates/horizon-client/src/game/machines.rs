@@ -1325,8 +1325,8 @@ impl Game<'_> {
             return Ok(());
         };
         let target = offset(key, facing);
-        let remaining = if dropper {
-            match self.containers().view(target, false) {
+        let outcome = if dropper {
+            let remaining = match self.containers().view(target, false) {
                 None => self.dispense_default(key, facing, stack),
                 Some(into) => {
                     let one = ItemStack {
@@ -1347,14 +1347,21 @@ impl Game<'_> {
                         Some(stack)
                     }
                 }
-            }
+            };
+            super::dispenser::DispenseOutcome::ready(remaining)
         } else {
             self.dispense_item(key, facing, stack)?
         };
-        if let Some(entry) = self.slot_mut_at(&view, slot) {
-            *entry = remaining;
+        let process_events = outcome.process_events;
+        outcome.commit(|remaining| {
+            if let Some(entry) = self.slot_mut_at(&view, slot) {
+                *entry = remaining;
+            }
+            self.container_changed(key);
+        })?;
+        if process_events {
+            self.process_level_events()?;
         }
-        self.container_changed(key);
         Ok(())
     }
 }
