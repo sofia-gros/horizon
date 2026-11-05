@@ -1,4 +1,4 @@
-// Path-type policy follows TConstruct, Copyright (c) 2022 SlimeKnights.
+// Path-type and drowning-tag policies follow TConstruct, Copyright (c) 2022 SlimeKnights.
 // MIT License; source and license are in THIRD_PARTY_NOTICES.md.
 // Upward texture selection and fog data follow Mantle, Copyright (c) 2022 SlimeKnights.
 // MIT License. Full source and notice are in THIRD_PARTY_NOTICES.md.
@@ -114,6 +114,8 @@ struct Definition {
     interaction: Option<InteractionPolicy>,
     #[serde(default)]
     path_type: Option<FluidPathType>,
+    #[serde(default)]
+    drowning_immune_tag: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -199,6 +201,7 @@ pub struct RegisteredFluidResources<'r> {
     visuals: HashMap<RegisteredFluidId, FluidVisual>,
     interactions: HashMap<RegisteredFluidId, InteractionPolicy>,
     path_types: HashMap<RegisteredFluidId, FluidPathType>,
+    drowning_immune_tags: HashMap<RegisteredFluidId, String>,
 }
 impl<'r> RegisteredFluidResources<'r> {
     pub fn from_reader(registry: &'r BlockRegistry, reader: impl io::Read) -> io::Result<Self> {
@@ -236,6 +239,7 @@ impl<'r> RegisteredFluidResources<'r> {
         let mut visuals = HashMap::new();
         let mut interactions = HashMap::new();
         let mut path_types = HashMap::new();
+        let mut drowning_immune_tags = HashMap::new();
         for definition in document.fluids {
             if !valid_name(&definition.bucket)
                 || !valid_name(&definition.visual.still)
@@ -264,6 +268,14 @@ impl<'r> RegisteredFluidResources<'r> {
             if let Some(path_type) = definition.path_type {
                 path_types.insert(id, path_type);
             }
+            if let Some(tag) = definition.drowning_immune_tag {
+                if !valid_name(&tag) {
+                    return Err(invalid(
+                        "invalid registered-fluid drowning immune entity tag",
+                    ));
+                }
+                drowning_immune_tags.insert(id, tag);
+            }
             source_buckets.insert(id, definition.bucket);
             visuals.insert(id, definition.visual);
             policies.push((id, definition.policy));
@@ -277,6 +289,7 @@ impl<'r> RegisteredFluidResources<'r> {
             visuals,
             interactions,
             path_types,
+            drowning_immune_tags,
         })
     }
     pub fn load(registry: &'r BlockRegistry, root: &Path) -> io::Result<Option<Self>> {
@@ -317,6 +330,13 @@ impl<'r> RegisteredFluidResources<'r> {
     }
     pub fn interaction(&self, fluid: RegisteredFluidId) -> Option<&InteractionPolicy> {
         self.interactions.get(&self.catalog.source(fluid).ok()?)
+    }
+    /// Optional mob entity-type tag excluded from this family's drowning policy.
+    /// Missing tags never infer immunity from names, species or native water.
+    pub fn drowning_immune_tag(&self, fluid: RegisteredFluidId) -> Option<&str> {
+        self.drowning_immune_tags
+            .get(&self.catalog.source(fluid).ok()?)
+            .map(String::as_str)
     }
     /// Resolve both source and flowing block levels through the same policy.
     /// No policy means the caller retains the block's existing path type.
@@ -436,6 +456,37 @@ mod tests {
     }
     fn document() -> serde_json::Value {
         json!({"format":1,"fluids":[{"source":"test:liquid","flowing":"test:flowing_liquid","block":"test:liquid","bucket":"test:liquid_bucket","policy":{"drop_off":3,"slope_distance":3,"tick_delay":30,"source_conversion":false},"visual":{"still":"test:block/liquid_still","flowing":"test:block/liquid_flow","tint":16777215,"emission":12}}]})
+    }
+    #[test]
+    fn drowning_immunity_tag_is_optional_namespaced_and_shared_by_flowing_identity() {
+        let registry = registry();
+        let mut value = document();
+        for tag in [None, Some("forge:slimes")] {
+            value["fluids"][0]["drowning_immune_tag"] = json!(tag);
+            let r = RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes())
+                .unwrap();
+            for name in ["test:liquid", "test:flowing_liquid"] {
+                assert_eq!(r.drowning_immune_tag(r.catalog.id(name).unwrap()), tag);
+            }
+            // A tag alone never grants travel, effects or drowning capability.
+            assert!(
+                r.interaction(r.catalog.id("test:liquid").unwrap())
+                    .is_none()
+            );
+        }
+        for invalid in [
+            json!("slimes"),
+            json!("#forge:slimes"),
+            json!("forge:"),
+            json!(false),
+            json!(["forge:slimes"]),
+        ] {
+            value["fluids"][0]["drowning_immune_tag"] = invalid;
+            assert!(
+                RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes())
+                    .is_err()
+            );
+        }
     }
     #[test]
     fn path_policy_is_explicit_and_covers_source_and_all_flowing_levels() {

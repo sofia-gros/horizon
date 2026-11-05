@@ -1,3 +1,5 @@
+// Drowning-tag exclusion follows TConstruct SlimeFluidType, Copyright (c) 2022 SlimeKnights.
+// MIT License; adaptation and source are listed in THIRD_PARTY_NOTICES.md.
 // Fluid burn/effect contact adapts Tinkers' Construct, Copyright (c) 2022 SlimeKnights.
 // MIT License. Full notice and source are in THIRD_PARTY_NOTICES.md.
 // Changed: explicit family policy, bounded loaded-only sampling, host mob damage.
@@ -153,15 +155,25 @@ fn dry_sample(
 /// Only the family's explicit eye-immersion drowning policy enters common
 /// mob air logic; body contact, burn state and native water flags are unrelated.
 pub(super) fn drowning_eyes(m: &Mob, w: &MobWorld<'_>) -> bool {
-    w.registered_fluids
-        .is_some_and(|resources| can_drown(resources, &contacts(m, w)))
+    w.registered_fluids.is_some_and(|resources| {
+        can_drown(resources, &contacts(m, w), |tag| {
+            w.data.entity_has(tag, &m.kind.id)
+        })
+    })
 }
-fn can_drown(resources: &RegisteredFluidResources<'_>, contacts: &[Contact]) -> bool {
+fn can_drown(
+    resources: &RegisteredFluidResources<'_>,
+    contacts: &[Contact],
+    mut entity_has_tag: impl FnMut(&str) -> bool,
+) -> bool {
     contacts.iter().any(|contact| {
         contact.eyes_inside
             && resources
                 .interaction(contact.source)
                 .is_some_and(|policy| policy.can_drown)
+            && !resources
+                .drowning_immune_tag(contact.source)
+                .is_some_and(&mut entity_has_tag)
     })
 }
 
@@ -276,16 +288,26 @@ mod tests {
         scales: [f64; 2],
         fall_scales: [f64; 2],
     ) -> RegisteredFluidResources<'r> {
+        resources_with_drowning(registry, effect, scales, fall_scales, (None, false))
+    }
+    fn resources_with_drowning<'r>(
+        registry: &'r BlockRegistry,
+        effect: Option<&str>,
+        scales: [f64; 2],
+        fall_scales: [f64; 2],
+        drowning: (Option<&str>, bool),
+    ) -> RegisteredFluidResources<'r> {
         let effect = effect
             .map(|id| json!({"id":id,"duration_ticks":100,"amplifier":0,"no_curatives":true}));
         let burn = effect.is_none().then(|| json!({"seconds":10,"damage":3.0}));
         let fluids: Vec<_> = ["hot", "other"].into_iter().map(|name| json!({
             "source":format!("test:{name}"),"flowing":format!("test:flowing_{name}"),
             "block":format!("test:{name}"),"bucket":format!("test:{name}_bucket"),
+            "drowning_immune_tag":if name == "hot" { drowning.0 } else { None },
             "policy":{"drop_off":1,"slope_distance":4,"tick_delay":5,"source_conversion":false},
             "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
             "interaction":{"travel":{"acceleration":if name == "hot" {0.02} else {0.04},"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
-                "motion_scale":scales[usize::from(name == "other")],"can_swim":name == "hot","can_drown":name == "hot","extinguishes":name == "hot" && effect.is_some(),
+                "motion_scale":scales[usize::from(name == "other")],"can_swim":name == "hot","can_drown":name == "hot" || drowning.1,"extinguishes":name == "hot" && effect.is_some(),
                 "fall_distance_scale":fall_scales[usize::from(name == "other")],"burn":burn,"effect":effect}
         })).collect();
         RegisteredFluidResources::from_reader(
@@ -415,7 +437,7 @@ mod tests {
         assert_eq!(m.health, 10.0);
         assert_eq!(m.fire_ticks, 0);
         assert!(m.outbox.is_empty());
-        assert!(!can_drown(&resources, &contacts));
+        assert!(!can_drown(&resources, &contacts, |_| false));
         assert!(!can_float(&resources, &contacts, m.fluid_jump_threshold()));
         assert!(select_travel(&resources, &contacts).is_none());
     }
@@ -435,10 +457,10 @@ mod tests {
         Arc::make_mut(&mut m.kind).eye_height = 0.5;
         let deep = sample(&m, &resources, |p| (p.y <= 1).then_some(BlockStateId(0)));
         assert!(deep.iter().any(|c| c.height > 0.0));
-        assert!(!can_drown(&resources, &deep));
+        assert!(!can_drown(&resources, &deep, |_| false));
         Arc::make_mut(&mut m.kind).eye_height = 1.3;
         let deep = sample(&m, &resources, |p| (p.y <= 1).then_some(BlockStateId(0)));
-        assert!(can_drown(&resources, &deep));
+        assert!(can_drown(&resources, &deep, |_| false));
     }
     #[test]
     fn underwater_dismounted_and_mismatched_boat_snapshots_do_not_shield() {
@@ -456,7 +478,7 @@ mod tests {
             assert!(interaction_box(&m).is_some());
             let contacts = sample(&m, &resources, |p| (p.y <= 1).then_some(BlockStateId(1)));
             assert!(contacts.iter().any(|c| c.height > 0.0));
-            assert!(can_drown(&resources, &contacts));
+            assert!(can_drown(&resources, &contacts, |_| false));
         }
     }
     #[test]
@@ -467,7 +489,7 @@ mod tests {
             let mut m = mob();
             boat(&mut m, max_y, false);
             let contacts = sample(&m, &resources, |p| (p.y <= 1).then_some(BlockStateId(0)));
-            assert!(can_drown(&resources, &contacts));
+            assert!(can_drown(&resources, &contacts, |_| false));
         }
     }
     #[test]
@@ -904,21 +926,25 @@ mod tests {
         let m = mob();
         let body_only = sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(0)));
         assert!(body_only[0].height > 0.0);
-        assert!(!can_drown(&resources, &body_only));
+        assert!(!can_drown(&resources, &body_only, |_| false));
         for state in [0, 1] {
             let full = sample(&m, &resources, |p| {
                 (p.y <= 1).then_some(BlockStateId(state))
             });
-            assert!(can_drown(&resources, &full));
+            assert!(can_drown(&resources, &full, |_| false));
         }
         let other = sample(&m, &resources, |p| (p.y <= 1).then_some(BlockStateId(16)));
-        assert!(!can_drown(&resources, &other));
-        assert!(!can_drown(&resources, &sample(&m, &resources, |_| None)));
+        assert!(!can_drown(&resources, &other, |_| false));
+        assert!(!can_drown(
+            &resources,
+            &sample(&m, &resources, |_| None),
+            |_| false
+        ));
         // An independently recorded eye sample does not need body depth.
         let mut eye = current_contact(&resources, 1, Vec3::ZERO);
         eye.height = 0.0;
         eye.eyes_inside = true;
-        assert!(can_drown(&resources, &[eye]));
+        assert!(can_drown(&resources, &[eye], |_| false));
     }
     #[test]
     fn registered_eye_contact_runs_the_existing_air_damage_and_refill_path() {
@@ -926,7 +952,7 @@ mod tests {
         let resources = resources(&registry);
         let mut m = mob();
         let contacts = sample(&m, &resources, |p| (p.y <= 1).then_some(BlockStateId(1)));
-        let submerged = can_drown(&resources, &contacts);
+        let submerged = can_drown(&resources, &contacts, |_| false);
         let mut events = Vec::new();
         m.air = 300;
         super::super::ai::tick_common_air(&mut m, submerged, &mut events);
@@ -945,6 +971,68 @@ mod tests {
         assert_eq!(m.air, 4);
         assert_eq!(events.len(), 1);
         assert!(!m.fluids.in_water && !m.fluids.eye_in_water);
+    }
+    #[test]
+    fn declared_slime_tag_prevents_only_the_matching_familys_drowning() {
+        let registry = registry();
+        let r = resources_with_drowning(
+            &registry,
+            None,
+            [0.0, 0.0],
+            [1.0, 1.0],
+            (Some("forge:slimes"), true),
+        );
+        let mut slime = current_contact(&r, 1, Vec3::ZERO);
+        slime.eyes_inside = true;
+        let tagged = |tag: &str| tag == "forge:slimes";
+        assert!(!can_drown(&r, &[slime], tagged));
+        assert!(
+            can_drown(&r, &[slime], |_| false),
+            "missing membership must not grant immunity"
+        );
+        let mut other = current_contact(&r, 16, Vec3::ZERO);
+        other.eyes_inside = true;
+        assert!(
+            can_drown(&r, &[slime, other], tagged),
+            "another drowning family is still effective"
+        );
+        slime.eyes_inside = false;
+        assert!(!can_drown(&r, &[slime], |_| panic!(
+            "body-only contact needs no tag lookup"
+        )));
+        let absent = resources(&registry);
+        slime.eyes_inside = true;
+        assert!(can_drown(&absent, &[slime], |_| panic!(
+            "absent policy needs no lookup"
+        )));
+    }
+    #[test]
+    fn immune_slime_contact_refills_common_air_without_drowning_damage() {
+        let registry = registry();
+        let r = resources_with_drowning(
+            &registry,
+            None,
+            [0.0, 0.0],
+            [1.0, 1.0],
+            (Some("forge:slimes"), false),
+        );
+        let mut m = mob();
+        let mut data = super::super::MobData::fallback(&crate::blocks::BlockFacts {
+            states: Vec::new(),
+            air: BlockStateId(32),
+            woods: Default::default(),
+        });
+        data.entity_tags.insert(
+            "forge:slimes".into(),
+            [m.kind.id.to_string()].into_iter().collect(),
+        );
+        let contacts = sample(&m, &r, |p| (p.y <= 1).then_some(BlockStateId(1)));
+        let submerged = can_drown(&r, &contacts, |tag| data.entity_has(tag, &m.kind.id));
+        m.air = -19;
+        let mut events = Vec::new();
+        super::super::ai::tick_common_air(&mut m, submerged, &mut events);
+        assert_eq!((m.air, m.health), (-15, 10.0));
+        assert!(events.is_empty());
     }
     #[test]
     fn common_air_respects_water_breathing_nautilus_and_inherent_breathing() {

@@ -364,3 +364,10 @@ Copyright (c) 2022 SlimeKnights, MIT (full license above). Changes: bounded
 registered-family body sampling, the host stand block-contact exclusions, and
 its existing lava-damage rejection. Ignition precedes that rejection, so no
 accepted-hit sound is produced. No Forge implementation was read or copied.
+
+Registered-fluid mob drowning immunity follows MIT Tinkers' Construct
+[SlimeFluidType.canDrownIn](https://github.com/SlimeKnights/TinkersConstruct/blob/f4e77d43f39ba1047bf93ae816b7e1beaab514c2/src/main/java/slimeknights/tconstruct/fluids/fluids/SlimeFluidType.java)
+and its TinkerTags.EntityTypes.SLIMES / generated forge:slimes tag at revision
+`f4e77d43f39ba1047bf93ae816b7e1beaab514c2`, Copyright (c) 2022 SlimeKnights, MIT
+(full license above). Changes: explicit optional declaration and the host's
+loaded entity-type tags/common-air adapter. No Forge implementation was read.
