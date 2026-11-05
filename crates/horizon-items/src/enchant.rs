@@ -104,6 +104,31 @@ fn read_tag_dir(dir: &Path) -> HashMap<String, Vec<String>> {
         })
         .collect()
 }
+fn overlay_tags(
+    raw: &mut HashMap<String, Vec<String>>,
+    overlay: &horizon_world::loot::PackOverlay,
+    kind: &str,
+) {
+    for (id, files) in overlay.tag_kind(kind) {
+        let slot = raw.entry(id).or_default();
+        for bytes in files {
+            let Ok(v) = serde_json::from_slice::<Value>(bytes) else {
+                continue;
+            };
+            if v["replace"].as_bool() == Some(true) {
+                slot.clear();
+            }
+            if let Some(values) = v["values"].as_array() {
+                slot.extend(
+                    values
+                        .iter()
+                        .filter_map(|e| e.as_str().or_else(|| e["id"].as_str()))
+                        .map(str::to_owned),
+                );
+            }
+        }
+    }
+}
 /// Expand a tag keeping first-seen order (`TagLoader` builds a linked set).
 fn expand_ordered(
     name: &str,
@@ -140,25 +165,7 @@ impl Enchantments {
     pub fn load_with(root: &Path, overlay: &horizon_world::loot::PackOverlay) -> Self {
         let data = root.join("data/minecraft");
         let mut raw_tags = read_tag_dir(&data.join("tags/enchantment"));
-        for (id, files) in overlay.tag_kind("enchantment") {
-            let slot = raw_tags.entry(id).or_default();
-            for bytes in files {
-                let Ok(v) = serde_json::from_slice::<Value>(bytes) else {
-                    continue;
-                };
-                if v["replace"].as_bool() == Some(true) {
-                    slot.clear();
-                }
-                if let Some(values) = v["values"].as_array() {
-                    slot.extend(
-                        values
-                            .iter()
-                            .filter_map(|e| e.as_str().or_else(|| e["id"].as_str()))
-                            .map(str::to_owned),
-                    );
-                }
-            }
-        }
+        overlay_tags(&mut raw_tags, overlay, "enchantment");
         let tags: HashMap<String, Vec<Arc<str>>> = raw_tags
             .keys()
             .map(|k| {
@@ -180,7 +187,9 @@ impl Enchantments {
                 .collect()
         };
         let entity_tags = unordered(read_tag_dir(&data.join("tags/entity_type")));
-        let damage_tags = unordered(read_tag_dir(&data.join("tags/damage_type")));
+        let mut raw_damage = read_tag_dir(&data.join("tags/damage_type"));
+        overlay_tags(&mut raw_damage, overlay, "damage_type");
+        let damage_tags = unordered(raw_damage);
         // The registry lists entries sorted by id, like the data-pack loader.
         let mut files: BTreeMap<String, Value> = BTreeMap::new();
         // The folder's own files, not its subfolders'.
@@ -823,6 +832,35 @@ pub mod tests {
     use serde_json::json;
 
     /// A small registry built from literal JSON matching the vanilla files.
+    #[test]
+    fn native_damage_tags_reach_predicates_with_pack_replace_and_nested_order() {
+        let files = vec![
+            (
+                "tags/minecraft:damage_type/is_fire".into(),
+                vec![
+                    br#"{"values":["example:old"]}"#.to_vec(),
+                    br##"{"replace":true,"values":["#example:heat"]}"##.to_vec(),
+                ],
+            ),
+            (
+                "tags/example:damage_type/heat".into(),
+                vec![br#"{"values":["example:environment"]}"#.to_vec()],
+            ),
+        ];
+        let loaded = Enchantments::load_with(
+            Path::new(""),
+            &horizon_world::loot::PackOverlay { files: &files },
+        );
+        assert_eq!(
+            loaded.damage_tags["minecraft:is_fire"],
+            ["example:environment".to_owned()].into_iter().collect()
+        );
+        assert_eq!(
+            loaded.damage_tags["example:heat"],
+            loaded.damage_tags["minecraft:is_fire"]
+        );
+    }
+
     pub fn sample() -> Enchantments {
         let defs = [
             (

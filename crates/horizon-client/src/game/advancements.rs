@@ -219,7 +219,6 @@ impl adv::World for View<'_, '_> {
             "worldgen/biome" => self.0.res.mob_data().biome_has(tag, id),
             "damage_type" => self
                 .0
-                .res
                 .stations()
                 .enchantments
                 .damage_tags
