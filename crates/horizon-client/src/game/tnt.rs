@@ -11,7 +11,9 @@ use horizon_core::{
     position::BlockPos,
     random::RandomSource,
 };
-use horizon_world::level::flags as level_flags;
+use horizon_world::{
+    level::flags as level_flags, registered_fluids::resources::RegisteredFluidResources,
+};
 
 #[derive(Clone, Debug)]
 pub(super) struct PrimedTnt {
@@ -43,6 +45,16 @@ impl PrimedTnt {
             ),
         )
     }
+    /// Sample after movement and fuse decrement, like native fluid pushing.
+    /// NoGravity alone does not disable currents; expired TNT never samples.
+    fn registered_current_body(&self) -> Option<(Aabb, Vec3)> {
+        (self.fuse > 0 && self.is_pushed_by_fluid()).then(|| {
+            (
+                self.bounds(),
+                Vec3::new(self.position.x, self.fluid_eye_y(), self.position.z),
+            )
+        })
+    }
     pub(super) fn tick(
         &mut self,
         world: &horizon_client::world::World,
@@ -50,6 +62,7 @@ impl PrimedTnt {
         assets: &horizon_client::assets::Assets,
         facts: &horizon_client::blocks::BlockFacts,
         fluids: &horizon_client::motion::FluidResources,
+        registered: Option<&RegisteredFluidResources<'_>>,
         border: Option<&horizon_core::geometry::border::BorderGeometry>,
     ) -> Result<Vec<BlockPos>> {
         self.previous = self.position;
@@ -136,6 +149,19 @@ impl PrimedTnt {
         if self.fuse > 0 {
             // PrimedTnt updates immersion after moving and decrementing its fuse.
             self.push_by_fluid(world, fluids);
+            if let Some(resources) = registered
+                && let Some((bounds, eyes)) = self.registered_current_body()
+            {
+                let _ = horizon_client::entities::update_registered_entity_fluids(
+                    bounds,
+                    self.position,
+                    eyes.y,
+                    &mut self.velocity,
+                    world,
+                    fluids,
+                    resources,
+                );
+            }
         }
         Ok(tops)
     }
@@ -237,6 +263,11 @@ impl Game<'_> {
         let mut i = 0;
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
+        let registered = if self.remote.is_none() {
+            self.res.rest().registered_fluids.clone()
+        } else {
+            None
+        };
         while i < count {
             let t = &mut self.tnts[i];
             if !ticking(t.position.x.floor() as i32, t.position.z.floor() as i32) {
@@ -249,6 +280,7 @@ impl Game<'_> {
                 &self.pack.assets,
                 self.res.facts(),
                 &self.res.motion().fluids,
+                registered.as_deref(),
                 Some(self.border.geometry()),
             )?;
             for pos in tops {
@@ -502,6 +534,123 @@ fn tnt_seat(tnt: Vec3, rider_offset: f64) -> Vec3 {
 mod tests {
     use super::*;
 
+    fn registered_current_tnt(y: f64) -> PrimedTnt {
+        let at = Vec3::new(0.5, y, 0.5);
+        PrimedTnt {
+            id: 7,
+            position: at,
+            previous: at,
+            velocity: Vec3::ZERO,
+            fuse: 79,
+            on_ground: false,
+            owner: Some(Who::Mob(42)),
+            guest: Some(3),
+            no_gravity: false,
+            power: 6.0,
+        }
+    }
+
+    fn registered_current_catalog() -> horizon_world::registry::BlockRegistry {
+        let rows: Vec<_> = (0..16).map(|level| serde_json::json!([
+            "test:fluid", false, true, "", {"id":"test:fluid", "properties":{"level":level.to_string()}}
+        ])).collect();
+        horizon_world::registry::BlockRegistry::from_facts_json(
+            serde_json::json!({"states":rows,"defaults":{"test:fluid":0}})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn registered_current_uses_tnts_current_body_and_non_player_force() {
+        use horizon_world::{
+            entity_fluid::CurrentTarget,
+            registered_fluids::{LiquidFamily, RegisteredFluids},
+            registry::BlockStateId,
+        };
+        struct Target<'a>(&'a mut PrimedTnt);
+        impl CurrentTarget for Target<'_> {
+            type Error = std::convert::Infallible;
+            fn is_player_class(&self) -> bool {
+                false
+            }
+            fn velocity(&mut self) -> std::result::Result<Vec3, Self::Error> {
+                Ok(self.0.velocity)
+            }
+            fn add_delta_movement(&mut self, delta: Vec3) -> std::result::Result<(), Self::Error> {
+                let v = self.0.velocity;
+                self.0.velocity = Vec3::new(v.x + delta.x, v.y + delta.y, v.z + delta.z);
+                Ok(())
+            }
+        }
+        let registry = registered_current_catalog();
+        let catalog = RegisteredFluids::new(
+            &registry,
+            [LiquidFamily {
+                source: "test:fluid".into(),
+                flowing: "test:flowing_fluid".into(),
+                block: "test:fluid".into(),
+            }],
+        )
+        .unwrap();
+        let mut tnt = registered_current_tnt(0.1);
+        tnt.no_gravity = true;
+        // The 0.98-high TNT reaches the cell above, while its eye is below it.
+        let (bounds, eyes) = tnt.registered_current_body().unwrap();
+        let contacts = catalog
+            .contacts_with_flow(
+                bounds.deflate(Vec3::new(0.001, 0.001, 0.001)),
+                eyes,
+                8192,
+                |p| (p.y == 1).then_some(BlockStateId(0)),
+                |_| Ok::<_, std::io::Error>(Vec3::new(3.0, 0.0, 4.0)),
+            )
+            .unwrap();
+        assert_eq!(contacts.len(), 1);
+        assert!(contacts[0].height > 0.0);
+        assert!(!contacts[0].eyes_inside);
+        contacts[0]
+            .current
+            .apply_to(&mut Target(&mut tnt), 0.01)
+            .unwrap();
+        assert_eq!(tnt.velocity, Vec3::new(0.006, 0.0, 0.008));
+        assert_eq!(tnt.position, Vec3::new(0.5, 0.1, 0.5));
+        assert_eq!(
+            (tnt.fuse, tnt.owner, tnt.guest, tnt.power),
+            (79, Some(Who::Mob(42)), Some(3), 6.0)
+        );
+
+        // The next refresh must use the moved body, not previous-position data.
+        tnt.position.y = 3.0;
+        let (bounds, eyes) = tnt.registered_current_body().unwrap();
+        let contacts = catalog
+            .contacts_with_flow(
+                bounds.deflate(Vec3::new(0.001, 0.001, 0.001)),
+                eyes,
+                8192,
+                |p| (p.y == 1).then_some(BlockStateId(0)),
+                |_| Ok::<_, std::io::Error>(Vec3::new(3.0, 0.0, 4.0)),
+            )
+            .unwrap();
+        assert!(contacts.is_empty());
+    }
+
+    #[test]
+    fn expired_tnt_never_samples_a_registered_current() {
+        let mut tnt = registered_current_tnt(0.0);
+        tnt.no_gravity = true;
+        tnt.fuse = 1;
+        assert!(tnt.registered_current_body().is_some());
+        // tick decrements before the fluid phase: a final-tick explosion gets
+        // no force even when its current body overlaps a configured liquid.
+        tnt.fuse -= 1;
+        assert!(tnt.registered_current_body().is_none());
+        tnt.fuse = -1;
+        assert!(tnt.registered_current_body().is_none());
+        assert_eq!(tnt.velocity, Vec3::ZERO);
+    }
+
     #[test]
     fn a_tnt_lit_by_a_skeletons_arrow_names_the_skeleton_as_its_cause() {
         let name = || Text::translate("entity.minecraft.skeleton", &[]);
@@ -580,7 +729,7 @@ mod tests {
                 power: 4.0,
             };
             let border = bordered.then_some(&border);
-            tnt.tick(&world, &collision, &assets, &facts, &fluids, border)
+            tnt.tick(&world, &collision, &assets, &facts, &fluids, None, border)
                 .unwrap();
             let east = tnt.bounds().max_position().x;
             if bordered {
@@ -633,7 +782,7 @@ mod tests {
             guest: None,
             power: 4.0,
         };
-        tnt.tick(&world, &collision, &assets, &facts, &fluids, None)
+        tnt.tick(&world, &collision, &assets, &facts, &fluids, None, None)
             .unwrap();
         assert_eq!(
             tnt.position.x, at.x,
@@ -645,14 +794,14 @@ mod tests {
             tnt.velocity
         );
         assert_eq!(tnt.fuse, 79);
-        tnt.tick(&world, &collision, &assets, &facts, &fluids, None)
+        tnt.tick(&world, &collision, &assets, &facts, &fluids, None, None)
             .unwrap();
         assert!((tnt.position.x - at.x - 0.014).abs() < 1e-12);
         assert!(tnt.on_ground);
         tnt.position = at;
         tnt.velocity = Vec3::ZERO;
         tnt.fuse = 1;
-        tnt.tick(&world, &collision, &assets, &facts, &fluids, None)
+        tnt.tick(&world, &collision, &assets, &facts, &fluids, None, None)
             .unwrap();
         assert_eq!(tnt.fuse, 0);
         assert_eq!(
@@ -663,7 +812,7 @@ mod tests {
         tnt.position = at;
         tnt.velocity = Vec3::ZERO;
         tnt.fuse = 80;
-        tnt.tick(&world, &collision, &assets, &facts, &fluids, None)
+        tnt.tick(&world, &collision, &assets, &facts, &fluids, None, None)
             .unwrap();
         assert_eq!(
             tnt.velocity.x, 0.0,
@@ -679,7 +828,7 @@ mod tests {
             .unwrap();
         tnt.on_ground = false;
         tnt.velocity = Vec3::ZERO;
-        tnt.tick(&world, &collision, &assets, &facts, &fluids, None)
+        tnt.tick(&world, &collision, &assets, &facts, &fluids, None, None)
             .unwrap();
         assert!(
             tnt.position.y < at.y && tnt.velocity.y < 0.0,
@@ -736,7 +885,7 @@ mod tests {
             power: 4.0,
         };
         for _ in 0..10 {
-            tnt.tick(&world, &collision, &assets, &facts, &fluids, None)
+            tnt.tick(&world, &collision, &assets, &facts, &fluids, None, None)
                 .unwrap();
         }
         assert!(
@@ -757,7 +906,7 @@ mod tests {
         tnt.velocity = Vec3::ZERO;
         tnt.on_ground = false;
         for _ in 0..4 {
-            tnt.tick(&world, &collision, &assets, &facts, &fluids, None)
+            tnt.tick(&world, &collision, &assets, &facts, &fluids, None, None)
                 .unwrap();
         }
         assert!(
@@ -817,7 +966,7 @@ mod tests {
         let mut tnt = primed();
         for _ in 0..30 {
             tops.extend(
-                tnt.tick(&world, &collision, &assets, &facts, &fluids, None)
+                tnt.tick(&world, &collision, &assets, &facts, &fluids, None, None)
                     .unwrap(),
             );
         }
@@ -831,7 +980,7 @@ mod tests {
         let mut tnt = primed();
         for _ in 0..10 {
             assert!(
-                tnt.tick(&world, &collision, &assets, &facts, &fluids, None)
+                tnt.tick(&world, &collision, &assets, &facts, &fluids, None, None)
                     .unwrap()
                     .is_empty()
             );
