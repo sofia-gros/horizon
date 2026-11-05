@@ -1,5 +1,6 @@
 //! Validated resource declarations shared by simulation, bucket and rendering
 //! adapters. Absence leaves vanilla unchanged; malformed declarations fail load.
+use super::interaction::InteractionPolicy;
 use super::{LiquidFamily, RegisteredFluidId, RegisteredFluidState, RegisteredFluids, valid_name};
 use crate::{
     compression::invalid,
@@ -27,6 +28,8 @@ struct Definition {
     bucket: String,
     policy: FlowPolicy,
     visual: FluidVisual,
+    #[serde(default)]
+    interaction: Option<InteractionPolicy>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -87,6 +90,7 @@ pub struct RegisteredFluidResources<'r> {
     buckets: HashMap<String, RegisteredFluidId>,
     source_buckets: HashMap<RegisteredFluidId, String>,
     visuals: HashMap<RegisteredFluidId, FluidVisual>,
+    interactions: HashMap<RegisteredFluidId, InteractionPolicy>,
 }
 impl<'r> RegisteredFluidResources<'r> {
     pub fn from_reader(registry: &'r BlockRegistry, reader: impl io::Read) -> io::Result<Self> {
@@ -122,6 +126,7 @@ impl<'r> RegisteredFluidResources<'r> {
         let mut buckets = HashMap::new();
         let mut source_buckets = HashMap::new();
         let mut visuals = HashMap::new();
+        let mut interactions = HashMap::new();
         for definition in document.fluids {
             if !valid_name(&definition.bucket)
                 || !valid_name(&definition.visual.still)
@@ -137,6 +142,10 @@ impl<'r> RegisteredFluidResources<'r> {
             if buckets.insert(definition.bucket.clone(), id).is_some() {
                 return Err(invalid("bucket bound to multiple fluid families"));
             }
+            if let Some(policy) = definition.interaction {
+                policy.validate()?;
+                interactions.insert(id, policy);
+            }
             source_buckets.insert(id, definition.bucket);
             visuals.insert(id, definition.visual);
             policies.push((id, definition.policy));
@@ -148,6 +157,7 @@ impl<'r> RegisteredFluidResources<'r> {
             buckets,
             source_buckets,
             visuals,
+            interactions,
         })
     }
     pub fn load(registry: &'r BlockRegistry, root: &Path) -> io::Result<Option<Self>> {
@@ -173,6 +183,9 @@ impl<'r> RegisteredFluidResources<'r> {
             .map(String::as_str)
             .ok_or_else(|| invalid("registered fluid bucket is missing"))
     }
+    pub fn interaction(&self, fluid: RegisteredFluidId) -> Option<&InteractionPolicy> {
+        self.interactions.get(&self.catalog.source(fluid).ok()?)
+    }
     pub fn visual(&self, state: BlockStateId) -> Option<(&FluidVisual, RegisteredFluidState)> {
         let fluid = self.catalog.from_block(state)?;
         Some((
@@ -197,6 +210,26 @@ mod tests {
     }
     fn document() -> serde_json::Value {
         json!({"format":1,"fluids":[{"source":"test:liquid","flowing":"test:flowing_liquid","block":"test:liquid","bucket":"test:liquid_bucket","policy":{"drop_off":3,"slope_distance":3,"tick_delay":30,"source_conversion":false},"visual":{"still":"test:block/liquid_still","flowing":"test:block/liquid_flow","tint":16777215,"emission":12}}]})
+    }
+    #[test]
+    fn interaction_policy_binds_flowing_identity_and_rejects_bad_numbers() {
+        let mut doc = document();
+        let registry = registry();
+        doc["fluids"][0]["interaction"] = json!({"travel":{"acceleration":0.02,
+            "horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
+            "motion_scale":0.0023333333333333335,"can_swim":false,"can_drown":false,
+            "extinguishes":false,"fall_distance_scale":0.5,"burn":{"seconds":10,"damage":5.0}});
+        let resources =
+            RegisteredFluidResources::from_reader(&registry, doc.to_string().as_bytes()).unwrap();
+        let flowing = resources.catalog.id("test:flowing_liquid").unwrap();
+        assert_eq!(
+            resources.interaction(flowing).unwrap().burn.unwrap().damage,
+            5.0
+        );
+        doc["fluids"][0]["interaction"]["motion_scale"] = json!(-0.1);
+        assert!(
+            RegisteredFluidResources::from_reader(&registry, doc.to_string().as_bytes()).is_err()
+        );
     }
     #[test]
     fn content_merge_rejects_foreign_or_duplicate_ids_without_mutating_aggregate() {

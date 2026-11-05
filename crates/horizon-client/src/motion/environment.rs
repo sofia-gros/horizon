@@ -40,7 +40,9 @@ impl MotionWorld<'_, '_, '_> {
             }
             self.player.fire_ticks -= 1;
         }
-        if self.player.fluids.was_touching_water {
+        if self.player.fluids.was_touching_water
+            || self.registered_condition(false, |p| p.extinguishes)
+        {
             self.player.fire_ticks = self.player.fire_ticks.min(0);
         }
         Ok(())
@@ -57,7 +59,8 @@ impl MotionWorld<'_, '_, '_> {
             .registry
             .state(self.block(eye))
             .is_some_and(|state| state.name == "minecraft:bubble_column");
-        let submerged = self.player.is_eye_in_fluid(WATER) && !bubble_column;
+        let submerged = (self.player.is_eye_in_fluid(WATER) && !bubble_column)
+            || self.registered_condition(true, |p| p.can_drown);
         let drowns = submerged
             && !self.player.status.water_breathing
             && !self.player.status.breath_of_the_nautilus
@@ -241,7 +244,20 @@ impl LivingFluidWorld for MotionWorld<'_, '_, '_> {
     }
     fn is_free(&mut self, v: Vec3) -> Result<bool> {
         let b = self.player.bounds().move_by(v);
-        Ok(self.no_player_collision(b)? && !self.has_liquid(b)?)
+        if !self.no_player_collision(b)? || self.has_liquid(b)? {
+            return Ok(false);
+        }
+        if let Some(resources) = &self.assets.registered_fluids {
+            let contacts = resources.catalog.contacts(b, b.min_position(), 8192, |p| {
+                let layout = self.scene.layout();
+                (self.scene.loaded(p.x, p.z) && p.y >= layout.min_y() && p.y < layout.max_y())
+                    .then(|| self.scene.block(p.x, p.y, p.z))
+            })?;
+            if contacts.iter().any(|c| c.height > 0.0) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
     fn is_vehicle(&mut self) -> Result<bool> {
         Ok(false)
@@ -275,6 +291,10 @@ impl MotionWorld<'_, '_, '_> {
         } else if in_lava && !(on_ground && self.player.fluid_height(LAVA) <= threshold) {
             // jumpInLiquid(LAVA)
             self.player.velocity.y += f64::from(0.04f32);
+        } else if let Some((depth, policy)) = self.registered_travel()
+            && !(on_ground && depth <= threshold)
+        {
+            self.player.velocity.y += policy.travel.jump;
         } else if (on_ground || in_water && height <= threshold) && self.player.no_jump_delay == 0 {
             self.jump_from_ground()?;
             self.player.no_jump_delay = 10;

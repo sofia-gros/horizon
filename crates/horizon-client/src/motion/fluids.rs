@@ -282,22 +282,7 @@ impl MotionWorld<'_, '_, '_> {
     pub fn fluid_base_tick(&mut self) -> Result<()> {
         self.player.fluids.was_eye_in_water = self.player.is_eye_in_fluid(WATER);
         self.update_fluids()?;
-        self.player.fluids.registered = if let Some(resources) = &self.assets.registered_fluids {
-            let eyes = Vec3::new(
-                self.player.position.x,
-                self.player.position.y + f64::from(self.player.dimensions.eye_height),
-                self.player.position.z,
-            );
-            resources
-                .catalog
-                .contacts(self.player.bounds(), eyes, 8192, |p| {
-                    let layout = self.scene.layout();
-                    (self.scene.loaded(p.x, p.z) && p.y >= layout.min_y() && p.y < layout.max_y())
-                        .then(|| self.scene.block(p.x, p.y, p.z))
-                })?
-        } else {
-            Vec::new()
-        };
+        self.update_registered_fluids()?;
         // `Player.updateSwimming`'s flying guard over `Entity.updateSwimming`,
         // whose both branches need `!isPassenger()`: a rider keeps no swim, so
         // the server's copy of a guest who boards a boat while swimming is not
@@ -308,6 +293,7 @@ impl MotionWorld<'_, '_, '_> {
             && self.player.sprinting
             && if self.player.swimming {
                 self.player.fluids.was_touching_water
+                    || self.registered_condition(false, |p| p.can_swim)
             } else {
                 self.player.is_under_water()
                     && is_tagged(
@@ -315,6 +301,7 @@ impl MotionWorld<'_, '_, '_> {
                             .kind(),
                         WATER,
                     )
+                    || self.registered_condition(true, |p| p.can_swim)
             };
         self.tick_remaining_fire()?;
         if self.player.is_in_lava() {

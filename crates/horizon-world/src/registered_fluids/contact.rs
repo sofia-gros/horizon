@@ -1,19 +1,20 @@
 //! Bounded geometric contact sampling; identities remain separate from native
 //! water/lava physics. Effects and travel policies consume these observations.
 use super::{RegisteredFluidId, RegisteredFluids};
-use crate::{compression::invalid, registry::BlockStateId};
+use crate::{compression::invalid, entity_fluid::CurrentAccumulator, registry::BlockStateId};
 use horizon_core::{
     geometry::{Aabb, Vec3},
     position::BlockPos,
 };
 use std::io;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct Contact {
     pub source: RegisteredFluidId,
     /// Highest intersecting surface above the entity's bounding-box minimum.
     pub height: f64,
     pub eyes_inside: bool,
+    pub current: CurrentAccumulator,
 }
 impl RegisteredFluids<'_> {
     /// `block` returns None for unloaded/out-of-height cells and must never load
@@ -23,7 +24,34 @@ impl RegisteredFluids<'_> {
         bounds: Aabb,
         eyes: Vec3,
         budget: usize,
-        mut block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+        block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+    ) -> io::Result<Vec<Contact>> {
+        self.sample_contacts(bounds, eyes, budget, 2, (block, |_| Ok(Vec3::ZERO)))
+    }
+    /// The flow provider is called only for intersecting body cells. It must
+    /// obey the same loaded-only rule; at most one bounded current query per cell.
+    pub fn contacts_with_flow(
+        &self,
+        bounds: Aabb,
+        eyes: Vec3,
+        budget: usize,
+        block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+        flow: impl FnMut(BlockPos) -> io::Result<Vec3>,
+    ) -> io::Result<Vec<Contact>> {
+        // A current samples at most 29 block/fluid neighbors. Reserve 32 reads
+        // per cell, including the two geometric surface samples.
+        self.sample_contacts(bounds, eyes, budget, 32, (block, flow))
+    }
+    fn sample_contacts(
+        &self,
+        bounds: Aabb,
+        eyes: Vec3,
+        budget: usize,
+        reads_per_cell: u64,
+        (mut block, mut flow): (
+            impl FnMut(BlockPos) -> Option<BlockStateId>,
+            impl FnMut(BlockPos) -> io::Result<Vec3>,
+        ),
     ) -> io::Result<Vec<Contact>> {
         let lo = bounds.min_position();
         let hi = bounds.max_position();
@@ -59,7 +87,7 @@ impl RegisteredFluids<'_> {
         .into_iter()
         .try_fold(1u64, |a, b| a.checked_mul(b as u64));
         if count
-            .and_then(|n| n.checked_mul(2))
+            .and_then(|n| n.checked_mul(reads_per_cell))
             .and_then(|n| n.checked_add(2))
             .is_none_or(|n| n > budget as u64)
         {
@@ -95,8 +123,22 @@ impl RegisteredFluids<'_> {
                                 source,
                                 height,
                                 eyes_inside: false,
+                                current: CurrentAccumulator::default(),
                             });
                         }
+                        let contact = contacts.iter_mut().find(|c| c.source == source).unwrap();
+                        let mut vector = flow(BlockPos::new(x, y, z))?;
+                        if ![vector.x, vector.y, vector.z]
+                            .into_iter()
+                            .all(f64::is_finite)
+                        {
+                            return Err(invalid("nonfinite registered fluid current"));
+                        }
+                        contact.current.height = contact.height;
+                        if contact.height < 0.4 {
+                            vector = vector.scale(contact.height);
+                        }
+                        contact.current.accumulate(vector);
                     }
                 }
             }
@@ -115,6 +157,7 @@ impl RegisteredFluids<'_> {
                         source,
                         height: 0.0,
                         eyes_inside: true,
+                        current: CurrentAccumulator::default(),
                     });
                 }
             }
@@ -167,6 +210,33 @@ mod tests {
         assert!(!contacts[1].eyes_inside);
         assert_eq!(contacts[0].height, f64::from(8.0f32 / 9.0));
         assert_eq!(contacts[1].height, f64::from(4.0f32 / 9.0));
+        let currents = fluids
+            .contacts_with_flow(
+                bounds,
+                Vec3::new(0.5, 0.8, 0.5),
+                1024,
+                |p| match (p.x, p.y, p.z) {
+                    (0, 0, 0) => Some(BlockStateId(0)),
+                    (1, 0, 0) => Some(BlockStateId(20)),
+                    _ => None,
+                },
+                |p| Ok(Vec3::new(if p.x == 0 { 1.0 } else { -1.0 }, 0.0, 0.0)),
+            )
+            .unwrap();
+        assert_eq!(currents[0].current.accumulated.x, 1.0);
+        assert_eq!(currents[1].current.accumulated.x, -1.0);
+        assert_eq!(currents[0].current.count, 1);
+        assert!(
+            fluids
+                .contacts_with_flow(
+                    bounds,
+                    Vec3::ZERO,
+                    10,
+                    |_| panic!("reserve flow budget before reads"),
+                    |_| panic!("reserve before currents")
+                )
+                .is_err()
+        );
         let full = fluids
             .contacts(bounds, Vec3::new(0.5, 0.95, 0.5), 100, |p| {
                 ((p.x, p.z) == (0, 0) && (0..=1).contains(&p.y)).then_some(BlockStateId(0))
