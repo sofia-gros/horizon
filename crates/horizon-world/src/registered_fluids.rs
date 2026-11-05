@@ -3,6 +3,7 @@
 //! This is the data layer, not a registration hook in the running game. The
 //! vanilla simulation still uses `FluidKind`; integrating scheduling, flow,
 //! rendering and bucket transactions must not silently alias these IDs to lava.
+pub mod contact;
 pub mod resources;
 pub mod scheduling;
 
