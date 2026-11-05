@@ -5,7 +5,9 @@
 use super::{Damage, DamageKind, Mob, MobEvent, MobWorld};
 use horizon_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
 use horizon_world::{
-    registered_fluids::{contact::Contact, resources::RegisteredFluidResources},
+    registered_fluids::{
+        contact::Contact, interaction::TravelPolicy, resources::RegisteredFluidResources,
+    },
     registry::BlockStateId,
 };
 
@@ -35,6 +37,28 @@ fn sample(
             block,
         )
         .unwrap_or_default()
+}
+
+/// Native water/lava and species-specific travel take precedence at the caller.
+/// Like the player adapter, the deepest configured family wins; equal heights
+/// retain the last encounter in the bounded sampler's deterministic order.
+pub(super) fn travel(m: &Mob, w: &MobWorld<'_>) -> Option<TravelPolicy> {
+    select_travel(w.registered_fluids?, &contacts(m, w))
+}
+fn select_travel(
+    resources: &RegisteredFluidResources<'_>,
+    contacts: &[Contact],
+) -> Option<TravelPolicy> {
+    contacts
+        .iter()
+        .filter(|contact| contact.height > 0.0)
+        .filter_map(|contact| {
+            resources
+                .interaction(contact.source)
+                .map(|p| (contact.height, p.travel))
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, policy)| policy)
 }
 
 /// Policy-only opt-in to the mob's existing water/rain fire-clearing phase.
@@ -147,7 +171,7 @@ mod tests {
             "block":format!("test:{name}"),"bucket":format!("test:{name}_bucket"),
             "policy":{"drop_off":1,"slope_distance":4,"tick_delay":5,"source_conversion":false},
             "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
-            "interaction":{"travel":{"acceleration":0.02,"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
+            "interaction":{"travel":{"acceleration":if name == "hot" {0.02} else {0.04},"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
                 "motion_scale":scales[usize::from(name == "other")],"can_swim":false,"can_drown":false,"extinguishes":name == "hot" && effect.is_some(),
                 "fall_distance_scale":1.0,"burn":burn,"effect":effect}
         })).collect();
@@ -200,6 +224,95 @@ mod tests {
             eyes_inside: false,
             current,
         }
+    }
+    #[test]
+    fn travel_chooses_deepest_body_family_and_keeps_eye_only_contact_inert() {
+        let registry = registry();
+        let resources = resources(&registry);
+        let mut a = current_contact(&resources, 1, Vec3::ZERO);
+        let mut b = current_contact(&resources, 16, Vec3::ZERO);
+        a.height = 0.7;
+        b.height = 0.2;
+        assert_eq!(
+            select_travel(&resources, &[a, b]).unwrap().acceleration,
+            0.02
+        );
+        b.height = 0.9;
+        assert_eq!(
+            select_travel(&resources, &[a, b]).unwrap().acceleration,
+            0.04
+        );
+        // Equal depth follows the existing player's last-encounter tie rule.
+        b.height = a.height;
+        assert_eq!(
+            select_travel(&resources, &[a, b]).unwrap().acceleration,
+            0.04
+        );
+        assert_eq!(
+            select_travel(&resources, &[b, a]).unwrap().acceleration,
+            0.02
+        );
+        a.height = 0.0;
+        a.eyes_inside = true;
+        assert!(select_travel(&resources, &[a]).is_none());
+        assert!(select_travel(&resources, &[]).is_none());
+        // Geometry also rejects a level-seven surface below the mob's feet.
+        let mut m = mob();
+        m.position.y = 0.2;
+        let contacts = sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(7)));
+        assert!(select_travel(&resources, &contacts).is_none());
+    }
+    fn travel_policy() -> TravelPolicy {
+        TravelPolicy {
+            acceleration: 0.02,
+            horizontal_drag: 0.8,
+            vertical_drag: 0.8,
+            gravity_scale: 0.0625,
+            jump: 0.04,
+        }
+    }
+    #[test]
+    fn travel_damps_collision_resolved_velocity_before_scaled_gravity() {
+        let mut m = mob();
+        // X already stopped by collision; do not restore its pre-move value.
+        m.velocity = Vec3::new(0.0, -0.1, 0.6);
+        m.finish_registered_travel(travel_policy(), 0.08, true);
+        assert_eq!(m.velocity.x, 0.0);
+        assert!((m.velocity.y + 0.085).abs() < 1e-12);
+        assert!((m.velocity.z - 0.48).abs() < 1e-12);
+        assert!(!m.fluids.in_water && !m.fluids.in_lava);
+    }
+    #[test]
+    fn travel_keeps_no_gravity_slow_falling_and_sprinting_adjustments() {
+        for mode in 0..3 {
+            let mut m = mob();
+            m.velocity = Vec3::new(0.2, -0.1, 0.0);
+            if mode == 0 {
+                m.no_gravity = true;
+            } else if mode == 1 {
+                m.add_effect("minecraft:slow_falling", 100, 0);
+            } else {
+                m.extra.sprinting = true;
+            }
+            let gravity = m.effective_gravity();
+            m.finish_registered_travel(travel_policy(), gravity, true);
+            let expected = if mode == 1 { -0.080625 } else { -0.08 };
+            assert!((m.velocity.y - expected).abs() < 1e-12);
+            assert!((m.velocity.x - 0.16).abs() < 1e-12);
+        }
+    }
+    #[test]
+    fn travel_uses_premove_falling_flag_for_the_existing_fluid_snap() {
+        let mut policy = travel_policy();
+        policy.gravity_scale = 0.125;
+        let mut m = mob();
+        // Block effects/movement may have raised Y since falling was captured.
+        m.velocity.y = 0.0125;
+        m.finish_registered_travel(policy, 0.08, true);
+        assert_eq!(m.velocity.y, -0.003);
+        m.velocity.y = 0.0125;
+        m.finish_registered_travel(policy, 0.08, false);
+        assert!(m.velocity.y.abs() < 1e-12);
     }
     #[test]
     fn registered_currents_use_nonplayer_direction_and_each_familys_scale() {

@@ -50,3 +50,6 @@ tick cache. Exact source refresh timing, mixed-fluid ordering, live movement and
 network behavior remain for the final integration pass. Separately simulated
 dragon parts, dropped items and projectiles are outside this slice. #379 remains
 open.
+
+The later `registered-mob-fluid-travel.md` slice covers common mob acceleration,
+collision-resolved movement, drag and gravity. Its documented exclusions remain.
