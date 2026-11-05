@@ -1109,8 +1109,48 @@ impl GameLevel<'_> {
             .collect()
     }
 }
+struct RemovalWireSnapshot(horizon_items::item_data::Wire);
+impl PartialEq for RemovalWireSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.same_snapshot(&other.0)
+    }
+}
+
+fn removal_stack_wire(stack: &ItemStack, out: &mut Vec<RemovalWireSnapshot>) {
+    let Some(data) = stack.data() else {
+        return;
+    };
+    out.push(RemovalWireSnapshot(data.wire.clone()));
+    for (_, nested) in &data.container {
+        removal_stack_wire(nested, out);
+    }
+    for nested in data.charged.iter().chain(&data.bundle_contents) {
+        removal_stack_wire(nested, out);
+    }
+    if let Some(pots) = &data.pot_decorations {
+        for nested in pots.iter().flatten() {
+            removal_stack_wire(nested, out);
+        }
+    }
+}
+
+#[derive(PartialEq)]
+struct RemovalMovingSnapshot {
+    state: BlockStateId,
+    direction: u8,
+    extending: bool,
+    source: bool,
+    progress: u32,
+    previous: u32,
+    last_ticked: i64,
+    death_ticks: i32,
+    id: u64,
+}
+
 #[derive(PartialEq)]
 struct BlockRemovalSnapshot {
+    moving: Vec<RemovalMovingSnapshot>,
+    wire: Vec<RemovalWireSnapshot>,
     state: BlockStateId,
     live: Option<horizon_world::nbt::Tag>,
     saved: Option<horizon_world::nbt::Tag>,
@@ -3903,7 +3943,68 @@ impl Game<'_> {
                     .collect()
             })
             .unwrap_or_default();
+        let mut wire = Vec::new();
+        if let Some(entity) = self.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+            for stack in entity.slots().iter().flatten() {
+                removal_stack_wire(stack, &mut wire);
+            }
+            match entity {
+                BlockEntity::Lectern(lectern) => {
+                    if let Some(stack) = &lectern.book {
+                        removal_stack_wire(stack, &mut wire);
+                    }
+                }
+                BlockEntity::Campfire(campfire) => {
+                    for stack in campfire.items.iter().flatten() {
+                        removal_stack_wire(stack, &mut wire);
+                    }
+                }
+                BlockEntity::Brushable(brushable) => {
+                    if let Some(stack) = &brushable.item {
+                        removal_stack_wire(stack, &mut wire);
+                    }
+                }
+                BlockEntity::Vault(vault) => {
+                    for stack in vault
+                        .config
+                        .key_item
+                        .iter()
+                        .chain(vault.display_item.iter())
+                        .chain(&vault.items_to_eject)
+                    {
+                        removal_stack_wire(stack, &mut wire);
+                    }
+                }
+                BlockEntity::TrialSpawner(spawner) => {
+                    if let Some(stacks) = &spawner.dispensing {
+                        for stack in stacks {
+                            removal_stack_wire(stack, &mut wire);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let moving = self
+            .block_ticks
+            .moving_pistons
+            .iter()
+            .filter(|(at, _)| *at == BlockPos::new(pos[0], pos[1], pos[2]))
+            .map(|(_, m)| RemovalMovingSnapshot {
+                state: m.moved_state,
+                direction: m.direction as u8,
+                extending: m.extending,
+                source: m.source,
+                progress: m.progress.to_bits(),
+                previous: m.progress_o.to_bits(),
+                last_ticked: m.last_ticked,
+                death_ticks: m.death_ticks,
+                id: m.id,
+            })
+            .collect();
         BlockRemovalSnapshot {
+            moving,
+            wire,
             state,
             live: self.loot_block_entity(pos, name),
             saved: spill::saved_entity(&self.world, pos),
@@ -5859,8 +5960,8 @@ impl Game<'_> {
         }
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        if !self.with_level(|_, level, _| {
-            level.allow_block_removal(BlockPos::new(pos[0], pos[1], pos[2]), state)
+        if !self.with_level(|b, level, ticks| {
+            b.can_remove_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]))
         }) {
             return Ok(());
         }
@@ -5873,8 +5974,8 @@ impl Game<'_> {
             return Ok(());
         }
         if self.block_removal_snapshot(pos) != snapshot
-            || !self.with_level(|_, level, _| {
-                level.allow_block_removal(BlockPos::new(pos[0], pos[1], pos[2]), state)
+            || !self.with_level(|b, level, ticks| {
+                b.can_remove_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]))
             })
         {
             return Ok(());

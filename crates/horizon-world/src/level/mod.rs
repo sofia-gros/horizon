@@ -890,6 +890,16 @@ impl Behaviours {
 
 /// Level mutation entry points (all keep vanilla update semantics).
 impl Behaviours {
+    /// Read-only preflight, including any block carried by a moving piston.
+    pub fn can_remove_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) -> bool {
+        let state = level.block_state(pos);
+        self.sim(level, ticks).block_removal_allowed(pos, state)
+    }
     /// `Level.setBlock(pos, state, flags)` with vanilla's update limit (512).
     /// Returns false when nothing was written (unloaded, out of bounds, or
     /// the state was already present).

@@ -2450,6 +2450,16 @@ impl Game<'_> {
             return Err(err("commands.setblock.failed", &[]));
         }
         let current = self.world.block(pos[0], pos[1], pos[2]);
+        // Includes unchanged-state NBT updates and precedes destroy mode.
+        if !self.with_level(|b, level, ticks| {
+            b.can_remove_block(
+                level,
+                ticks,
+                horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
+            )
+        }) {
+            return Err(err("commands.setblock.failed", &[]));
+        }
         if ctx.has("keep") && current != self.world.air {
             return Err(err("commands.setblock.failed", &[]));
         }
@@ -2459,8 +2469,10 @@ impl Game<'_> {
         let state = self.block_input_state(pos, &b, state, ctx.has("strict"))?;
         let placed = self.place_state(pos, state, ctx.has("strict"))?;
         let loaded = match &b.nbt {
-            Some(nbt) => self.load_block_entity_nbt(pos, nbt),
-            None => false,
+            Some(nbt) if self.world.block(pos[0], pos[1], pos[2]) == state => {
+                self.load_block_entity_nbt(pos, nbt)
+            }
+            _ => false,
         };
         if !placed && !loaded {
             return Err(err("commands.setblock.failed", &[]));
@@ -2484,6 +2496,17 @@ impl Game<'_> {
     /// from the argument's tag; true when its saved data changed.
     pub(super) fn load_block_entity_nbt(&mut self, pos: [i32; 3], nbt: &str) -> bool {
         use horizon_world::nbt::Tag;
+        // All NBT loaders, including same-state /setblock, must obey the
+        // guard before replacing inventories, locks or deferred loot.
+        if !self.with_level(|b, level, ticks| {
+            b.can_remove_block(
+                level,
+                ticks,
+                horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
+            )
+        }) {
+            return false;
+        }
         let key = (pos[0], pos[1], pos[2]);
         let Some(e) = self.world.block_entities.get(&key) else {
             return false;
@@ -2789,6 +2812,22 @@ impl Game<'_> {
                 }
             }
         }
+        // Clone writes inventories directly as well as block states. Check the
+        // complete source/destination footprint before the first mutation,
+        // including same-state destinations that place_state would skip.
+        for (from, to, _, _) in &copies {
+            for at in [from, to] {
+                if !self.with_level(|b, level, ticks| {
+                    b.can_remove_block(
+                        level,
+                        ticks,
+                        horizon_core::position::BlockPos::new(at[0], at[1], at[2]),
+                    )
+                }) {
+                    return Err(err("commands.clone.failed", &[]));
+                }
+            }
+        }
         if moving {
             for (from, _, _, _) in &copies {
                 self.place_state(*from, air, true)?;
@@ -2800,7 +2839,20 @@ impl Game<'_> {
         let barrier = self.pack.assets.registry.default_state("minecraft:barrier");
         let mut count = 0;
         for (_, to, s, entity) in copies {
-            self.place_state(to, s, strict)?;
+            let placed = self.place_state(to, s, strict)?;
+            // Refused state replacement never authorizes overwriting the old
+            // inventory with the clone's entity.
+            if (!placed && self.world.block(to[0], to[1], to[2]) != s)
+                || !self.with_level(|b, level, ticks| {
+                    b.can_remove_block(
+                        level,
+                        ticks,
+                        horizon_core::position::BlockPos::new(to[0], to[1], to[2]),
+                    )
+                })
+            {
+                return Err(err("commands.clone.failed", &[]));
+            }
             if Some(s) != barrier {
                 count += 1;
             }

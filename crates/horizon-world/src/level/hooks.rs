@@ -436,7 +436,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if b.is_air(state) {
             return false;
         }
-        if !self.level.allow_block_removal(pos, state) {
+        if !self.block_removal_allowed(pos, state) {
             return false;
         }
         let data = b.data(state);

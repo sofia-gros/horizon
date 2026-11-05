@@ -61,6 +61,12 @@ fn rel_n(mut p: BlockPos, d: Direction, n: i32) -> BlockPos {
     };
     p
 }
+enum LevelEvent {
+    DropResources { pos: BlockPos, state: BlockStateId },
+}
+struct Rules {
+    block_drops: bool,
+}
 enum Class {
     StrawBed,
     BaseFire,
@@ -181,6 +187,9 @@ impl LevelAccess for L {
     }
 }
 impl L {
+    fn game_rules(&self) -> Rules {
+        Rules { block_drops: true }
+    }
     fn set_raw(&mut self, p: BlockPos, s: BlockStateId) -> Option<BlockStateId> {
         self.writes += 1;
         Some(self.blocks.insert(p, s).unwrap_or(BlockStateId(0)))
@@ -236,6 +245,10 @@ struct Sim {
     ticks: Ticks,
 }
 impl Sim {
+    fn emit(&mut self, _: LevelEvent) {
+        self.drops += 1;
+    }
+    // __ALLOWED__
     fn state(&self, p: BlockPos) -> BlockStateId {
         self.level.block_state(p)
     }
@@ -291,6 +304,7 @@ impl Sim {
     // __MOVING__
     // __PISTON__
 }
+// __DROPPED__
 // __HELPER__
 fn fixture() -> Sim {
     Sim {
@@ -486,8 +500,41 @@ mod command {
         pub const UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS: i32 = 256;
     }
     type R<T> = Result<T, String>;
+    #[derive(Clone)]
+    struct BlockInput {
+        state: BlockStateId,
+        nbt: Option<String>,
+    }
+    #[derive(Clone)]
+    enum Arg {
+        Block(BlockInput),
+        Other,
+    }
+    struct Context {
+        block: Arg,
+        strict: bool,
+        destroy: bool,
+    }
+    impl Context {
+        fn get(&self, _: &str) -> Option<&Arg> {
+            Some(&self.block)
+        }
+        fn has(&self, key: &str) -> bool {
+            match key {
+                "strict" => self.strict,
+                "destroy" => self.destroy,
+                _ => false,
+            }
+        }
+    }
+    fn err(key: &str, _: &[&dyn std::fmt::Display]) -> String {
+        key.into()
+    }
     struct Text;
     impl Text {
+        fn tr(_: &str, _: &[&dyn std::fmt::Display]) -> String {
+            String::new()
+        }
         fn literal(s: String) -> String {
             s
         }
@@ -513,6 +560,7 @@ mod command {
         }
     }
     struct World {
+        air: BlockStateId,
         state: BlockStateId,
         block_entities: HashMap<(i32, i32, i32), String>,
     }
@@ -533,6 +581,9 @@ mod command {
     }
     struct Behaviour;
     impl Behaviour {
+        fn can_remove_block(&self, l: &mut CommandLevel<'_>, _: &mut (), p: BlockPos) -> bool {
+            l.allow_block_removal(p, l.world.state)
+        }
         fn set_block(
             &self,
             l: &mut CommandLevel<'_>,
@@ -550,6 +601,8 @@ mod command {
         }
     }
     struct Game {
+        world_debug: bool,
+        loaded: usize,
         world: World,
         res: Res,
         denied: bool,
@@ -580,11 +633,39 @@ mod command {
         fn new_block_entity(&self, _: &str) -> Option<String> {
             None
         }
+        fn block_pos_arg(&self, _: &Context, _: &str) -> R<[i32; 3]> {
+            Ok([0, 1, 0])
+        }
+        fn block_state(&self, b: &BlockInput) -> R<BlockStateId> {
+            Ok(b.state)
+        }
+        fn block_input_state(
+            &self,
+            _: [i32; 3],
+            _: &BlockInput,
+            s: BlockStateId,
+            _: bool,
+        ) -> R<BlockStateId> {
+            Ok(s)
+        }
+        fn destroy_block_dropping(&mut self, _: [i32; 3]) -> R<()> {
+            panic!("denied command reached destroy")
+        }
+        fn feedback(&self, _: String) {}
+        fn load_block_entity_nbt(&mut self, _: [i32; 3], _: &str) -> bool {
+            self.loaded += 1;
+            self.world.block_entities.clear();
+            true
+        }
+        // __SETBLOCK__
         // __COMMAND__
     }
     fn fixture() -> Game {
         Game {
+            world_debug: false,
+            loaded: 0,
             world: World {
+                air: BlockStateId(0),
                 state: BlockStateId(1),
                 block_entities: HashMap::from([((0, 1, 0), "valuable inventory".into())]),
             },
@@ -627,11 +708,56 @@ mod command {
         assert!(g.world.block_entities.is_empty());
         assert_eq!(g.stopped, 1);
     }
+
+    #[test]
+    fn denied_setblock_never_loads_nbt_or_runs_destroy() {
+        for same in [false, true] {
+            for strict in [false, true] {
+                for destroy in [false, true] {
+                    let mut g = fixture();
+                    g.denied = true;
+                    let c = Context {
+                        block: Arg::Block(BlockInput {
+                            state: BlockStateId(if same { 1 } else { 2 }),
+                            nbt: Some("{Items:[]}".into()),
+                        }),
+                        strict,
+                        destroy,
+                    };
+                    assert!(g.cmd_setblock(&c).is_err());
+                    assert_eq!(g.loaded, 0);
+                    assert_eq!(g.world.block_entities.len(), 1);
+                }
+            }
+        }
+    }
+    #[test]
+    fn failed_state_change_does_not_load_other_blocks_nbt() {
+        let mut g = fixture();
+        g.failed = true;
+        let c = Context {
+            block: Arg::Block(BlockInput {
+                state: BlockStateId(2),
+                nbt: Some("{Items:[]}".into()),
+            }),
+            strict: false,
+            destroy: false,
+        };
+        assert!(g.cmd_setblock(&c).is_err());
+        assert_eq!(g.loaded, 0);
+        assert_eq!(g.world.block_entities.len(), 1);
+    }
 }
 
 mod callbacks {
     use super::{BlockPos, BlockStateId};
     // __SNAPSHOT__
+    struct CallbackBehaviour;
+    impl CallbackBehaviour {
+        fn can_remove_block(&self, l: &mut CallbackLevel, _: &mut (), _: BlockPos) -> bool {
+            !l.denied
+        }
+    }
     struct CallbackLevel {
         denied: bool,
     }
@@ -659,9 +785,12 @@ mod callbacks {
         fn block_removal_snapshot(&self, _: [i32; 3]) -> BlockRemovalSnapshot {
             self.current.clone()
         }
-        fn with_level<T>(&mut self, f: impl FnOnce(&(), &mut CallbackLevel, &mut ()) -> T) -> T {
+        fn with_level<T>(
+            &mut self,
+            f: impl FnOnce(&CallbackBehaviour, &mut CallbackLevel, &mut ()) -> T,
+        ) -> T {
             f(
-                &(),
+                &CallbackBehaviour,
                 &mut CallbackLevel {
                     denied: self.denied,
                 },
@@ -685,6 +814,8 @@ mod callbacks {
     }
     fn snapshot() -> BlockRemovalSnapshot {
         BlockRemovalSnapshot {
+            moving: vec![],
+            wire: vec![],
             state: BlockStateId(1),
             live: Some(5),
             saved: Some(6),
@@ -736,6 +867,110 @@ mod callbacks {
             }
             assert_eq!(g.effects, 1);
             assert_eq!(g.pending.clears, 0);
+        }
+    }
+}
+
+#[test]
+fn direct_moving_shell_paths_preserve_denied_carried_state() {
+    for route in 0..3 {
+        let mut s = fixture();
+        s.level.blocks.insert(at(2), BlockStateId(5));
+        s.ticks.moving_pistons.push((at(2), moving()));
+        s.level.denied.insert((at(2), BlockStateId(99)));
+        let old = s.ticks.clone();
+        let blocks = s.level.clone();
+        match route {
+            0 => {
+                s.drop_resources(BlockStateId(5), at(2));
+            }
+            1 => {
+                assert!(!s.destroy_block(at(2), true, 512));
+            }
+            _ => {
+                assert!(s.chunk_set_block_state(at(2), BlockStateId(0), 0).is_none());
+            }
+        }
+        assert_eq!(s.ticks, old);
+        assert_eq!(s.level, blocks);
+        assert_eq!((s.drops, s.events), (0, 0));
+    }
+}
+
+mod raw_wire {
+    use std::sync::Arc;
+    #[derive(Clone, Debug, Default, PartialEq)]
+    struct ItemStack {
+        extra: Option<Box<StackData>>,
+    }
+    impl ItemStack {
+        fn data(&self) -> Option<&StackData> {
+            self.extra.as_deref()
+        }
+    }
+    #[derive(Clone, Debug, Default, PartialEq)]
+    struct StackData {
+        wire: Wire,
+        container: Vec<(u8, ItemStack)>,
+        charged: Vec<ItemStack>,
+        bundle_contents: Vec<ItemStack>,
+        pot_decorations: Option<Box<[Option<ItemStack>; 4]>>,
+    }
+    // __WIRE__
+    // __WIRE_HELPER__
+    fn item(byte: u8) -> ItemStack {
+        ItemStack {
+            extra: Some(Box::new(StackData {
+                wire: Wire::new(ItemStack::default(), Arc::from([byte])),
+                ..Default::default()
+            })),
+        }
+    }
+    #[test]
+    fn raw_wire_identity_catches_bytes_and_baseline_changes() {
+        let a = item(1);
+        let clone = a.clone();
+        assert!(
+            a.data()
+                .unwrap()
+                .wire
+                .same_snapshot(&clone.data().unwrap().wire)
+        );
+        for b in [item(1), item(2)] {
+            assert_eq!(a, b);
+            assert!(
+                !a.data()
+                    .unwrap()
+                    .wire
+                    .same_snapshot(&b.data().unwrap().wire)
+            );
+        }
+    }
+    #[test]
+    fn nested_wire_changes_are_present_in_removal_snapshot() {
+        for kind in 0..4 {
+            let mut a = ItemStack::default();
+            let mut data = StackData::default();
+            match kind {
+                0 => data.container.push((0, item(1))),
+                1 => data.charged.push(item(1)),
+                2 => data.bundle_contents.push(item(1)),
+                _ => data.pot_decorations = Some(Box::new([Some(item(1)), None, None, None])),
+            };
+            a.extra = Some(Box::new(data));
+            let mut b = a.clone();
+            let data = b.extra.as_mut().unwrap();
+            match kind {
+                0 => data.container[0].1 = item(2),
+                1 => data.charged[0] = item(2),
+                2 => data.bundle_contents[0] = item(2),
+                _ => data.pot_decorations.as_mut().unwrap()[0] = Some(item(2)),
+            };
+            assert_eq!(a, b);
+            let (mut left, mut right) = (vec![], vec![]);
+            removal_stack_wire(&a, &mut left);
+            removal_stack_wire(&b, &mut right);
+            assert!(left != right);
         }
     }
 }

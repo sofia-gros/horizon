@@ -948,11 +948,11 @@ impl Game<'_> {
         if self.res.facts().is_air(state) {
             return Ok(());
         }
-        if !self.with_level(|_, level, _| {
-            horizon_world::level::LevelAccess::allow_block_removal(
+        if !self.with_level(|b, level, ticks| {
+            b.can_remove_block(
                 level,
+                ticks,
                 horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
-                state,
             )
         }) {
             return Ok(());
@@ -1014,11 +1014,11 @@ impl Game<'_> {
             });
             self.native_block_drops(pos, state, None, None, Some(radius), &mut drops);
             if self.block_removal_snapshot(pos) != snapshot
-                || !self.with_level(|_, level, _| {
-                    horizon_world::level::LevelAccess::allow_block_removal(
+                || !self.with_level(|b, level, ticks| {
+                    b.can_remove_block(
                         level,
+                        ticks,
                         horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
-                        state,
                     )
                 })
             {

@@ -18,7 +18,7 @@ notification order. Refusal is not a rollback mechanism. Direct raw-storage
 callers, world-generation writes and multi-block application operations outside
 these entry points remain responsible for their own preflight/atomicity.
 
-The eighteen cases in `python3 tools/test_removal_preflight.py` compile production
+The twenty-three cases in `python3 tools/test_removal_preflight.py` compile production
 code excerpts using a small in-memory adapter. They exercise repeated denied
 and allowed destruction, drop counts, direct-write refusal, piston footprint
 preflight and projected moving states. The resolver, retraction decision, autonomous moving-piston tick/finalTick and
@@ -42,3 +42,15 @@ permission check and exact snapshot comparison of the block state, live encoded
 inventory, saved raw entity, opaque source tags and custom name. If a callback
 changes that evidence, subsequent removal/loot delivery aborts rather than
 using an obsolete snapshot. A callback's own side effects are not rolled back.
+
+The command dispatcher and shared NBT loader check permission even for unchanged
+block states. Failed placement cannot apply another block's NBT to the old
+inventory. Clone checks its source/destination footprint before writes and does
+not replace inventories after a denied destination; this is not a general
+rollback facility for multi-block commands. Direct removal and loot of moving
+piston shells check the carried state as well.
+
+Callback snapshots retain the identity of raw wire component patches recursively
+through nested container/bundle/projectile/decorated-pot stacks. This supplements
+save encoding, which deliberately omits wire state. Wire baseline identity is
+compared conservatively: a newly decoded equivalent patch may abort removal.

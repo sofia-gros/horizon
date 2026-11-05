@@ -283,6 +283,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
 
     // ---- Level.setBlock ----
+    /// A moving shell also owns the carried block; accepting the shell alone
+    /// must never authorize dropping or deleting a protected payload.
+    pub(crate) fn block_removal_allowed(&self, pos: BlockPos, state: BlockStateId) -> bool {
+        self.level.allow_block_removal(pos, state)
+            && (!self.b.is_block(state, self.b.named.moving_piston)
+                || self
+                    .moving_piston(pos)
+                    .is_none_or(|moving| self.level.allow_block_removal(pos, moving.moved_state)))
+    }
     pub fn set_block(&mut self, pos: BlockPos, state: BlockStateId, flags: i32) -> bool {
         self.set_block_limit(pos, state, flags, flags::UPDATE_LIMIT)
     }
@@ -333,7 +342,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if current == state {
             return None;
         }
-        if !self.level.allow_block_removal(pos, current) {
+        if !self.block_removal_allowed(pos, current) {
             return None;
         }
         let old = self.level.set_raw(pos, state)?;
@@ -421,7 +430,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         // Refusal must precede drops/particles: refusing only set_raw would
         // leave the old block in place after already awarding its loot.
-        if !self.level.allow_block_removal(pos, state) {
+        if !self.block_removal_allowed(pos, state) {
             return false;
         }
         // Block.spawnDestroyParticles: fire spawns none, straw beds their own.
@@ -445,7 +454,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub fn drop_resources(&mut self, state: BlockStateId, pos: BlockPos) {
         // Some shape/plant paths request loot before their replacement rather
         // than calling destroy_block. Refusal must suppress that loot too.
-        if !self.level.allow_block_removal(pos, state) {
+        if !self.block_removal_allowed(pos, state) {
             return;
         }
         // `MovingPistonBlock.getDrops`: a moving piston's loot is the loot of
@@ -458,6 +467,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         else {
             return;
         };
+        if !self.level.allow_block_removal(pos, state) {
+            return;
+        }
         if self.level.game_rules().block_drops {
             self.emit(LevelEvent::DropResources { pos, state });
         }
