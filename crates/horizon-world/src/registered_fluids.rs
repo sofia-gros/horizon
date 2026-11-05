@@ -3,6 +3,7 @@
 //! This is the data layer, not a registration hook in the running game. The
 //! vanilla simulation still uses `FluidKind`; integrating scheduling, flow,
 //! rendering and bucket transactions must not silently alias these IDs to lava.
+pub mod resources;
 pub mod scheduling;
 
 use crate::{
@@ -21,6 +22,21 @@ use std::{
 };
 
 static NEXT_CATALOG: AtomicU64 = AtomicU64::new(1);
+
+/// Borrow for scoped simulation, or share ownership across game/resource reloads.
+pub(crate) enum Catalog<'a, 'r> {
+    Borrowed(&'a RegisteredFluids<'r>),
+    Shared(std::sync::Arc<RegisteredFluids<'r>>),
+}
+impl<'r> std::ops::Deref for Catalog<'_, 'r> {
+    type Target = RegisteredFluids<'r>;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(catalog) => catalog,
+            Self::Shared(catalog) => catalog,
+        }
+    }
+}
 
 /// A runtime identity. Never persist its numeric representation: catalog order
 /// can change on resource reload, and identities belong to exactly one catalog.
