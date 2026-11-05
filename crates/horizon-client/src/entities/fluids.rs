@@ -131,6 +131,14 @@ impl ArmorStand {
     pub(super) fn registered_fluid_box(&self) -> Option<Aabb> {
         (!self.marker).then(|| self.bounds())
     }
+    pub(super) fn registered_fluid_eyes(&self) -> Vec3 {
+        let eye = if self.small {
+            f64::from(0.9875f32 * 0.9)
+        } else {
+            f64::from(1.7775f32)
+        };
+        Vec3::new(self.position.x, self.position.y + eye, self.position.z)
+    }
     /// Apply registered-family forces without claiming native water immersion.
     /// The authoritative owner calls this after native currents, before travel.
     pub fn update_registered_fluids(
@@ -142,15 +150,10 @@ impl ArmorStand {
         let Some(bounds) = self.registered_fluid_box() else {
             return;
         };
-        let eye = if self.small {
-            f64::from(0.9875f32 * 0.9)
-        } else {
-            f64::from(1.7775f32)
-        };
         update_registered_currents(
             bounds,
             self.position,
-            self.position.y + eye,
+            self.registered_fluid_eyes().y,
             &mut self.velocity,
             world,
             fluids,

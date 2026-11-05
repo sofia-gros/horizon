@@ -341,3 +341,10 @@ and the same MIT Tinkers' Construct `TinkerFluids.cool()` / `hot()` motion-scale
 policy (Copyright (c) 2022 SlimeKnights, revision
 `f4e77d43f39ba1047bf93ae816b7e1beaab514c2`). No additional external implementation
 was read or copied for the armor-stand wiring.
+
+Registered armor-stand extinguishing in `entities/registered_fluids.rs` consumes
+that same MIT Tinkers' Construct `TinkerFluids.cool()` canExtinguish policy
+(Copyright (c) 2022 SlimeKnights, revision
+`f4e77d43f39ba1047bf93ae816b7e1beaab514c2`, full MIT license above). This is
+original Rust integration with the existing native-water fire-clearing phase;
+no additional external implementation was read or copied for this wiring.
