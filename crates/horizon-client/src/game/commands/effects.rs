@@ -146,6 +146,9 @@ impl Game<'_> {
                         m.extra
                             .ambient_effects
                             .retain(|h| left.iter().any(|x| x.0 == *h));
+                        m.extra
+                            .no_curative_effects
+                            .retain(|h| left.iter().any(|x| x.0 == *h));
                         m.extra.effects.len() != before
                     }
                     None => false,

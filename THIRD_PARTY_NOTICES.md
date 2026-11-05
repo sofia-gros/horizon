@@ -276,3 +276,13 @@ and lava damage, and categorized local/LAN burn sound dispatch. Fire-immune
 mobs are skipped; sound pitch consumes the level random only on accepted hits,
 including silent entities before their sound suppression. No Forge implementation
 or game assets were read or copied for this adapter.
+
+
+The standard mob effect-contact adapter in `mobs/registered_fluids.rs` and
+`game/registered_fluids.rs` also follows
+[Tinkers' Construct MobEffectLiquidBlock.entityInside at f4e77d43](https://github.com/SlimeKnights/TinkersConstruct/blob/f4e77d43f39ba1047bf93ae816b7e1beaab514c2/src/main/java/slimeknights/tconstruct/fluids/block/MobEffectLiquidBlock.java).
+Copyright (c) 2022 SlimeKnights, MIT; full license above. Changes: explicit
+per-family policies, deferred authoritative mob application, current host
+entity-tag immunity checks, and host active-instance curative metadata. Only
+Poison, Slowness and Blindness are enabled here. No Forge implementation was
+read or copied. Hidden effect-chain and exact event-order parity are unverified.

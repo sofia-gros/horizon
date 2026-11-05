@@ -1,6 +1,6 @@
 // Contact cure policy follows Tinkers' Construct, Copyright (c) 2022 SlimeKnights.
 // MIT License; full notice in THIRD_PARTY_NOTICES.md.
-// Changed: explicit declaration and Horizon player-instance dispatch.
+// Changed: explicit declaration and Horizon player/mob instance dispatch.
 //! Live authoritative registered-fluid scheduling. Rendering and item-use
 //! adapters are separate integration gates; no mod declarations ship here.
 use super::*;
@@ -44,6 +44,37 @@ impl Game<'_> {
         );
         instance.no_curatives = effect.no_curatives;
         self.add_player_effect(instance);
+    }
+    /// Standard mob contacts use the same entity-tag immunities as potions.
+    pub(super) fn registered_fluid_mob_effect(
+        &mut self,
+        mob: u32,
+        fluid: horizon_world::registered_fluids::RegisteredFluidId,
+    ) {
+        if self.remote.is_some() {
+            return;
+        }
+        let Some(effect) = self
+            .res
+            .rest()
+            .registered_fluids
+            .as_ref()
+            .and_then(|r| r.interaction(fluid))
+            .and_then(|p| p.effect.clone())
+        else {
+            return;
+        };
+        let tags = &self.res.stations().enchantments.entity_tags;
+        let Some(m) = self
+            .mobs
+            .iter_mut()
+            .find(|m| m.id == mob && m.alive() && !m.removed)
+        else {
+            return;
+        };
+        if let Some((id, amplifier, new)) = apply_mob_contact(m, &effect, tags) {
+            self.mod_effect_added(id, Some(mob as i32), amplifier, new);
+        }
     }
     pub(super) fn new_registered_fluid_scheduler(&self) -> Option<Scheduler> {
         self.res
@@ -285,4 +316,37 @@ impl Game<'_> {
         self.process_level_events()?;
         Ok(Some(UseResult::Success { swing: true }))
     }
+}
+
+fn apply_mob_contact(
+    mob: &mut horizon_client::mobs::Mob,
+    effect: &horizon_world::registered_fluids::interaction::EffectContact,
+    tags: &std::collections::HashMap<String, std::collections::HashSet<String>>,
+) -> Option<(&'static str, i32, bool)> {
+    let id = effect.id.id();
+    if !matches!(
+        id,
+        "minecraft:poison" | "minecraft:slowness" | "minecraft:blindness"
+    ) || !super::potions::mob_can_be_affected(tags, &mob.kind.id, id)
+    {
+        return None;
+    }
+    let id = super::potions::mob_effect_id(id)?;
+    let state = |m: &horizon_client::mobs::Mob| {
+        (
+            m.extra
+                .effects
+                .iter()
+                .find(|e| e.0 == id)
+                .map(|e| (e.1, e.2)),
+            m.extra.hidden_effects.contains(&id),
+            m.extra.ambient_effects.contains(&id),
+            m.extra.no_curative_effects.contains(&id),
+        )
+    };
+    let before = state(mob);
+    let new = before.0.is_none();
+    let amp = i32::from(effect.amplifier);
+    mob.add_effect_with_curatives(id, effect.duration_ticks as i32, amp, effect.no_curatives);
+    (before != state(mob)).then_some((id, amp, new))
 }

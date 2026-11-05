@@ -2670,6 +2670,9 @@ fn tick_effects(m: &mut Mob, mods: Option<&dyn super::ModEffectTicks>) {
     m.extra
         .ambient_effects
         .retain(|h| effects.iter().any(|e| e.0 == *h));
+    m.extra
+        .no_curative_effects
+        .retain(|id| effects.iter().any(|e| e.0 == *id));
     m.extra.effects = effects;
 }
 

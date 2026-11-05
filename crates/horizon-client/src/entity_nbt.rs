@@ -451,6 +451,9 @@ pub fn mob_to_nbt(
                     e.push(("amplifier", Tag::Byte(amplifier.clamp(0, 255) as u8 as i8)));
                 }
                 e.push(("duration", Tag::Int(duration)));
+                if m.extra.no_curative_effects.contains(&effect) {
+                    e.push(("horizon:no_curatives", Tag::Byte(1)));
+                }
                 if ambient {
                     e.push(("ambient", Tag::Byte(1)));
                 }
@@ -1564,6 +1567,10 @@ pub fn mob_from_nbt(
             let amplifier = number(e.get("amplifier")).unwrap_or(0) as i32;
             m.extra.effects.retain(|x| x.0 != effect);
             m.extra.effects.push((effect, duration, amplifier));
+            m.extra.no_curative_effects.retain(|id| *id != effect);
+            if number(e.get("horizon:no_curatives")).is_some_and(|v| v != 0) {
+                m.extra.no_curative_effects.push(effect);
+            }
             // Details.CODEC: `show_particles` defaults to true.
             m.extra.hidden_effects.retain(|h| *h != effect);
             if number(e.get("show_particles")) == Some(0) {
@@ -5621,5 +5628,36 @@ mod mod_thrown_nbt_tests {
         assert!(back.no_gravity);
         orb.no_gravity = false;
         assert!(orb_to_nbt(&orb, [1; 4]).get("NoGravity").is_none());
+    }
+}
+
+#[cfg(test)]
+mod fluid_curative_tests {
+    use super::*;
+
+    #[test]
+    fn active_mob_curative_policy_round_trips_and_missing_policy_is_ordinary() {
+        let kind = crate::mobs::sensor_scan_tests::kind();
+        let types = HashMap::from([(kind.id.clone(), kind.clone())]);
+        let mut mob = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+        mob.add_effect_with_curatives("poison", 100, 0, true);
+        mob.add_effect("slowness", 200, 1);
+        let tag = mob_to_nbt(&mob, [1, 2, 3, 4], None, None);
+        let Some(Tag::List(effects)) = tag.get("active_effects") else {
+            panic!("missing effects");
+        };
+        assert_eq!(effects[0].get("horizon:no_curatives"), Some(&Tag::Byte(1)));
+        assert!(effects[1].get("horizon:no_curatives").is_none());
+        let mut back = mob_from_nbt(&tag, &types, 2, None).unwrap();
+        assert_eq!(back.extra.no_curative_effects, ["minecraft:poison"]);
+        back.cure_effects();
+        assert_eq!(back.extra.effects, [("minecraft:poison", 100, 0)]);
+        // An ordinary replacement clears the saved opt-out too.
+        back.add_effect("poison", 200, 0);
+        let again = mob_to_nbt(&back, [1, 2, 3, 4], None, None);
+        let Some(Tag::List(effects)) = again.get("active_effects") else {
+            panic!("missing effects");
+        };
+        assert!(effects[0].get("horizon:no_curatives").is_none());
     }
 }
