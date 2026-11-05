@@ -1273,6 +1273,20 @@ impl Audio {
         self.play(event, at, volume, pitch);
         self.capture = capture;
     }
+    /// A server-dispatched sound whose entity category differs from its name.
+    /// The caller sends its packet; do not capture it a second time.
+    pub fn play_on_unshared(
+        &mut self,
+        source: usize,
+        event: &str,
+        at: Option<[f64; 3]>,
+        volume: f32,
+        pitch: f32,
+    ) {
+        let capture = self.capture.take();
+        self.play_on(source, event, at, volume, pitch);
+        self.capture = capture;
+    }
     /// `AbstractWidget.playButtonClickSound`: an unseeded, relative UI sound.
     pub fn play_button_click(&mut self) {
         self.play_instance(

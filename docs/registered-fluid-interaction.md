@@ -71,7 +71,7 @@ mixed-fluid precedence, and movement sequences still need an independent oracle.
 
 Remaining: mobs/items/projectiles, custom potion effects, item-specific curative
 lists and mixed-source merge parity,
-source-specific burn audio, camera fog, fluid mixing/solidification, dispenser use, and live save/reload/LAN acceptance. This is not complete
+camera fog, fluid mixing/solidification, dispenser use, and live save/reload/LAN acceptance. This is not complete
 #379 support and must stay draft. The paired new slice declares Venom, Honey and
 Liquid Soul; their policy enables Poison, Slowness and Blindness respectively.
 
@@ -90,3 +90,26 @@ formatting. Its regression cases are included but have not been run.
 The custom-effect contact extension received brief static review and formatting
 only. Its registry-resolution/family-isolation regressions have not been run;
 no tests, builds, CI inspection, version checks or merges were performed.
+
+The burn-audio extension follows `BurningLiquidBlock.entityInside`: after the
+normal health path accepts lava-type contact damage, emit the additional
+`minecraft:entity.generic.burn` sound at volume 0.4 and f32 pitch
+`2.0 + level.random.nextFloat() * 0.4`. A rejected cooldown, immunity, native
+damage cancellation or predicting-client hit emits nothing and consumes no
+pitch random draw. A stronger accepted cooldown hit still emits the extra
+sound, independently of whether a new hurt animation/sound was generated.
+
+The event retains its contact position and sampled pitch until authoritative
+dispatch. Like the source player's `playSound`, the packet uses the player
+sound category and excludes the hurt player; it is separate from that player's
+ordinary damage-packet hurt sound. The server window plays its local copy
+without capturing another broadcast. No client-side speculative burn sound is
+invented. All declarations with a burn policy use this path; native lava and
+non-burning registered fluids are unchanged. Mobs, vehicles and dropped items
+remain outside this player-only registered-fluid path.
+
+Brief static review and formatting only. A deferred real-health-path regression
+covers fresh/stronger accepted hits, cooldown rejection, invulnerability,
+spectator, prediction, fire resistance and pitch RNG consumption. It has not
+been run; no tests, builds, CI inspection, version checks or merges were made.
+Actual audio audibility, packet audience and gameplay/LAN remain unverified.

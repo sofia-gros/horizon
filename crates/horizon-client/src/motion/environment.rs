@@ -8,14 +8,19 @@ use horizon_world::{
 };
 impl MotionWorld<'_, '_, '_> {
     pub(super) fn environment_hurt(&mut self, source: &str, damage: f32) -> Result<()> {
+        self.environment_hurt_result(source, damage).map(|_| ())
+    }
+    /// Whether the existing authoritative health path accepted the hit.
+    /// A health delta is not equivalent: absorption and damage hooks matter.
+    pub(super) fn environment_hurt_result(&mut self, source: &str, damage: f32) -> Result<bool> {
         if self.player.invulnerable || self.player.spectator {
-            return Ok(());
+            return Ok(false);
         }
         // Frost walker's `damage_immunity`: #burn_from_stepping (magma, campfire).
         if self.player.burn_from_stepping_immune
             && matches!(source, "minecraft:hot_floor" | "minecraft:campfire")
         {
-            return Ok(());
+            return Ok(false);
         }
         let id = self
             .resources
@@ -24,8 +29,7 @@ impl MotionWorld<'_, '_, '_> {
             .id(source)
             .ok_or("missing environment damage type")?;
         self.player
-            .hurt(&self.resources.health, self.scene.health_rules, id, damage)?;
-        Ok(())
+            .hurt(&self.resources.health, self.scene.health_rules, id, damage)
     }
     pub(super) fn tick_remaining_fire(&mut self) -> Result<()> {
         if self.player.spectator {
