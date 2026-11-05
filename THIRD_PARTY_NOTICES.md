@@ -176,7 +176,9 @@ pure opt-in response, finite-input guards and host post-restitution application.
 preservation and stop/end timers of `SlimeBounceHandler` at the same revision.
 Changes: explicit per-player state, finite-input and once-per-host-tick guards,
 with post-restitution landing retained from the earlier slice. Source angle
-tracking/audio and exact event-phase equivalence are not included.
+tracking now uses the host's Mth.atan2 implementation and emits an optional
+caller-selected sound for corrected sharp turns. Landing uses the same event
+with source unit volume/pitch. Exact event-phase equivalence remains unverified.
 
 
 `crates/horizon-client/src/motion/registered_fluids.rs` adapts the family-height

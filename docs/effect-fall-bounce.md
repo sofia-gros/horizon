@@ -15,8 +15,8 @@ velocity for synchronization. The guest move path applies the same response.
 Native fall cancellation takes precedence. Creative flight immunity and normal
 effects that reset fall distance remain intact.
 
-This slice does not implement the source's full bounce handler. Bounce sounds,
-non-player entities and complete client/server timing parity remain separate.
+This slice does not implement the source's full bounce handler. Non-player
+entities and complete client/server timing parity remain separate.
 The caller owns enabling/resetting
 the flag from current effects. The paired mod work enables Bouncy; armor behavior
 is not implicitly activated.
@@ -50,10 +50,36 @@ Spectator guests also clear state on their early-return path. Native block
 restitution and slime-block coefficients are unchanged. No water behavior is
 assigned to registered-fluid identities. Predicting passenger ticks, source
 one-tick deferred client rebound, exact living-event phase and LAN convergence
-still need later validation. Source angle-change audio is not implemented.
+still need later validation.
 
 Brief static review and formatting only. Pure deferred regressions cover speed
 correction, unchanged Y, strict deadlines, air resets, cancellation and repeat
 registration; the existing landing fixture also checks continuation after
 effect removal and immediate glide cancellation. None were run. No tests,
 builds, CI inspection, version checks or merges were performed.
+
+## Opt-in landing and turn sounds
+
+`StatusFlags.bounce_sound` defaults to None. A native mod may supply a static
+sound event ID alongside its bounce flag; the rebound captures that ID for the
+handler's remaining lifetime, including after the effect expires. No TConstruct
+ID or sound assets are hardcoded in the host. A non-crouching qualifying landing
+emits it once at source volume/pitch 1. Short/suppressed/disabled falls do not.
+
+Momentum uses the existing table-based `Mth.atan2` adapter. A sound is emitted
+only on an actual horizontal boost when the absolute raw angle difference is
+greater than one radian, matching the source's unwrapped +pi/-pi boundary.
+The source constructor's initial zero angle and client refresh behavior are
+retained. No-boost deceleration updates the angle silently; acceleration does
+not replace it. Repeat calls in the same host tick emit no second turn sound.
+
+Predicting clients play their local event on the player sound category. The
+authoritative packet reaches surrounding players except that originating
+connection, with unshared server-window playback to avoid duplicate broadcasts.
+Custom names use the existing inline sound holder packet when not in the native
+sound registry. The mod must supply its sounds.json entry and resources.
+
+The source angle rules and landing event counts have deferred regression
+coverage, not executed. Brief static review and formatting only, with no tests,
+builds, CI inspection, version checks or merges. Audibility, actual packet
+recipients, prediction agreement and LAN timing remain unverified.

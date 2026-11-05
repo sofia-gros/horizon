@@ -3,7 +3,7 @@
 // Full notice in THIRD_PARTY_NOTICES.md. Changed: pure player momentum state,
 // finite-input and once-per-host-tick guards; landing restitution is separate.
 //! Airborne continuation after an explicitly enabled effect rebound.
-use horizon_core::geometry::Vec3;
+use horizon_core::geometry::{Vec3, trig::atan2};
 
 #[derive(Clone, Debug)]
 pub struct Momentum {
@@ -12,12 +12,14 @@ pub struct Momentum {
     was_in_air: bool,
     end_handler: i32,
     last_tick: Option<i32>,
+    last_angle: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Update {
     pub active: bool,
     pub velocity: Option<Vec3>,
+    pub turn_sound: bool,
 }
 
 impl Momentum {
@@ -29,6 +31,8 @@ impl Momentum {
             was_in_air: false,
             end_handler: 0,
             last_tick: None,
+            // The source constructor leaves this at Java's zero default.
+            last_angle: 0.0,
         })
     }
 
@@ -37,6 +41,7 @@ impl Momentum {
     pub fn refresh(&mut self, velocity: Vec3, client: bool) {
         if client && let Some(magnitude) = horizontal_square(velocity) {
             self.last_mag_sq = magnitude;
+            self.last_angle = atan2(velocity.z, velocity.x);
         }
     }
 
@@ -45,17 +50,20 @@ impl Momentum {
             return Update {
                 active: false,
                 velocity: None,
+                turn_sound: false,
             };
         };
         if cancel {
             return Update {
                 active: false,
                 velocity: None,
+                turn_sound: false,
             };
         }
         let mut result = Update {
             active: true,
             velocity: None,
+            turn_sound: false,
         };
         if self.last_tick == Some(tick) {
             return result;
@@ -78,12 +86,19 @@ impl Momentum {
                         return Update {
                             active: false,
                             velocity: None,
+                            turn_sound: false,
                         };
                     }
                     result.velocity = Some(velocity);
                     self.last_mag_sq = self.last_mag_sq * damping * damping;
+                    let angle = atan2(motion.z, motion.x);
+                    // Source compares the raw angle difference, not a wrapped
+                    // shortest arc, and only sounds on an actual correction.
+                    result.turn_sound = (angle - self.last_angle).abs() > 1.0;
+                    self.last_angle = angle;
                 } else {
                     self.last_mag_sq = motion_sq;
+                    self.last_angle = atan2(motion.z, motion.x);
                 }
             }
         }
@@ -109,6 +124,40 @@ fn horizontal_square(velocity: Vec3) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turn_sound_requires_a_correction_and_uses_raw_source_angle_difference() {
+        let mut state = Momentum::new(Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        // Too little slowing to boost still updates the angle, without sound.
+        assert!(
+            !state
+                .tick(1, Vec3::new(0.0, 0.0, 0.99), true, false)
+                .turn_sound
+        );
+        assert!(
+            !state
+                .tick(2, Vec3::new(0.0, 0.0, 0.5), true, false)
+                .turn_sound
+        );
+        assert!(
+            state
+                .tick(3, Vec3::new(0.5, 0.0, 0.0), true, false)
+                .turn_sound
+        );
+        assert!(
+            !state
+                .tick(3, Vec3::new(0.0, 0.0, 0.1), true, false)
+                .turn_sound
+        );
+        // Existing client registration resets the angle. Crossing +pi/-pi
+        // nevertheless sounds: the source does not normalize that difference.
+        state.refresh(Vec3::new(-1.0, 0.0, 0.01), true);
+        assert!(
+            state
+                .tick(4, Vec3::new(-0.5, 0.0, -0.005), true, false)
+                .turn_sound
+        );
+    }
 
     #[test]
     fn preserves_source_horizontal_fraction_without_vertical_change_or_speed_capture() {

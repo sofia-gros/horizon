@@ -5979,6 +5979,10 @@ impl Game<'_> {
                         pitch,
                     );
                 }
+                horizon_client::motion::MotionEvent::EffectBounceSound { sound, position } => {
+                    let at = [position.x, position.y, position.z];
+                    self.audio.play_on(7, sound, Some(at), 1.0, 1.0);
+                }
                 // NetherPortalBlock.entityInside on the client's own level:
                 // the portal overlay and its trigger sound (the server moves
                 // the player).
