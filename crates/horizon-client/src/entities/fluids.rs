@@ -1,5 +1,5 @@
-//! Dropped-item and armor-stand immersion and currents through the shared vanilla fluid helpers.
-use super::{ArmorStand, ItemEntity};
+//! Item, armor-stand and experience-orb currents through shared fluid helpers.
+use super::{ArmorStand, ExperienceOrb, ItemEntity};
 use crate::{
     motion::{FluidResources, FluidTags, LAVA, WATER},
     world::World,
@@ -127,6 +127,29 @@ impl ItemEntity {
             world,
             fluids,
         )
+    }
+}
+impl ExperienceOrb {
+    /// Authoritative registered currents precede orb gravity/attraction/motion.
+    /// This does not classify a custom fluid as native water or lava.
+    pub fn update_registered_fluids(
+        &mut self,
+        world: &World,
+        fluids: &FluidResources,
+        resources: &RegisteredFluidResources<'_>,
+    ) {
+        if !crate::entity_rules::EntityRules::is_pushed_by_fluid(self) {
+            return;
+        }
+        let _ = update_registered_currents(
+            self.bounds(),
+            self.position,
+            self.position.y + f64::from(0.5f32 * 0.85f32),
+            &mut self.velocity,
+            world,
+            fluids,
+            resources,
+        );
     }
 }
 impl ArmorStand {
