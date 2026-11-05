@@ -290,6 +290,21 @@ mod tests {
         }
     }
     #[test]
+    fn glass_policy_loads_and_distances_above_eight_are_rejected() {
+        let registry = registry();
+        let mut value = document();
+        value["fluids"][0]["policy"] = json!({
+            "drop_off":8,"slope_distance":8,"tick_delay":30,"source_conversion":false
+        });
+        assert!(
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).is_ok()
+        );
+        value["fluids"][0]["policy"]["slope_distance"] = json!(9);
+        assert!(
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).is_err()
+        );
+    }
+    #[test]
     fn invalid_or_incomplete_resources_fail_instead_of_guessing_defaults() {
         let registry = registry();
         for (key, value) in [
