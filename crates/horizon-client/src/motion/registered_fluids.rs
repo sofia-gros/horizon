@@ -1,6 +1,6 @@
-// Contact burning is adapted from Tinkers' Construct, Copyright (c) 2022 SlimeKnights.
+// Fluid contact is adapted from Tinkers' Construct, Copyright (c) 2022 SlimeKnights.
 // MIT License. The full notice is retained in THIRD_PARTY_NOTICES.md.
-// Changed: declarative per-family policy and Horizon player health dispatch.
+// Changed: declarative per-family policy and Horizon player health/effect dispatch.
 //! Identity-preserving custom-liquid player travel and contact effects.
 use super::*;
 use horizon_world::{
@@ -170,29 +170,25 @@ impl MotionWorld<'_, '_, '_> {
             })
         })
     }
-    // BurningLiquidBlock.entityInside, TConstruct f4e77d43 (MIT). The source's
-    // family-height guard is essential: being in another liquid cannot burn.
+    // BurningLiquidBlock and MobEffectLiquidBlock.entityInside, TConstruct
+    // f4e77d43 (MIT). Another fluid's height cannot trigger this family's effects.
     pub(super) fn registered_fluid_inside(&mut self, state: BlockStateId) -> Result<()> {
         let Some(resources) = &self.assets.registered_fluids else {
             return Ok(());
         };
-        let Some(fluid) = resources.catalog.from_block(state) else {
+        let Some(policy) = resources.interaction_at_contact(state, &self.player.fluids.registered)
+        else {
             return Ok(());
         };
-        let source = resources.catalog.source(fluid.id())?;
-        if !self
-            .player
-            .fluids
-            .registered
-            .iter()
-            .any(|c| c.source == source && c.height > 0.0)
-        {
-            return Ok(());
+        if let Some(effect) = policy.effect {
+            self.player
+                .events
+                .push(MotionEvent::RegisteredFluidEffect(effect));
         }
-        let Some(burn) = resources.interaction(source).and_then(|p| p.burn) else {
-            return Ok(());
-        };
-        self.player.ignite_for_ticks(i32::from(burn.seconds) * 20)?;
-        self.environment_hurt("minecraft:lava", burn.damage)
+        if let Some(burn) = policy.burn {
+            self.player.ignite_for_ticks(i32::from(burn.seconds) * 20)?;
+            self.environment_hurt("minecraft:lava", burn.damage)?;
+        }
+        Ok(())
     }
 }

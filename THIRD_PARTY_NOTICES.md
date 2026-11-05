@@ -169,10 +169,12 @@ BlueMap is licensed under the MIT license:
 ## Tinkers' Construct registered-fluid contact
 
 `crates/horizon-client/src/motion/registered_fluids.rs` adapts the family-height
-check, ignition and lava-type damage of `BurningLiquidBlock.entityInside` from
+check, ignition and lava-type damage of `BurningLiquidBlock.entityInside`, and
+the matching-family status-effect contact of `MobEffectLiquidBlock.entityInside`, from
 [Tinkers' Construct f4e77d43](https://github.com/SlimeKnights/TinkersConstruct/tree/f4e77d43f39ba1047bf93ae816b7e1beaab514c2).
 Changes: explicit resource policies, catalog-scoped identity, and Horizon player
-health dispatch. No Forge implementation was read or copied.
+health/effect dispatch. The source's empty curative-item list is not represented
+yet. No Forge implementation was read or copied for this adapter.
 
 MIT License
 

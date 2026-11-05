@@ -24,6 +24,32 @@ pub struct BurnContact {
     pub seconds: u16,
     pub damage: f32,
 }
+/// Only the sustained vanilla effects with a player dispatcher are accepted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub enum ContactEffect {
+    #[serde(rename = "minecraft:poison")]
+    Poison,
+    #[serde(rename = "minecraft:slowness")]
+    Slowness,
+    #[serde(rename = "minecraft:blindness")]
+    Blindness,
+}
+impl ContactEffect {
+    pub fn player_id(self) -> &'static str {
+        match self {
+            Self::Poison => "poison",
+            Self::Slowness => "slowness",
+            Self::Blindness => "blindness",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectContact {
+    pub id: ContactEffect,
+    pub duration_ticks: u32,
+    pub amplifier: u8,
+}
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InteractionPolicy {
@@ -34,6 +60,7 @@ pub struct InteractionPolicy {
     pub extinguishes: bool,
     pub fall_distance_scale: f64,
     pub burn: Option<BurnContact>,
+    pub effect: Option<EffectContact>,
 }
 impl InteractionPolicy {
     pub fn validate(self) -> io::Result<()> {
@@ -55,6 +82,9 @@ impl InteractionPolicy {
                     || !b.damage.is_finite()
                     || !(0.0..=1000.0).contains(&b.damage)
             })
+            || self
+                .effect
+                .is_some_and(|e| !(1..=72_000).contains(&e.duration_ticks))
         {
             return Err(invalid("invalid registered fluid interaction policy"));
         }
@@ -108,6 +138,7 @@ mod tests {
                 seconds: 10,
                 damage: 5.0,
             }),
+            effect: None,
         }
     }
     #[test]
