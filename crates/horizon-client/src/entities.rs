@@ -478,8 +478,13 @@ impl ItemEntity {
         if self.age != i16::MIN as i32 {
             self.age += 1;
         }
-        // ItemEntity.tick refreshes immersion after moving.
+        // ItemEntity.tick refreshes immersion after moving, including when
+        // the grounded idle branch skipped movement. Use the current box,
+        // not the pre-move registered contacts, after the existing drag.
         self.update_fluids(world, fluids);
+        if let Some(resources) = registered {
+            self.update_registered_fluids(world, fluids, resources);
+        }
         self.age < 6000 && self.position.y > -128.0
     }
     /// `Entity.makeStuckInBlock` as `WebBlock.entityInside` and
