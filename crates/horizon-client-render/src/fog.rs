@@ -5,6 +5,7 @@
 //! with water vision, lava, powder snow, blindness), the camera fog type
 //! (`Camera.getFluidInCamera`) and the fog colour (`computeFogColor`: sunrise
 //! tint, sky-colour mix, void darkness, water-vision brightening).
+pub(crate) mod texture_color;
 use crate::{
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
@@ -468,6 +469,7 @@ mod tests {
                 start: -8.0,
                 end: 24.0,
                 color: Some(0xff0080),
+                calculate_color: false,
             },
         );
         assert_eq!(fog.color, [0.5, 0.0, 128.0 / 255.0, 0.75]);
@@ -492,6 +494,7 @@ mod tests {
                 start: 0.25,
                 end: 2.0,
                 color: None,
+                calculate_color: false,
             },
         );
         assert_eq!(

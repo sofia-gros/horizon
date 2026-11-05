@@ -98,6 +98,8 @@ pub struct RenderAssets {
     pub model_gallery: Vec<Value>,
     pub animations: Vec<crate::sprites::SpriteAnimation>,
     pub sprite_layers: std::collections::BTreeMap<String, u32>,
+    /// Pack-local physical-frame-zero fog colors, rebuilt on every reload.
+    pub registered_fog_colors: std::collections::HashMap<String, u32>,
     /// OptiFine's emissive block overlays: base sprite and overlay sprite names.
     pub emissive: Vec<(String, String)>,
     pub translucent_layers: Vec<bool>,
@@ -253,6 +255,30 @@ impl RenderAssets {
         ] {
             sprites.insert(root, &format!("minecraft:block/{name}"))?;
         }
+        let mut registered_fog_colors = std::collections::HashMap::new();
+        if let Some(resources) = &assets.registered_fluids {
+            // These textures belong to procedural liquids, not model faces.
+            // Include them explicitly, including the upward flowing variant.
+            let mut visuals: Vec<_> = resources.visuals().collect();
+            visuals.sort_by(|(_, a), (_, b)| a.still.cmp(&b.still).then(a.flowing.cmp(&b.flowing)));
+            for (id, visual) in visuals {
+                sprites.insert(root, &visual.still)?;
+                sprites.insert(
+                    root,
+                    &visual.flowing_texture(resources.flow.vertical_direction(id)?),
+                )?;
+                if draws
+                    && visual
+                        .fog
+                        .is_some_and(|fog| fog.calculate_color && fog.color.is_none())
+                    && !registered_fog_colors.contains_key(&visual.still)
+                    && let Some((side, pixels)) = sprites.native_frame_zero(&visual.still)
+                    && let Some(color) = crate::fog::texture_color::average(side, pixels)
+                {
+                    registered_fog_colors.insert(visual.still.clone(), color);
+                }
+            }
+        }
         for stage in 0..10 {
             sprites.insert(root, &format!("minecraft:block/destroy_stage_{stage}"))?;
         }
@@ -314,6 +340,7 @@ impl RenderAssets {
             model_gallery: models.states,
             animations: sprites.animations,
             sprite_layers: sprites.layers,
+            registered_fog_colors,
             emissive,
             translucent_layers: sprites.translucent,
             sprite_mips: sprites.mips,
