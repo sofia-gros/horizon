@@ -56,6 +56,7 @@ pub mod leash;
 pub mod living;
 pub mod llama;
 pub mod monster_brain;
+pub mod native_damage;
 pub mod nautilus;
 pub mod nav;
 pub mod nether;
@@ -545,6 +546,8 @@ impl MobTypes {
 pub use horizon_client_core::who::Who;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DamageKind {
+    /// A resolved native environmental source. Vanilla kinds keep their existing rules.
+    Native(native_damage::NativeDamage),
     PlayerAttack,
     /// `mace_smash`: a mace hit after a fall (the player attack tags too).
     MaceSmash,
@@ -614,14 +617,23 @@ pub enum DamageKind {
 impl DamageKind {
     /// DamageTypeTags.BYPASSES_INVULNERABILITY
     pub fn bypasses_invulnerability(self) -> bool {
+        if let Self::Native(source) = self {
+            return source.in_tag("minecraft:bypasses_invulnerability");
+        }
         matches!(self, DamageKind::OutOfWorld | DamageKind::GenericKill)
     }
     /// DamageTypeTags.BYPASSES_EFFECTS
     pub fn bypasses_effects(self) -> bool {
+        if let Self::Native(source) = self {
+            return source.in_tag("minecraft:bypasses_effects");
+        }
         matches!(self, DamageKind::Starve)
     }
     /// DamageTypeTags.BYPASSES_RESISTANCE
     pub fn bypasses_resistance(self) -> bool {
+        if let Self::Native(source) = self {
+            return source.in_tag("minecraft:bypasses_resistance");
+        }
         matches!(self, DamageKind::OutOfWorld | DamageKind::GenericKill)
     }
 }
@@ -707,6 +719,9 @@ impl Damage {
     }
     /// DamageTypeTags.PANIC_CAUSES
     pub fn causes_panic(&self) -> bool {
+        if let DamageKind::Native(source) = self.kind {
+            return source.in_tag("minecraft:panic_causes");
+        }
         !matches!(
             self.kind,
             DamageKind::Fall
@@ -729,6 +744,9 @@ impl Damage {
     }
     /// DamageTypeTags.BYPASSES_ARMOR
     pub fn bypasses_armor(&self) -> bool {
+        if let DamageKind::Native(source) = self.kind {
+            return source.in_tag("minecraft:bypasses_armor");
+        }
         matches!(
             self.kind,
             DamageKind::Fall
@@ -750,6 +768,9 @@ impl Damage {
         )
     }
     pub fn is_fire(&self) -> bool {
+        if let DamageKind::Native(source) = self.kind {
+            return source.in_tag("minecraft:is_fire");
+        }
         matches!(
             self.kind,
             DamageKind::OnFire
@@ -763,6 +784,9 @@ impl Damage {
     }
     /// DamageTypeTags.NO_KNOCKBACK
     pub fn no_knockback(&self) -> bool {
+        if let DamageKind::Native(source) = self.kind {
+            return source.in_tag("minecraft:no_knockback");
+        }
         matches!(
             self.kind,
             DamageKind::Explosion
@@ -793,6 +817,9 @@ impl Damage {
         )
     }
     pub fn is_projectile(&self) -> bool {
+        if let DamageKind::Native(source) = self.kind {
+            return source.in_tag("minecraft:is_projectile");
+        }
         matches!(
             self.kind,
             DamageKind::Arrow
@@ -2831,6 +2858,11 @@ impl Mob {
         source: Damage,
         armor_effectiveness: Option<&mut dyn FnMut(f32) -> f32>,
     ) -> bool {
+        if matches!(source.kind, DamageKind::Native(_))
+            && (source.attacker.is_some() || !amount.is_finite() || amount < 0.0)
+        {
+            return false;
+        }
         axolotl::before_damage(self, amount, &source);
         raider::note_hurt(self);
         // SulfurCube.hurtServer: the priming and a block's immune knockback
@@ -2856,6 +2888,13 @@ impl Mob {
             && source.kind == DamageKind::Fireball
             && source.attacker == Some(Who::Player);
         if source.is_fire() && (self.kind.flags.fire_immune) && !reflected {
+            return false;
+        }
+        // Native environmental fire must respect the same living fire-resistance gate.
+        if matches!(source.kind, DamageKind::Native(_))
+            && source.is_fire()
+            && self.has_effect("minecraft:fire_resistance")
+        {
             return false;
         }
         if !ai::accepts_damage(self, &source, amount) {
@@ -2949,13 +2988,15 @@ impl Mob {
         if self.species() == Species::Witch {
             if source.attacker == Some(Who::Mob(self.id)) {
                 amount = 0.0;
-            } else if matches!(
-                source.kind,
-                DamageKind::Magic
-                    | DamageKind::IndirectMagic
-                    | DamageKind::SonicBoom
-                    | DamageKind::Thorns
-            ) {
+            } else if matches!(source.kind, DamageKind::Native(custom) if custom.in_tag("minecraft:witch_resistant_to"))
+                || matches!(
+                    source.kind,
+                    DamageKind::Magic
+                        | DamageKind::IndirectMagic
+                        | DamageKind::SonicBoom
+                        | DamageKind::Thorns
+                )
+            {
                 amount *= 0.15;
             }
         }
@@ -3104,6 +3145,11 @@ impl Mob {
     /// in `#bypasses_wolf_armor` (drowning, magic, thorns, in a wall, out of
     /// the world and the untyped kills).
     fn wolf_armor_absorbs(&self, source: &Damage) -> bool {
+        if let DamageKind::Native(custom) = source.kind {
+            return self.species() == Species::Wolf
+                && self.extra.head.as_deref() == Some("minecraft:wolf_armor")
+                && !custom.in_tag("minecraft:bypasses_wolf_armor");
+        }
         self.species() == Species::Wolf
             && self.extra.head.as_deref() == Some("minecraft:wolf_armor")
             && !matches!(

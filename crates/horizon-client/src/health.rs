@@ -1127,6 +1127,16 @@ mod tests {
         let (mut negative, mut nan) = (mob(9003), mob(9004));
         assert!(negative.damage(2.0, hit) && nan.damage(2.0, hit));
         assert!(negative.health == 10.0 && nan.health <= 0.0);
+        let native = crate::mobs::native_damage::tests::source(&[]);
+        let hit = Damage::of(DamageKind::Native(native));
+        let mut kept = mob(9001);
+        assert!(!kept.damage(2.0, hit));
+        assert_eq!(kept.health, 10.0);
+        assert!(kept.last_damage.is_none());
+        let mut doubled = mob(9002);
+        assert!(doubled.damage(2.0, hit));
+        assert_eq!(doubled.health, 6.0);
+        assert_eq!(doubled.last_damage.unwrap().0.kind, hit.kind);
     }
 
     /// Needs the prepared data in `.local/horizon-client/26.3`; skipped

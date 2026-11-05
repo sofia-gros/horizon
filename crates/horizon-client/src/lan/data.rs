@@ -156,6 +156,42 @@ fn pack_entries(
     }
 }
 
+/// Only additive custom definitions are synchronized. Vanilla overrides would
+/// diverge from the host's built-in combat catalog and are deliberately ignored.
+fn custom_damage_entries(
+    overlay: &horizon_world::loot::PackOverlay,
+    entries: &mut Vec<((String, String), Value, bool)>,
+) {
+    let mut custom = Vec::new();
+    pack_entries("damage_type", overlay, &mut custom);
+    for ((ns, path), value, from_pack) in custom {
+        if ns == "minecraft" {
+            continue;
+        }
+        let id = format!("{ns}:{path}");
+        let Some(exhaustion) = value["exhaustion"].as_f64() else {
+            continue;
+        };
+        let exhaustion = exhaustion as f32;
+        if !exhaustion.is_finite() || exhaustion < 0.0 {
+            continue;
+        }
+        let definition = serde_json::json!({
+            "data_version": horizon_world::DATA_VERSION,
+            "types": [{"id": id, "message_id": value["message_id"],
+                "exhaustion": format!("{:08x}", exhaustion.to_bits()),
+                "scaling": value["scaling"],
+                "effects": value.get("effects").cloned().unwrap_or(Value::from("hurt")),
+                "death_message_type": value.get("death_message_type").cloned().unwrap_or(Value::from("default"))}]
+        });
+        if horizon_world::damage_source::Catalog::from_json(&definition, &serde_json::json!({}))
+            .is_ok()
+        {
+            entries.push(((ns, path), value, from_pack));
+        }
+    }
+}
+
 /// ResourceManagerRegistryLoadTask.load: the entries register sorted by the
 /// file `Identifier` FileToIdConverter.listMatchingResources keys them by
 /// (`<dir>/<path>.json`), path first, then namespace (Identifier.compareTo).
@@ -258,6 +294,9 @@ impl SyncData {
                 .collect();
             if PACK_REGISTRIES.contains(key) {
                 pack_entries(path, overlay, &mut entries);
+            }
+            if *key == "minecraft:damage_type" {
+                custom_damage_entries(overlay, &mut entries);
             }
             if *key == BIOME_REGISTRY
                 && let Some(table) = biomes.filter(|b| b.has_packs())
@@ -617,6 +656,59 @@ fn changed_dimension_type(name: &str, json: &Value, levels: &LevelShapes) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_damage_registry_is_additive_validated_and_sent_to_known_clients() {
+        let valid = serde_json::json!({"message_id":"example.environment", "exhaustion":0.1,
+            "scaling":"never", "effects":"burning"});
+        let files = vec![
+            (
+                "damage_type/example:environment".into(),
+                vec![serde_json::to_vec(&valid).unwrap()],
+            ),
+            (
+                "damage_type/minecraft:generic".into(),
+                vec![serde_json::to_vec(&valid).unwrap()],
+            ),
+            (
+                "damage_type/example:bad".into(),
+                vec![br#"{"exhaustion":-1}"#.to_vec()],
+            ),
+        ];
+        let mut entries = Vec::new();
+        custom_damage_entries(
+            &horizon_world::loot::PackOverlay { files: &files },
+            &mut entries,
+        );
+        assert_eq!(entries.len(), 1);
+        let ((ns, path), value, from_pack) = entries.pop().unwrap();
+        assert_eq!(format!("{ns}:{path}"), "example:environment");
+        let mut sync = SyncData::empty();
+        sync.dynamic.registries.insert(
+            "minecraft:damage_type".into(),
+            vec![("example:environment".into(), None)],
+        );
+        sync.registries.push((
+            "minecraft:damage_type".into(),
+            Entries {
+                names: vec!["example:environment".into()],
+                json: vec![value],
+                from_pack: vec![from_pack],
+            },
+        ));
+        assert_eq!(
+            sync.id("minecraft:damage_type", "example:environment"),
+            Some(0)
+        );
+        let packet = &sync.registry_packets(true, &LevelShapes::VANILLA)[0];
+        assert!(packet.entries[0].data.is_some());
+        let mut reloaded = SyncData::empty();
+        reloaded.keep_registries(Path::new(""), &sync);
+        assert_eq!(
+            reloaded.id("minecraft:damage_type", "example:environment"),
+            Some(0)
+        );
+    }
 
     #[test]
     fn world_packs_supply_dialog_entries_and_tags() {
