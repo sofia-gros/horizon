@@ -21,11 +21,7 @@ use horizon_core::{
     biome::BiomeZoom, geometry::Direction, position::BlockPos, random::position_seed,
 };
 use horizon_optifine::ctm::connect::{Axes as CtmAxes, Face as CtmFace};
-use horizon_world::{
-    block_render::FaceVisibility,
-    fluid::{FluidKind, FluidState},
-    registry::BlockStateId,
-};
+use horizon_world::{block_render::FaceVisibility, fluid::FluidState, registry::BlockStateId};
 pub use sides::{Part, Sides, group_parts};
 use std::sync::Arc;
 
@@ -515,7 +511,8 @@ struct Info {
     tier: u8,
     /// `emissiveRendering`: drawn and sampled at full brightness.
     emissive: bool,
-    fluid: FluidState,
+    fluid: fluid::Sample,
+    registered_visual: Option<fluid::Visual>,
     model: bool,
     /// The state has a block entity (candidates for block-entity renderers).
     block_entity: bool,
@@ -702,6 +699,28 @@ impl MeshTables {
                     .entry((face_id, d as u8))
                     .or_insert_with(|| fluid::coverage(shape, d));
             }
+            let registered = assets
+                .registered_fluids
+                .as_ref()
+                .and_then(|r| r.visual(BlockStateId(id as u32)).map(|v| (r, v)));
+            let (fluid, registered_visual) = if let Some((resources, (visual, state))) = registered
+            {
+                (
+                    fluid::Sample::Registered {
+                        source: resources.catalog.source(state.id())?,
+                        amount: state.amount(),
+                        falling: state.falling(),
+                    },
+                    Some(fluid::Visual {
+                        still: layer(&visual.still)?,
+                        flowing: layer(&visual.flowing)?,
+                        tint: visual.tint,
+                        emission: visual.emission,
+                    }),
+                )
+            } else {
+                (FluidState::from_block(state)?.into(), None)
+            };
             info.push(Info {
                 solid: s.solid_render,
                 full: s.full_collision,
@@ -710,7 +729,8 @@ impl MeshTables {
                 emission: s.emission,
                 tier: hdr_tier(name, s.emission),
                 emissive,
-                fluid: FluidState::from_block(state)?,
+                fluid,
+                registered_visual,
                 model: s.render_shape == RenderShape::Model,
                 block_entity: s.block_entity,
                 tints,
@@ -1437,7 +1457,7 @@ impl Mesher<'_> {
                     if hidden(opaque, x, y, z) {
                         continue;
                     }
-                    if state.fluid.kind() != FluidKind::Empty {
+                    if !horizon_world::fluid_flow::FlowSample::is_empty(state.fluid) {
                         let water = tints.get(Resolver::Water, x, y, z);
                         let shade = (
                             self.nether_shading,
