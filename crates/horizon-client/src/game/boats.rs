@@ -588,6 +588,24 @@ impl Game<'_> {
         // `Entity.baseTick`: the boat is immersed and pushed by the current it
         // sits in (`isPushedByFluid`), before `floatBoat` scales the velocity.
         let _ = b.push_by_fluid(&self.world, &self.res.motion().fluids);
+        // Custom-family currents run in the same pre-float phase, without
+        // changing native water status or the passenger-shielding snapshot.
+        // Guest-driven boats keep their existing client movement ownership.
+        if self.remote.is_none()
+            && b.is_pushed_by_fluid()
+            && let Some(resources) = self.res.rest().registered_fluids.as_deref()
+        {
+            let (bounds, position, eye_y) = (b.bounds(), b.position, b.fluid_eye_y());
+            let _ = horizon_client::entities::update_registered_entity_fluids(
+                bounds,
+                position,
+                eye_y,
+                &mut b.velocity,
+                &self.world,
+                &self.res.motion().fluids,
+                resources,
+            );
+        }
         // floatBoat
         // `-getGravity()`: none with NoGravity.
         let mut vspeed = 0.0 - b.get_gravity();
@@ -1630,5 +1648,124 @@ mod tests {
         }
         assert_eq!(b.bubble_angle, 0.0);
         assert_eq!(b.bubble_angle(0.5), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod registered_current_tests {
+    use super::*;
+    use horizon_world::{
+        entity_fluid::CurrentTarget,
+        registered_fluids::{LiquidFamily, RegisteredFluids, contact::Contact},
+        registry::{BlockRegistry, BlockStateId},
+    };
+
+    fn registry() -> BlockRegistry {
+        let rows: Vec<_> = (0..16).map(|level| serde_json::json!([
+            "test:fluid", false, true, "", {"id":"test:fluid", "properties":{"level":level.to_string()}}
+        ])).collect();
+        BlockRegistry::from_facts_json(
+            serde_json::json!({"states":rows,"defaults":{"test:fluid":0}})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap()
+    }
+    fn sample(
+        registry: &BlockRegistry,
+        boat: &Boat,
+        present: bool,
+        flow: impl FnMut(BlockPos) -> std::io::Result<Vec3>,
+    ) -> Vec<Contact> {
+        let catalog = RegisteredFluids::new(
+            registry,
+            [LiquidFamily {
+                source: "test:fluid".into(),
+                flowing: "test:flowing_fluid".into(),
+                block: "test:fluid".into(),
+            }],
+        )
+        .unwrap();
+        catalog
+            .contacts_with_flow(
+                boat.bounds().deflate(Vec3::new(0.001, 0.001, 0.001)),
+                Vec3::new(boat.position.x, boat.fluid_eye_y(), boat.position.z),
+                8192,
+                |p| (present && p.y == 0).then_some(BlockStateId(7)),
+                flow,
+            )
+            .unwrap()
+    }
+    struct Target<'a>(&'a mut Boat);
+    impl CurrentTarget for Target<'_> {
+        type Error = std::convert::Infallible;
+        fn is_player_class(&self) -> bool {
+            false
+        }
+        fn velocity(&mut self) -> Result<Vec3, Self::Error> {
+            Ok(self.0.velocity)
+        }
+        fn add_delta_movement(&mut self, delta: Vec3) -> Result<(), Self::Error> {
+            self.0.velocity = self.0.velocity.add_vector(delta);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn shallow_currents_move_boat_and_raft_bodies_without_native_water_state() {
+        let registry = registry();
+        for wood in ["oak", "bamboo"] {
+            for chest in [false, true] {
+                let mut boat = Boat::new(1, Arc::from(wood), Vec3::new(1.0, 0.0, 0.5), 0.0);
+                boat.chest = chest;
+                boat.items = vec![None; if chest { CHEST_SLOTS } else { 0 }];
+                boat.no_gravity = true;
+                boat.out_of_control = 17.0;
+                boat.bubble_time = 12;
+                assert!(boat.is_pushed_by_fluid());
+                let contacts = sample(&registry, &boat, true, |_| Ok(Vec3::new(3.0, 0.0, 4.0)));
+                assert_eq!(contacts.len(), 1);
+                assert!(contacts[0].height > 0.0);
+                assert!(!contacts[0].eyes_inside);
+                contacts[0]
+                    .current
+                    .apply_to(&mut Target(&mut boat), 0.01)
+                    .unwrap();
+                assert!((boat.velocity.x - 0.006).abs() < 1e-12);
+                assert!((boat.velocity.z - 0.008).abs() < 1e-12);
+                assert_eq!(boat.velocity.y, 0.0);
+                assert_eq!(boat.status, Status::InAir);
+                assert_eq!((boat.out_of_control, boat.bubble_time), (17.0, 12));
+                assert_eq!(boat.items.len(), if chest { CHEST_SLOTS } else { 0 });
+            }
+        }
+    }
+
+    #[test]
+    fn opposing_or_missing_boat_currents_do_not_create_drift() {
+        let registry = registry();
+        let mut boat = Boat::new(1, Arc::from("oak"), Vec3::new(1.0, 0.0, 0.5), 0.0);
+        let contacts = sample(&registry, &boat, true, |p| {
+            Ok(Vec3::new(if p.x == 0 { 1.0 } else { -1.0 }, 0.0, 0.0))
+        });
+        assert_eq!(contacts.len(), 1);
+        contacts[0]
+            .current
+            .apply_to(&mut Target(&mut boat), 0.01)
+            .unwrap();
+        assert_eq!(boat.velocity, Vec3::ZERO);
+        assert!(
+            sample(&registry, &boat, false, |_| panic!(
+                "missing fluid must not query flow"
+            ))
+            .is_empty()
+        );
+        boat.position.y = 0.2;
+        assert!(
+            sample(&registry, &boat, true, |_| panic!(
+                "body is above the shallow surface"
+            ))
+            .is_empty()
+        );
     }
 }
