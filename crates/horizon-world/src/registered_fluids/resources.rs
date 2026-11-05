@@ -1,3 +1,5 @@
+// Path-type policy follows TConstruct, Copyright (c) 2022 SlimeKnights.
+// MIT License; source and license are in THIRD_PARTY_NOTICES.md.
 // Upward texture selection and fog data follow Mantle, Copyright (c) 2022 SlimeKnights.
 // MIT License. Full source and notice are in THIRD_PARTY_NOTICES.md.
 //! Validated resource declarations shared by simulation, bucket and rendering
@@ -14,6 +16,13 @@ use serde::Deserialize;
 use std::{collections::HashMap, fs::File, io, path::Path, sync::Arc};
 
 pub const RESOURCE_PATH: &str = "horizon/registered_fluids.json";
+/// An explicit occupied-cell path cost, independent of native fluid identity.
+/// It does not add an adjacent-cell hazard; native block facts still apply there.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FluidPathType {
+    Lava,
+}
 /// Optional spherical camera fog. Color is an RGB multiplier, not a replacement.
 /// A missing color preserves the host color unless `calculate_color` opts in.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -103,6 +112,8 @@ struct Definition {
     visual: FluidVisual,
     #[serde(default)]
     interaction: Option<InteractionPolicy>,
+    #[serde(default)]
+    path_type: Option<FluidPathType>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -187,6 +198,7 @@ pub struct RegisteredFluidResources<'r> {
     source_buckets: HashMap<RegisteredFluidId, String>,
     visuals: HashMap<RegisteredFluidId, FluidVisual>,
     interactions: HashMap<RegisteredFluidId, InteractionPolicy>,
+    path_types: HashMap<RegisteredFluidId, FluidPathType>,
 }
 impl<'r> RegisteredFluidResources<'r> {
     pub fn from_reader(registry: &'r BlockRegistry, reader: impl io::Read) -> io::Result<Self> {
@@ -223,6 +235,7 @@ impl<'r> RegisteredFluidResources<'r> {
         let mut source_buckets = HashMap::new();
         let mut visuals = HashMap::new();
         let mut interactions = HashMap::new();
+        let mut path_types = HashMap::new();
         for definition in document.fluids {
             if !valid_name(&definition.bucket)
                 || !valid_name(&definition.visual.still)
@@ -248,6 +261,9 @@ impl<'r> RegisteredFluidResources<'r> {
                 policy.validate()?;
                 interactions.insert(id, policy);
             }
+            if let Some(path_type) = definition.path_type {
+                path_types.insert(id, path_type);
+            }
             source_buckets.insert(id, definition.bucket);
             visuals.insert(id, definition.visual);
             policies.push((id, definition.policy));
@@ -260,6 +276,7 @@ impl<'r> RegisteredFluidResources<'r> {
             source_buckets,
             visuals,
             interactions,
+            path_types,
         })
     }
     pub fn load(registry: &'r BlockRegistry, root: &Path) -> io::Result<Option<Self>> {
@@ -300,6 +317,14 @@ impl<'r> RegisteredFluidResources<'r> {
     }
     pub fn interaction(&self, fluid: RegisteredFluidId) -> Option<&InteractionPolicy> {
         self.interactions.get(&self.catalog.source(fluid).ok()?)
+    }
+    /// Resolve both source and flowing block levels through the same policy.
+    /// No policy means the caller retains the block's existing path type.
+    pub fn path_type(&self, state: BlockStateId) -> Option<FluidPathType> {
+        let fluid = self.catalog.from_block(state)?;
+        self.path_types
+            .get(&self.catalog.source(fluid.id()).ok()?)
+            .copied()
     }
     /// A block-inside callback needs positive body height for this exact family,
     /// not merely eye immersion or contact with another liquid.
@@ -411,6 +436,42 @@ mod tests {
     }
     fn document() -> serde_json::Value {
         json!({"format":1,"fluids":[{"source":"test:liquid","flowing":"test:flowing_liquid","block":"test:liquid","bucket":"test:liquid_bucket","policy":{"drop_off":3,"slope_distance":3,"tick_delay":30,"source_conversion":false},"visual":{"still":"test:block/liquid_still","flowing":"test:block/liquid_flow","tint":16777215,"emission":12}}]})
+    }
+    #[test]
+    fn path_policy_is_explicit_and_covers_source_and_all_flowing_levels() {
+        let registry = registry();
+        let mut value = document();
+        let absent =
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).unwrap();
+        assert_eq!(absent.path_type(BlockStateId(0)), None);
+        value["fluids"][0]["path_type"] = json!("lava");
+        let resources =
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).unwrap();
+        for level in 0..16 {
+            assert_eq!(
+                resources.path_type(BlockStateId(level)),
+                Some(FluidPathType::Lava)
+            );
+        }
+        assert_eq!(resources.path_type(BlockStateId(16)), None);
+        // A path policy alone never creates contact damage or travel parameters.
+        assert!(
+            resources
+                .interaction(resources.catalog.id("test:liquid").unwrap())
+                .is_none()
+        );
+        for invalid in [
+            json!("water"),
+            json!("LAVA"),
+            json!({"lava":true}),
+            json!(42),
+        ] {
+            value["fluids"][0]["path_type"] = invalid;
+            assert!(
+                RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes())
+                    .is_err()
+            );
+        }
     }
     #[test]
     fn camera_fog_is_optional_validated_and_samples_only_immersed_camera() {

@@ -303,3 +303,11 @@ Copyright (c) 2022 SlimeKnights; full MIT notice above. Changes: shared existing
 loaded-only player flow sampling and Horizon's native non-player current target
 and species push predicate. No Forge implementation was read or copied; exact
 source tick-phase and mixed-fluid order equivalence are not claimed.
+
+The optional registered-fluid path-node declaration and its mob path adapter in
+`registered_fluids/resources.rs` and `mobs/path.rs` follow the explicit
+`pathType(LAVA).adjacentPathType(null)` configuration in Tinkers' Construct
+`TinkerFluids.hot()` at
+[`f4e77d43f39ba1047bf93ae816b7e1beaab514c2`](https://github.com/SlimeKnights/TinkersConstruct/blob/f4e77d43f39ba1047bf93ae816b7e1beaab514c2/src/main/java/slimeknights/tconstruct/fluids/TinkerFluids.java),
+Copyright (c) 2022 SlimeKnights, MIT (license reproduced above). The Rust adapter
+is original host integration. No Forge implementation was read or copied.

@@ -1,3 +1,5 @@
+// Registered-fluid policy follows TConstruct, Copyright (c) 2022 SlimeKnights.
+// MIT License; source and license are in THIRD_PARTY_NOTICES.md.
 //! Vanilla's A* pathfinder (`PathFinder`, `BinaryHeap`, `Node`, `Path`) with
 //! the walking, swimming, flying and amphibious node evaluators
 //! (`WalkNodeEvaluator`, `SwimNodeEvaluator`, `FlyNodeEvaluator`,
@@ -6,6 +8,7 @@ use super::{MobWorld, data};
 use crate::blocks::Fluid;
 use crate::fast_hash::FxHashMap;
 use horizon_core::geometry::{Aabb, Vec3};
+use horizon_world::registered_fluids::resources::FluidPathType;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PathType {
@@ -91,7 +94,11 @@ impl PathType {
 
 impl MobWorld<'_> {
     pub fn path_type_from_state(&self, x: i32, y: i32, z: i32) -> PathType {
-        self.data.state(self.world.block(x, y, z)).path
+        let state = self.world.block(x, y, z);
+        match self.registered_fluids.and_then(|r| r.path_type(state)) {
+            Some(FluidPathType::Lava) => PathType::Lava,
+            None => self.data.state(state).path,
+        }
     }
     /// WalkNodeEvaluator.getPathTypeStatic.
     pub fn path_type_static(&self, x: i32, y: i32, z: i32) -> PathType {
@@ -119,7 +126,11 @@ impl MobWorld<'_> {
             for dy in -1..=1 {
                 for dz in -1..=1 {
                     if dx != 0 || dz != 0 {
-                        match self.path_type_from_state(x + dx, y + dy, z + dz) {
+                        // The custom fluid's occupied-cell type does not create
+                        // an adjacent hazard. Preserve native block hazards here
+                        // (TConstruct hot fluids declare adjacentPathType(null)).
+                        let state = self.world.block(x + dx, y + dy, z + dz);
+                        match self.data.state(state).path {
                             PathType::Damaging => return PathType::DamagingInNeighbor,
                             PathType::Fire | PathType::Lava => return PathType::FireInNeighbor,
                             PathType::Water => return PathType::WaterBorder,
