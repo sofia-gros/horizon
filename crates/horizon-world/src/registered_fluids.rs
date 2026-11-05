@@ -4,6 +4,7 @@
 //! vanilla simulation still uses `FluidKind`; integrating scheduling, flow,
 //! rendering and bucket transactions must not silently alias these IDs to lava.
 pub mod contact;
+pub mod interaction;
 pub mod resources;
 pub mod scheduling;
 

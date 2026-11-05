@@ -51,6 +51,7 @@ pub fn native_living_jump(entity: u32, kind: &str) {
 
 pub(crate) mod environment;
 mod fluids;
+mod registered_fluids;
 pub use fluids::{
     BubbleColumn, FluidResources, FluidTags, LAVA, PlayerFluids, RiddenBoat, WATER,
     bubble_column_at, bubble_column_push, bubble_column_push_over, bubble_column_surfaces,
@@ -1352,6 +1353,12 @@ impl MotionWorld<'_, '_, '_> {
             && (self.player.fluids.was_touching_water || self.player.is_in_lava())
         {
             horizon_world::living_fluid::travel_in_fluid(self, input)?;
+        } else if !self.player.flying
+            && let Some((_, policy)) = self.registered_travel()
+        {
+            let old_y = self.player.position.y;
+            policy.travel.travel(self, input)?;
+            horizon_world::living_fluid::jump_out_of_fluid(self, old_y)?;
         } else if self.player.fall_flying {
             // LivingEntity.travelFallFlying: on a climbable the glide ends and
             // the player moves like in the air.
@@ -1721,6 +1728,7 @@ impl MotionWorld<'_, '_, '_> {
                         position: p,
                     },
                 ));
+                self.registered_fluid_inside(state)?;
                 // CactusBlock, CampfireBlock and the cauldrons' entityInside
                 // (`entity.hurt`, the fire and the fill level), and
                 // WitherRoseBlock's server-side effect.
