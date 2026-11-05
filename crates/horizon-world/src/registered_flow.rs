@@ -1,3 +1,6 @@
+// Inverted spread semantics adapted from Mantle, Copyright (c) 2022 SlimeKnights.
+// MIT License. Full notice and source are in THIRD_PARTY_NOTICES.md.
+// Changed: explicit family direction in the existing host simulation and guards.
 //! Flow transitions for registered liquids. Policy and world effects are
 //! explicit: no registered liquid inherits vanilla lava behavior by default.
 //! The ordering follows the existing `level::fluids` FlowingFluid algorithm.
@@ -19,6 +22,21 @@ const HORIZONTAL: [Direction; 4] = [
 ];
 // Scope this cache to one spread decision: no result survives world mutation.
 type SlopeCache = HashMap<(BlockPos, u8, u8), u16>;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerticalFlow {
+    #[default]
+    Down,
+    Up,
+}
+impl VerticalFlow {
+    pub fn direction(self) -> Direction {
+        match self {
+            Self::Down => Direction::Down,
+            Self::Up => Direction::Up,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FlowPolicy {
@@ -26,6 +44,8 @@ pub struct FlowPolicy {
     pub slope_distance: u8,
     pub tick_delay: i32,
     pub source_conversion: bool,
+    #[serde(default)]
+    pub vertical_direction: VerticalFlow,
 }
 /// The authoritative adapter owns loaded-world checks, occlusion, protection,
 /// drops/interactions, and scheduling. `replace` must compare the expected
@@ -104,6 +124,9 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
     pub fn tick_delay(&self, id: RegisteredFluidId) -> io::Result<i32> {
         Ok(self.policy(id)?.tick_delay)
     }
+    pub fn vertical_direction(&self, id: RegisteredFluidId) -> io::Result<VerticalFlow> {
+        Ok(self.policy(id)?.vertical_direction)
+    }
     fn policy(&self, id: RegisteredFluidId) -> io::Result<FlowPolicy> {
         self.policies
             .get(&self.fluids.source(id)?)
@@ -149,8 +172,8 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
             }
         }
         if sources >= 2 && policy.source_conversion {
-            if let Some(below) = world.block(rel(pos, Direction::Down)) {
-                if world.solid(below) || self.source_at(id, below) {
+            if let Some(support) = world.block(rel(pos, policy.vertical_direction.direction())) {
+                if world.solid(support) || self.source_at(id, support) {
                     return self
                         .fluids
                         .state(self.fluids.source(id).ok()?, 8, false)
@@ -158,12 +181,13 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
                 }
             }
         }
-        if let Some(above) = world.block(rel(pos, Direction::Up)) {
+        let supply_direction = policy.vertical_direction.direction().opposite();
+        if let Some(supply) = world.block(rel(pos, supply_direction)) {
             if self
                 .fluids
-                .from_block(above)
+                .from_block(supply)
                 .is_some_and(|fluid| self.same(id, fluid))
-                && world.pass_wall(pos, state, Direction::Up, above)
+                && world.pass_wall(pos, state, supply_direction, supply)
             {
                 return Some(self.flowing(id, 8, true));
             }
@@ -206,20 +230,22 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
         id: RegisteredFluidId,
         pos: BlockPos,
         state: BlockStateId,
+        policy: FlowPolicy,
     ) -> bool {
-        let below_pos = rel(pos, Direction::Down);
-        let Some(below) = world.block(below_pos) else {
+        let direction = policy.vertical_direction.direction();
+        let target_pos = rel(pos, direction);
+        let Some(target) = world.block(target_pos) else {
             return false;
         };
-        world.pass_wall(pos, state, Direction::Down, below)
+        world.pass_wall(pos, state, direction, target)
             && (self
                 .fluids
-                .from_block(below)
+                .from_block(target)
                 .is_some_and(|fluid| self.same(id, fluid))
-                || (world.can_hold_any(below_pos, below)
+                || (world.can_hold_any(target_pos, target)
                     && world.can_hold(
-                        below_pos,
-                        below,
+                        target_pos,
+                        target,
                         self.fluids.flowing(id).expect("validated fluid identity"),
                     )))
     }
@@ -248,7 +274,7 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
                 continue;
             };
             if self.pass(world, id, pos, state, direction, next) {
-                if self.hole(world, id, next_pos, next) {
+                if self.hole(world, id, next_pos, next, policy) {
                     cache.insert(key, u16::from(distance));
                     return u16::from(distance);
                 }
@@ -350,7 +376,7 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
             if !world.can_hold(at, target, next.id()) {
                 continue;
             }
-            let distance = if self.hole(world, fluid.id(), at, target) {
+            let distance = if self.hole(world, fluid.id(), at, target, policy) {
                 0
             } else {
                 self.slope(
@@ -416,14 +442,15 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
                 fluid = next;
             }
         }
-        let below_pos = rel(pos, Direction::Down);
-        if let Some(below) = world.block(below_pos) {
-            if self.maybe_pass(world, fluid.id(), pos, state, Direction::Down, below) {
-                if let Some(next) = self.new_liquid(world, fluid.id(), below_pos, below, policy) {
-                    if world.can_hold(below_pos, below, next.id())
-                        && world.can_replace(below_pos, below, next.id(), Direction::Down)
+        let direction = policy.vertical_direction.direction();
+        let target_pos = rel(pos, direction);
+        if let Some(target) = world.block(target_pos) {
+            if self.maybe_pass(world, fluid.id(), pos, state, direction, target) {
+                if let Some(next) = self.new_liquid(world, fluid.id(), target_pos, target, policy) {
+                    if world.can_hold(target_pos, target, next.id())
+                        && world.can_replace(target_pos, target, next.id(), direction)
                     {
-                        self.spread_to(world, below_pos, below, next, Direction::Down);
+                        self.spread_to(world, target_pos, target, next, direction);
                         let sources = HORIZONTAL
                             .into_iter()
                             .filter_map(|d| world.block(rel(pos, d)))
@@ -437,7 +464,7 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
                 }
             }
         }
-        if fluid.is_source() || !self.hole(world, fluid.id(), pos, state) {
+        if fluid.is_source() || !self.hole(world, fluid.id(), pos, state, policy) {
             self.sides(world, pos, state, fluid, policy);
         }
         Ok(())
@@ -450,14 +477,14 @@ impl<'a, 'r> RegisteredFlow<'a, 'r> {
         pos: BlockPos,
         id: RegisteredFluidId,
     ) -> io::Result<bool> {
-        self.policy(id)?;
+        let policy = self.policy(id)?;
         let source = self.fluids.source(id)?;
         let Some(old) = world.block(pos) else {
             return Ok(false);
         };
         if !world.can_hold_any(pos, old)
             || !world.can_hold(pos, old, source)
-            || !world.can_replace(pos, old, source, Direction::Down)
+            || !world.can_replace(pos, old, source, policy.vertical_direction.direction())
         {
             return Ok(false);
         }
@@ -549,6 +576,7 @@ mod tests {
             slope_distance: 4,
             tick_delay: 5,
             source_conversion: false,
+            vertical_direction: VerticalFlow::Down,
         }
     }
     struct World<'a, 'r> {
@@ -737,6 +765,144 @@ mod tests {
         );
     }
     #[test]
+    fn inverted_flow_rises_spreads_under_a_ceiling_and_drains_after_pickup() {
+        let registry = registry();
+        let fluids = catalog(&registry);
+        let id = fluids.id("test:one").unwrap();
+        let rules = FlowPolicy {
+            vertical_direction: VerticalFlow::Up,
+            ..policy()
+        };
+        let flow = RegisteredFlow::new(&fluids, [(id, rules)]).unwrap();
+        let mut world = World::new(&fluids);
+        for x in -12..=12 {
+            for z in -12..=12 {
+                world.cells.insert(BlockPos::new(x, 4, z), BlockStateId(1));
+            }
+        }
+        let origin = BlockPos::new(0, 1, 0);
+        flow.place_source(&mut world, origin, id).unwrap();
+        flow.tick(&mut world, origin, id).unwrap();
+        let rising = fluids
+            .from_block(world.block(BlockPos::new(0, 2, 0)).unwrap())
+            .unwrap();
+        assert!(rising.falling()); // The persisted column flag is direction-neutral.
+        assert_eq!(rising.amount(), 8);
+        assert_eq!(world.block(BlockPos::new(1, 1, 0)), Some(BlockStateId(0)));
+        world.run(&flow);
+        assert!(
+            fluids
+                .from_block(world.block(BlockPos::new(1, 3, 0)).unwrap())
+                .is_some()
+        );
+        assert_eq!(world.block(BlockPos::new(0, 4, 0)), Some(BlockStateId(1)));
+        assert_eq!(
+            flow.pickup_source(&mut world, BlockPos::new(0, 2, 0))
+                .unwrap(),
+            None
+        );
+        assert_eq!(flow.pickup_source(&mut world, origin).unwrap(), Some(id));
+        world.run(&flow);
+        assert!(
+            world
+                .cells
+                .values()
+                .all(|state| fluids.from_block(*state).is_none())
+        );
+    }
+    #[test]
+    fn upward_slope_chooses_ceiling_holes_and_conversion_uses_ceiling_support() {
+        let registry = registry();
+        let fluids = catalog(&registry);
+        let id = fluids.id("test:one").unwrap();
+        let mut rules = FlowPolicy {
+            vertical_direction: VerticalFlow::Up,
+            ..policy()
+        };
+        let flow = RegisteredFlow::new(&fluids, [(id, rules)]).unwrap();
+        let mut world = World::new(&fluids);
+        for x in -12..=12 {
+            for z in -12..=12 {
+                world.cells.insert(BlockPos::new(x, 3, z), BlockStateId(1));
+            }
+        }
+        world.cells.insert(BlockPos::new(1, 3, 0), BlockStateId(0));
+        let origin = BlockPos::new(0, 2, 0);
+        flow.place_source(&mut world, origin, id).unwrap();
+        flow.tick(&mut world, origin, id).unwrap();
+        assert!(
+            fluids
+                .from_block(world.block(BlockPos::new(1, 2, 0)).unwrap())
+                .is_some()
+        );
+        for at in [
+            BlockPos::new(-1, 2, 0),
+            BlockPos::new(0, 2, -1),
+            BlockPos::new(0, 2, 1),
+        ] {
+            assert_eq!(world.block(at), Some(BlockStateId(0)));
+        }
+        rules.source_conversion = true;
+        let flow = RegisteredFlow::new(&fluids, [(id, rules)]).unwrap();
+        let mut world = World::new(&fluids);
+        flow.place_source(&mut world, BlockPos::new(-1, 2, 0), id)
+            .unwrap();
+        flow.place_source(&mut world, BlockPos::new(1, 2, 0), id)
+            .unwrap();
+        world.cells.insert(BlockPos::new(0, 1, 0), BlockStateId(1));
+        assert!(
+            !flow
+                .new_liquid(&world, id, origin, BlockStateId(0), rules)
+                .unwrap()
+                .is_source()
+        );
+        world.cells.insert(BlockPos::new(0, 3, 0), BlockStateId(1));
+        assert!(
+            flow.new_liquid(&world, id, origin, BlockStateId(0), rules)
+                .unwrap()
+                .is_source()
+        );
+    }
+    #[test]
+    fn vertical_direction_is_per_family_and_unloaded_upper_cells_are_not_written() {
+        let registry = registry();
+        let fluids = catalog(&registry);
+        let rising = fluids.id("test:one").unwrap();
+        let falling = fluids.id("test:two").unwrap();
+        let flow = RegisteredFlow::new(
+            &fluids,
+            [
+                (
+                    rising,
+                    FlowPolicy {
+                        vertical_direction: VerticalFlow::Up,
+                        ..policy()
+                    },
+                ),
+                (falling, policy()),
+            ],
+        )
+        .unwrap();
+        let mut world = World::new(&fluids);
+        for (id, x, target_y, untouched_y) in [(rising, 0, 3, 1), (falling, 5, 1, 3)] {
+            let origin = BlockPos::new(x, 2, 0);
+            flow.place_source(&mut world, origin, id).unwrap();
+            flow.tick(&mut world, origin, id).unwrap();
+            let fluid = fluids
+                .from_block(world.block(BlockPos::new(x, target_y, 0)).unwrap())
+                .unwrap();
+            assert!(fluids.same_family(id, fluid.id()).unwrap());
+            assert_eq!(
+                world.block(BlockPos::new(x, untouched_y, 0)),
+                Some(BlockStateId(0))
+            );
+        }
+        let ceiling = BlockPos::new(0, 4, 0);
+        flow.place_source(&mut world, ceiling, rising).unwrap();
+        flow.tick(&mut world, ceiling, rising).unwrap();
+        assert!(!world.cells.contains_key(&BlockPos::new(0, 5, 0)));
+    }
+    #[test]
     fn direct_spread_checks_computed_flowing_identity() {
         let registry = registry();
         let fluids = catalog(&registry);
@@ -786,7 +952,7 @@ mod tests {
             Direction::East,
             BlockStateId(0)
         ));
-        assert!(flow.hole(&world, source, target, BlockStateId(0)));
+        assert!(flow.hole(&world, source, target, BlockStateId(0), policy()));
         world.acceptance.insert(target, source);
         world.acceptance.insert(below, source);
         assert!(!flow.pass(
@@ -797,7 +963,7 @@ mod tests {
             Direction::East,
             BlockStateId(0)
         ));
-        assert!(!flow.hole(&world, source, target, BlockStateId(0)));
+        assert!(!flow.hole(&world, source, target, BlockStateId(0), policy()));
     }
     #[test]
     fn computed_source_conversion_uses_source_acceptance() {
@@ -1038,7 +1204,7 @@ mod tests {
                 ..policy()
             },
             FlowPolicy {
-                slope_distance: 5,
+                slope_distance: 9,
                 ..policy()
             },
             FlowPolicy {

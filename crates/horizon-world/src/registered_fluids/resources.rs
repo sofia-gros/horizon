@@ -4,7 +4,7 @@ use super::interaction::InteractionPolicy;
 use super::{LiquidFamily, RegisteredFluidId, RegisteredFluidState, RegisteredFluids, valid_name};
 use crate::{
     compression::invalid,
-    registered_flow::{FlowPolicy, RegisteredFlow},
+    registered_flow::{FlowPolicy, RegisteredFlow, VerticalFlow},
     registry::{BlockRegistry, BlockStateId},
 };
 use serde::Deserialize;
@@ -98,6 +98,17 @@ impl<'r> RegisteredFluidResources<'r> {
             serde_json::from_reader(reader).map_err(|e| invalid(e.to_string()))?;
         if document.format != 1 {
             return Err(invalid("unsupported registered-fluid resource format"));
+        }
+        // Simulation support alone cannot safely enable inverted world content:
+        // surface geometry, immersion and currents still assume downward flow.
+        if document
+            .fluids
+            .iter()
+            .any(|d| d.policy.vertical_direction == VerticalFlow::Up)
+        {
+            return Err(invalid(
+                "inverted registered fluids need rendering, contact and current support",
+            ));
         }
         // Never run two simulators over vanilla liquid blocks or steal native
         // bucket use. Native-container integration needs a separate explicit path.
@@ -377,6 +388,27 @@ mod tests {
                     .is_err()
             );
         }
+    }
+    #[test]
+    fn upward_content_is_gated_until_geometry_and_contact_are_supported() {
+        let registry = registry();
+        let mut value = document();
+        // Old declarations still default to ordinary downward behavior.
+        assert!(
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).is_ok()
+        );
+        value["fluids"][0]["policy"]["vertical_direction"] = json!("down");
+        assert!(
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).is_ok()
+        );
+        value["fluids"][0]["policy"]["vertical_direction"] = json!("up");
+        assert!(
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).is_err()
+        );
+        value["fluids"][0]["policy"]["vertical_direction"] = json!("sideways");
+        assert!(
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).is_err()
+        );
     }
     #[test]
     fn glass_policy_loads_and_distances_above_eight_are_rejected() {
