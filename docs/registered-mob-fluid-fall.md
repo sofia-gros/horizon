@@ -47,3 +47,7 @@ integration. No tests, builds, CI inspection, version checks or merge.
 Remaining work includes swimming/float AI, automatic ridden custom-fluid
 buoyancy, passenger boat shielding, species-specific fluid behavior and custom
 mob effects. Final live integration remains pending; #379 is not finished.
+
+Existing common FloatGoal and Swim behavior activation is covered by the later
+`registered-mob-fluid-float-ai.md` slice; navigation and species-specific limits
+remain documented there.

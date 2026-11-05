@@ -1067,7 +1067,7 @@ impl B {
                 true
             }
             B::Swim(t) => {
-                if !swim_condition(m) {
+                if !swim_condition(m, cx.w) {
                     return false;
                 }
                 t.begin(cx.lr, cx.now);
@@ -1482,7 +1482,7 @@ impl B {
             }
             B::Gate(g) => g.tick_or_stop(m, cx),
             B::Swim(t) => {
-                if t.timed_out(now) || !swim_condition(m) {
+                if t.timed_out(now) || !swim_condition(m, cx.w) {
                     self.do_stop(m, cx);
                 } else if m.random.next_float() < 0.8 {
                     m.ai.jump = true;
@@ -1862,8 +1862,8 @@ fn manhattan(a: [i32; 3], b: [i32; 3]) -> i32 {
     (a[0] - b[0]).abs() + (a[1] - b[1]).abs() + (a[2] - b[2]).abs()
 }
 /// `Swim`: deeper than the jump threshold, or in lava.
-fn swim_condition(m: &Mob) -> bool {
-    m.fluids.water > m.fluid_jump_threshold() || m.fluids.in_lava
+fn swim_condition(m: &Mob, w: &MobWorld) -> bool {
+    super::registered_fluids::should_float(m, w)
 }
 /// `PositionTracker.isVisibleBy`.
 fn tracker_visible(m: &mut Mob, w: &MobWorld, t: Tracker) -> bool {
