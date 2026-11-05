@@ -421,6 +421,9 @@ pub struct ItemView {
     pub enchantments: Vec<(String, u32)>,
     pub potion: Option<String>,
     pub custom_name: bool,
+    /// Owned snapshot for native mod predicates. Vanilla matching does not
+    /// interpret this payload; it is neither persisted nor sent separately.
+    pub custom_data: Option<horizon_world::nbt::Tag>,
 }
 /// An entity as predicates see it.
 #[derive(Clone, Debug, Default)]
@@ -1509,6 +1512,18 @@ mod tests {
             count: 3,
             ..Default::default()
         };
+        assert!(stone.custom_data.is_none());
+        let mut tagged_stone = stone.clone();
+        tagged_stone.custom_data = Some(horizon_world::nbt::Tag::compound([
+            ("example:upgrade", horizon_world::nbt::Tag::Int(2)),
+        ]));
+        for predicate in [
+            serde_json::json!({"items":"minecraft:cobblestone"}),
+            serde_json::json!({"items":"minecraft:dirt"}),
+            serde_json::json!({"count":{"min":2}}),
+        ] {
+            assert_eq!(item(&predicate, &stone, &w), item(&predicate, &tagged_stone, &w));
+        }
         assert!(item(
             &serde_json::json!({"items": "#minecraft:stone_tool_materials"}),
             &stone,
