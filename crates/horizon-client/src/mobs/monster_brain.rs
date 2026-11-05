@@ -572,7 +572,7 @@ impl B {
         match self {
             B::RunOne(g) => g.try_start(m, cx),
             B::Swim { t, creaking } => {
-                if *creaking && !super::creaking::can_move(m) || !swim_condition(m) {
+                if *creaking && !super::creaking::can_move(m) || !swim_condition(m, cx.w) {
                     return false;
                 }
                 t.begin(cx.lr, cx.now);
@@ -913,7 +913,7 @@ impl B {
             | B::SetWalkTargetFromAttackTarget(r)
             | B::MeleeAttack(r) => *r = false,
             B::Swim { t, .. } => {
-                if now > t.end || !swim_condition(m) {
+                if now > t.end || !swim_condition(m, cx.w) {
                     self.do_stop(m, cx);
                 } else if m.random.next_float() < 0.8 {
                     m.ai.jump = true;
@@ -1079,8 +1079,8 @@ fn block_of(p: Vec3) -> [i32; 3] {
     [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32]
 }
 /// `Swim`: deeper than the jump threshold, or in lava.
-fn swim_condition(m: &Mob) -> bool {
-    m.fluids.water > m.fluid_jump_threshold() || m.fluids.in_lava
+fn swim_condition(m: &Mob, w: &MobWorld) -> bool {
+    super::registered_fluids::should_float(m, w)
 }
 /// `PositionTracker.isVisibleBy`.
 fn tracker_visible(m: &mut Mob, w: &MobWorld, t: Tracker) -> bool {

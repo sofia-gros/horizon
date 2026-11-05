@@ -784,8 +784,8 @@ impl Goal for Float {
     fn flags(&self) -> u8 {
         JUMP
     }
-    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
-        m.fluids.water > m.fluid_jump_threshold() || m.fluids.in_lava
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        super::registered_fluids::should_float(m, cx.w)
     }
     fn every_tick(&self) -> bool {
         true

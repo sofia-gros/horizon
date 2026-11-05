@@ -10,7 +10,9 @@ use horizon_core::{
 };
 use horizon_world::{
     registered_fluids::{
-        contact::Contact, interaction::TravelPolicy, resources::RegisteredFluidResources,
+        contact::Contact,
+        interaction::{InteractionPolicy, TravelPolicy},
+        resources::RegisteredFluidResources,
     },
     registry::BlockStateId,
 };
@@ -53,15 +55,39 @@ fn select_travel(
     resources: &RegisteredFluidResources<'_>,
     contacts: &[Contact],
 ) -> Option<(f64, TravelPolicy)> {
+    select_policy(resources, contacts).map(|(height, policy)| (height, policy.travel))
+}
+fn select_policy<'a>(
+    resources: &'a RegisteredFluidResources<'_>,
+    contacts: &[Contact],
+) -> Option<(f64, &'a InteractionPolicy)> {
     contacts
         .iter()
         .filter(|contact| contact.height > 0.0)
         .filter_map(|contact| {
             resources
                 .interaction(contact.source)
-                .map(|p| (contact.height, p.travel))
+                .map(|p| (contact.height, p))
         })
         .max_by(|a, b| a.0.total_cmp(&b.0))
+}
+
+/// Common FloatGoal/Swim entry and continuation. Native eligibility keeps its
+/// original short circuit, and configured contact never grants a water tag.
+pub(super) fn should_float(m: &Mob, w: &MobWorld<'_>) -> bool {
+    let threshold = m.fluid_jump_threshold();
+    m.fluids.water > threshold
+        || m.fluids.in_lava
+        || w.registered_fluids
+            .is_some_and(|resources| can_float(resources, &contacts(m, w), threshold))
+}
+fn can_float(
+    resources: &RegisteredFluidResources<'_>,
+    contacts: &[Contact],
+    threshold: f64,
+) -> bool {
+    select_policy(resources, contacts)
+        .is_some_and(|(height, policy)| height > threshold && policy.can_swim)
 }
 
 /// A fluid exit must not put the body inside any registered family. Unlike
@@ -226,7 +252,7 @@ mod tests {
             "policy":{"drop_off":1,"slope_distance":4,"tick_delay":5,"source_conversion":false},
             "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
             "interaction":{"travel":{"acceleration":if name == "hot" {0.02} else {0.04},"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
-                "motion_scale":scales[usize::from(name == "other")],"can_swim":false,"can_drown":name == "hot","extinguishes":name == "hot" && effect.is_some(),
+                "motion_scale":scales[usize::from(name == "other")],"can_swim":name == "hot","can_drown":name == "hot","extinguishes":name == "hot" && effect.is_some(),
                 "fall_distance_scale":fall_scales[usize::from(name == "other")],"burn":burn,"effect":effect}
         })).collect();
         RegisteredFluidResources::from_reader(
@@ -324,6 +350,71 @@ mod tests {
             gravity_scale: 0.0625,
             jump: 0.04,
         }
+    }
+    #[test]
+    fn floating_requires_swimmable_body_depth_strictly_above_the_threshold() {
+        let registry = registry();
+        let resources = resources(&registry);
+        let mut contact = current_contact(&resources, 1, Vec3::ZERO);
+        contact.height = 0.4;
+        assert!(!can_float(&resources, &[contact], 0.4));
+        contact.height = 0.5;
+        assert!(can_float(&resources, &[contact], 0.4));
+        contact.height = 0.0;
+        contact.eyes_inside = true;
+        assert!(!can_float(&resources, &[contact], 0.0));
+        assert!(!can_float(&resources, &[], 0.4));
+        let other = current_contact(&resources, 16, Vec3::ZERO);
+        assert!(!can_float(&resources, &[other], 0.4));
+    }
+    #[test]
+    fn floating_and_travel_use_the_same_deepest_family_and_tie_rule() {
+        let registry = registry();
+        let resources = resources(&registry);
+        let mut yes = current_contact(&resources, 0, Vec3::ZERO);
+        let mut no = current_contact(&resources, 16, Vec3::ZERO);
+        yes.height = 0.8;
+        no.height = 0.6;
+        assert!(can_float(&resources, &[yes, no], 0.4));
+        let (depth, policy) = select_travel(&resources, &[yes, no]).unwrap();
+        let mut m = mob();
+        assert!(m.jump_in_registered_fluid(depth, policy));
+        assert_eq!(m.velocity.y, 0.04);
+        no.height = 0.9;
+        assert!(!can_float(&resources, &[yes, no], 0.4));
+        assert_eq!(
+            select_travel(&resources, &[yes, no])
+                .unwrap()
+                .1
+                .acceleration,
+            0.04
+        );
+        no.height = yes.height;
+        assert!(!can_float(&resources, &[yes, no], 0.4));
+        assert!(can_float(&resources, &[no, yes], 0.4));
+    }
+    #[test]
+    fn floating_observations_preserve_family_geometry_and_species_thresholds() {
+        let registry = registry();
+        let resources = resources(&registry);
+        let mut m = mob();
+        for state in [0, 1] {
+            let contacts = sample(&m, &resources, |p| {
+                (p.y == 0).then_some(BlockStateId(state))
+            });
+            assert!(can_float(&resources, &contacts, m.fluid_jump_threshold()));
+        }
+        let missing = sample(&m, &resources, |_| None);
+        assert!(!can_float(&resources, &missing, m.fluid_jump_threshold()));
+        m.position.y = 0.2;
+        let shallow = sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(7)));
+        assert!(!can_float(&resources, &shallow, m.fluid_jump_threshold()));
+        let contact = current_contact(&resources, 0, Vec3::ZERO);
+        Arc::make_mut(&mut m.kind).species = super::super::Species::Breeze;
+        assert!(!can_float(&resources, &[contact], m.fluid_jump_threshold()));
+        Arc::make_mut(&mut m.kind).eye_height = 0.3;
+        assert!(can_float(&resources, &[contact], m.fluid_jump_threshold()));
+        assert!(!m.fluids.in_water && !m.fluids.in_lava);
     }
     #[test]
     fn fall_scale_applies_once_for_source_flowing_cells_and_reduces_landing_damage() {

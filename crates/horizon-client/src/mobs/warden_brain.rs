@@ -633,7 +633,7 @@ impl B {
     fn try_start(&mut self, m: &mut Mob, cx: &mut Bx) -> bool {
         match self {
             B::Swim(t) => {
-                if !swim_condition(m) {
+                if !swim_condition(m, cx.w) {
                     return false;
                 }
                 t.begin(cx.lr, cx.now);
@@ -976,7 +976,7 @@ impl B {
         let now = cx.now;
         match self {
             B::Swim(t) => {
-                if now > t.end || !swim_condition(m) {
+                if now > t.end || !swim_condition(m, cx.w) {
                     self.do_stop(m, cx);
                 } else if m.random.next_float() < 0.8 {
                     m.ai.jumping = true;
@@ -1184,8 +1184,8 @@ fn one(running: &mut bool, f: impl FnOnce() -> bool) -> bool {
     }
 }
 /// `Swim`: deeper than the jump threshold, or in lava.
-fn swim_condition(m: &Mob) -> bool {
-    m.fluids.water > m.fluid_jump_threshold() || m.fluids.in_lava
+fn swim_condition(m: &Mob, w: &MobWorld) -> bool {
+    super::registered_fluids::should_float(m, w)
 }
 /// The `Cx` the mob library's attacks take.
 pub(super) fn cx<'a, 'w>(
