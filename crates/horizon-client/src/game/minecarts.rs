@@ -21,7 +21,10 @@ use horizon_core::{
     geometry::{Aabb, Vec3, trig},
     random::RandomSource,
 };
-use horizon_world::registry::BlockStateId;
+use horizon_world::{
+    registered_fluids::{contact::Contact, resources::RegisteredFluidResources},
+    registry::BlockStateId,
+};
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -281,6 +284,38 @@ pub(super) struct Rail {
     powered: bool,
 }
 impl Minecart {
+    /// Geometry-only fallback: a current-query failure must not erase a valid
+    /// fall policy. The caller supplies loaded/in-height block observations.
+    fn registered_fluid_contacts(
+        &self,
+        resources: &RegisteredFluidResources<'_>,
+        block: impl FnMut(horizon_core::position::BlockPos) -> Option<BlockStateId>,
+    ) -> Vec<Contact> {
+        resources
+            .catalog
+            .contacts(
+                self.bounds().deflate(Vec3::new(0.001, 0.001, 0.001)),
+                Vec3::new(self.position.x, self.fluid_eye_y(), self.position.z),
+                8192,
+                block,
+            )
+            .unwrap_or_default()
+    }
+    /// Once per positive family per refresh. The movement phase may already
+    /// have recorded a TNT landing blast; that pending outcome is not rewritten.
+    fn scale_registered_fall(
+        &mut self,
+        resources: &RegisteredFluidResources<'_>,
+        contacts: &[Contact],
+    ) {
+        for contact in contacts {
+            if contact.height > 0.0
+                && let Some(policy) = resources.interaction(contact.source)
+            {
+                self.fall_distance *= policy.fall_distance_scale;
+            }
+        }
+    }
     /// `Minecart.tick`: stationary rotation does not turn the passenger.
     pub(super) fn accumulate_rotation(&mut self) {
         self.passenger_yaw_delta = 0.0;
@@ -1239,19 +1274,30 @@ impl Game<'_> {
         // Custom currents share the post-move phase, but never become native
         // water (drag/gravity, fall resets and rail behavior keep their flags).
         if self.remote.is_none()
-            && c.is_pushed_by_fluid()
             && let Some(resources) = self.res.rest().registered_fluids.as_deref()
         {
-            let (bounds, position, eye_y) = (c.bounds(), c.position, c.fluid_eye_y());
-            let _ = horizon_client::entities::update_registered_entity_fluids(
-                bounds,
-                position,
-                eye_y,
-                &mut c.velocity,
-                &self.world,
-                &self.res.motion().fluids,
-                resources,
-            );
+            let contacts = if c.is_pushed_by_fluid() {
+                let (bounds, position, eye_y) = (c.bounds(), c.position, c.fluid_eye_y());
+                horizon_client::entities::update_registered_entity_fluids(
+                    bounds,
+                    position,
+                    eye_y,
+                    &mut c.velocity,
+                    &self.world,
+                    &self.res.motion().fluids,
+                    resources,
+                )
+            } else {
+                None
+            }
+            .unwrap_or_else(|| {
+                c.registered_fluid_contacts(resources, |p| {
+                    (self.world.loaded(p.x, p.z)
+                        && (self.world.bottom_y()..self.world.top_y()).contains(&p.y))
+                    .then(|| self.world.block(p.x, p.y, p.z))
+                })
+            });
+            c.scale_registered_fall(resources, &contacts);
         }
         // updateFluidInteraction: being in water resets the fall distance.
         if c.in_water {
@@ -3010,5 +3056,116 @@ mod registered_current_tests {
         cart.position.y = 0.2;
         assert!(sample(&cart, true).is_empty());
         assert_eq!(cart.previous.y, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod registered_fall_tests {
+    use super::*;
+    use horizon_world::registry::BlockRegistry;
+    use serde_json::json;
+
+    fn registry() -> BlockRegistry {
+        let mut rows = Vec::new();
+        let mut defaults = serde_json::Map::new();
+        for name in ["one", "two"] {
+            let id = format!("test:{name}");
+            defaults.insert(id.clone(), json!(rows.len()));
+            for level in 0..16 {
+                rows.push(
+                    json!([id,false,true,"",{"id":id,"properties":{"level":level.to_string()}}]),
+                );
+            }
+        }
+        BlockRegistry::from_facts_json(
+            json!({"states":rows,"defaults":defaults})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap()
+    }
+    fn resources(registry: &BlockRegistry, scales: [f64; 2]) -> RegisteredFluidResources<'_> {
+        let fluids: Vec<_> = ["one", "two"].into_iter().enumerate().map(|(i, name)| json!({
+            "source":format!("test:{name}"),"flowing":format!("test:flowing_{name}"),
+            "block":format!("test:{name}"),"bucket":format!("test:{name}_bucket"),
+            "policy":{"drop_off":1,"slope_distance":4,"tick_delay":5,"source_conversion":false},
+            "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
+            "interaction":{"travel":{"acceleration":0.02,"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
+                "motion_scale":0.0,"can_swim":false,"can_drown":false,"extinguishes":false,
+                "fall_distance_scale":scales[i]}
+        })).collect();
+        RegisteredFluidResources::from_reader(
+            registry,
+            json!({"format":1,"fluids":fluids}).to_string().as_bytes(),
+        )
+        .unwrap()
+    }
+    fn cart() -> Minecart {
+        let mut cart = Minecart::new(1, CartKind::Tnt, Vec3::new(1.0, 0.0, 0.5));
+        cart.fall_distance = 8.0;
+        cart.no_gravity = true;
+        cart
+    }
+
+    #[test]
+    fn source_and_flowing_contacts_scale_once_without_rewriting_pending_tnt_blast() {
+        let registry = registry();
+        let resources = resources(&registry, [0.5, 0.25]);
+        let mut cart = cart();
+        cart.fall_blast = Some(0.64);
+        cart.fuse = 11;
+        let contacts = cart.registered_fluid_contacts(&resources, |p| {
+            (p.y == 0).then_some(BlockStateId(if p.x == 0 { 0 } else { 7 }))
+        });
+        assert_eq!(contacts.len(), 1);
+        cart.scale_registered_fall(&resources, &contacts);
+        assert_eq!(cart.fall_distance, 4.0);
+        cart.scale_registered_fall(&resources, &contacts);
+        assert_eq!(cart.fall_distance, 2.0);
+        assert_eq!(cart.fall_blast, Some(0.64));
+        assert_eq!(cart.fuse, 11);
+        assert_eq!(cart.velocity, Vec3::ZERO);
+        assert!(!cart.in_water);
+    }
+
+    #[test]
+    fn separate_families_compose_including_zero_and_identity_without_current_force() {
+        let registry = registry();
+        for (scales, expected) in [([0.5, 0.25], 1.0), ([0.0, 1.0], 0.0), ([1.0, 1.0], 8.0)] {
+            let resources = resources(&registry, scales);
+            let mut cart = cart();
+            let contacts = cart.registered_fluid_contacts(&resources, |p| {
+                (p.y == 0).then_some(BlockStateId(if p.x == 0 { 0 } else { 16 }))
+            });
+            assert_eq!(contacts.len(), 2);
+            cart.scale_registered_fall(&resources, &contacts);
+            assert_eq!(cart.fall_distance, expected);
+            assert_eq!(cart.velocity, Vec3::ZERO);
+        }
+    }
+
+    #[test]
+    fn eye_only_missing_above_surface_and_invalid_contacts_do_not_scale_falls() {
+        let registry = registry();
+        let resources = resources(&registry, [0.5, 0.25]);
+        let mut cart = cart();
+        let mut contacts =
+            cart.registered_fluid_contacts(&resources, |p| (p.y == 0).then_some(BlockStateId(0)));
+        contacts[0].height = 0.0;
+        contacts[0].eyes_inside = true;
+        cart.scale_registered_fall(&resources, &contacts);
+        assert_eq!(cart.fall_distance, 8.0);
+        let missing = cart.registered_fluid_contacts(&resources, |_| None);
+        cart.scale_registered_fall(&resources, &missing);
+        cart.position.y = 0.2;
+        let above =
+            cart.registered_fluid_contacts(&resources, |p| (p.y == 0).then_some(BlockStateId(7)));
+        cart.scale_registered_fall(&resources, &above);
+        cart.position.x = f64::NAN;
+        let invalid = cart
+            .registered_fluid_contacts(&resources, |_| panic!("invalid box must not query blocks"));
+        cart.scale_registered_fall(&resources, &invalid);
+        assert!(missing.is_empty() && above.is_empty() && invalid.is_empty());
+        assert_eq!(cart.fall_distance, 8.0);
     }
 }
