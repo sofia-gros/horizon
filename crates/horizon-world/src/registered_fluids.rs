@@ -106,6 +106,16 @@ impl<'a> RegisteredFluids<'a> {
             names: BTreeMap::new(),
             blocks: BTreeMap::new(),
         };
+        // Count every state, not just the default and the levels we look up.
+        // Once the sixteen distinct canonical states are present, a count of
+        // exactly sixteen proves no extra level/property variant is unbound.
+        let mut state_counts = BTreeMap::new();
+        for index in 0..registry.len() {
+            let state = registry
+                .state(BlockStateId(index as u32))
+                .ok_or_else(|| invalid("missing block registry state"))?;
+            *state_counts.entry(state.name.as_str()).or_insert(0usize) += 1;
+        }
         for definition in definitions {
             if !valid_name(&definition.source)
                 || !valid_name(&definition.flowing)
@@ -130,6 +140,9 @@ impl<'a> RegisteredFluids<'a> {
             // not silently bind one arbitrary variant of a waterlogged/model block.
             if state.properties.len() != 1 || !state.properties.contains_key("level") {
                 return Err(invalid("liquid block requires only a level property"));
+            }
+            if state_counts.get(definition.block.as_str()) != Some(&16) {
+                return Err(invalid("liquid block requires exactly sixteen states"));
             }
             let family = result.families.len();
             let mut levels = [default; 16];
@@ -312,6 +325,9 @@ mod tests {
     use serde_json::json;
 
     fn blocks(missing_last: bool) -> BlockRegistry {
+        blocks_with_extra(missing_last, None)
+    }
+    fn blocks_with_extra(missing_last: bool, extra: Option<serde_json::Value>) -> BlockRegistry {
         let mut rows = vec![json!(["minecraft:air", true, false, "", "minecraft:air"])];
         let mut defaults = serde_json::Map::new();
         defaults.insert("minecraft:air".into(), json!(0));
@@ -324,6 +340,11 @@ mod tests {
             } {
                 rows.push(json!([name, false, true, "", {"id":name, "properties":{"level":level.to_string()}}]));
             }
+        }
+        if let Some(properties) = extra {
+            rows.push(
+                json!(["test:one", false, true, "", {"id":"test:one", "properties":properties}]),
+            );
         }
         BlockRegistry::from_facts_json(
             json!({"states": rows, "defaults":defaults})
@@ -453,6 +474,23 @@ mod tests {
     }
     fn blocks_fn_missing() -> BlockRegistry {
         blocks(true)
+    }
+    #[test]
+    fn extra_levels_and_property_variants_are_rejected() {
+        for properties in [
+            json!({"level":"16"}),
+            json!({"level":"0", "other":"true"}),
+            json!({"level":"01"}),
+            json!({"other":"true"}),
+        ] {
+            let blocks = blocks_with_extra(false, Some(properties.clone()));
+            assert!(
+                RegisteredFluids::new(&blocks, [family("one")]).is_err(),
+                "{properties}"
+            );
+            // Additional variants of an unrelated block do not reject a valid family.
+            assert!(RegisteredFluids::new(&blocks, [family("two")]).is_ok());
+        }
     }
     #[test]
     fn invalid_names_and_non_liquid_blocks_are_rejected() {
