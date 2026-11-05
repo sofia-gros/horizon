@@ -1506,6 +1506,12 @@ impl ArmorStand {
                 self.fire_ticks = 100;
             }
         }
+        if let Some(resources) = registered {
+            registered_fluids::ignite_stand(self, resources, |p| {
+                (world.loaded(p.x, p.z) && (world.bottom_y()..world.top_y()).contains(&p.y))
+                    .then(|| world.block(p.x, p.y, p.z))
+            });
+        }
         self.health > 0.5
     }
     /// EntityType.ARMOR_STAND dimensions (0.5 x 1.975, half for small).
