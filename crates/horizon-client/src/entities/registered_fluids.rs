@@ -57,10 +57,20 @@ pub(super) fn extinguish_stand(
     if stand.fire_ticks <= 0 {
         return;
     }
+    if extinguishing_contact(resources, &stand_contacts(stand, resources, block)) {
+        stand.fire_ticks = 0;
+    }
+}
+
+pub(super) fn stand_contacts(
+    stand: &ArmorStand,
+    resources: &RegisteredFluidResources<'_>,
+    block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+) -> Vec<Contact> {
     let Some(bounds) = stand.registered_fluid_box() else {
-        return;
+        return Vec::new();
     };
-    if resources
+    resources
         .catalog
         .contacts(
             bounds.deflate(Vec3::new(0.001, 0.001, 0.001)),
@@ -68,9 +78,22 @@ pub(super) fn extinguish_stand(
             8192,
             block,
         )
-        .is_ok_and(|contacts| extinguishing_contact(resources, &contacts))
-    {
-        stand.fire_ticks = 0;
+        .unwrap_or_default()
+}
+
+/// Once per positive family at the fluid refresh, not once per sampled cell.
+/// This is the stand's existing fall accumulator for landing enchantments.
+pub(super) fn scale_stand_fall(
+    stand: &mut ArmorStand,
+    resources: &RegisteredFluidResources<'_>,
+    contacts: &[Contact],
+) {
+    for contact in contacts {
+        if contact.height > 0.0
+            && let Some(policy) = resources.interaction(contact.source)
+        {
+            stand.enchantment_fall_distance *= policy.fall_distance_scale;
+        }
     }
 }
 
@@ -187,13 +210,21 @@ mod tests {
         hot_extinguishes: bool,
         scales: [f64; 2],
     ) -> RegisteredFluidResources<'_> {
+        resources_with_fall_scales(registry, hot_extinguishes, scales, [0.5, 0.5])
+    }
+    fn resources_with_fall_scales(
+        registry: &BlockRegistry,
+        hot_extinguishes: bool,
+        scales: [f64; 2],
+        fall_scales: [f64; 2],
+    ) -> RegisteredFluidResources<'_> {
         let fluids:Vec<_> = ["hot", "cool"].map(|name| json!({
             "source":format!("test:{name}"),"flowing":format!("test:flowing_{name}"),
             "block":format!("test:{name}"),"bucket":format!("test:{name}_bucket"),
             "policy":{"drop_off":1,"slope_distance":4,"tick_delay":5,"source_conversion":false},
             "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
             "interaction":{"travel":{"acceleration":0.02,"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
-              "motion_scale":scales[usize::from(name == "cool")],"can_swim":false,"can_drown":false,"extinguishes":name == "cool" || hot_extinguishes,"fall_distance_scale":0.5,
+              "motion_scale":scales[usize::from(name == "cool")],"can_swim":false,"can_drown":false,"extinguishes":name == "cool" || hot_extinguishes,"fall_distance_scale":fall_scales[usize::from(name == "cool")],
               "burn":if name == "hot" { json!({"seconds":10,"damage":2.0}) } else { json!(null) }}
         })).into_iter().collect();
         RegisteredFluidResources::from_reader(
@@ -337,6 +368,78 @@ mod tests {
                 "small={small}, marker={marker}, no_gravity={no_gravity}"
             );
             assert_eq!(stand.health, 20.0);
+        }
+    }
+    #[test]
+    fn stand_fall_scales_once_per_family_even_across_source_and_flowing_cells() {
+        let registry = registry();
+        let r = resources(&registry); // Zero motion scales do not disable fall policy.
+        let mut stand = ArmorStand::new(7, Vec3::new(1.0, 0.0, 0.5), 0.0);
+        stand.enchantment_fall_distance = 16.0;
+        stand.velocity = Vec3::new(0.0, -0.4, 0.0);
+        let contacts = stand_contacts(&stand, &r, |p| {
+            (p.y == 0).then_some(BlockStateId(if p.x == 0 { 0 } else { 7 }))
+        });
+        scale_stand_fall(&mut stand, &r, &contacts);
+        assert_eq!(stand.enchantment_fall_distance, 8.0);
+        let mixed = stand_contacts(&stand, &r, |p| {
+            (p.y == 0).then_some(BlockStateId(if p.x == 0 { 0 } else { 16 }))
+        });
+        scale_stand_fall(&mut stand, &r, &mixed);
+        assert_eq!(stand.enchantment_fall_distance, 2.0);
+        scale_stand_fall(&mut stand, &r, &mixed);
+        assert_eq!(
+            stand.enchantment_fall_distance, 0.5,
+            "each refresh applies its policies"
+        );
+        assert_eq!(stand.velocity, Vec3::new(0.0, -0.4, 0.0));
+        assert_eq!(stand.health, 20.0);
+    }
+    #[test]
+    fn stand_fall_policy_handles_zero_identity_and_eye_only_contacts() {
+        let registry = registry();
+        let r = resources_with_fall_scales(&registry, false, [0.0, 0.0], [0.0, 1.0]);
+        let mut stand = ArmorStand::new(7, Vec3::new(0.5, 0.0, 0.5), 0.0);
+        stand.enchantment_fall_distance = 8.0;
+        let cool = current(&r, "test:cool", Vec3::ZERO);
+        scale_stand_fall(&mut stand, &r, &[cool]);
+        assert_eq!(stand.enchantment_fall_distance, 8.0);
+        let mut eye = current(&r, "test:hot", Vec3::ZERO);
+        eye.height = 0.0;
+        eye.eyes_inside = true;
+        scale_stand_fall(&mut stand, &r, &[eye]);
+        assert_eq!(stand.enchantment_fall_distance, 8.0);
+        scale_stand_fall(&mut stand, &r, &[current(&r, "test:hot", Vec3::ZERO)]);
+        assert_eq!(stand.enchantment_fall_distance, 0.0);
+    }
+    #[test]
+    fn stand_fall_sampling_respects_small_marker_and_missing_geometry() {
+        let registry = registry();
+        let r = resources(&registry);
+        for (small, marker, no_gravity, expected) in [
+            (false, false, false, 4.0),
+            (true, false, false, 8.0),
+            (false, true, false, 8.0),
+            (false, false, true, 4.0),
+        ] {
+            let mut stand = ArmorStand::new(7, Vec3::new(0.5, 0.0, 0.5), 0.0);
+            stand.small = small;
+            stand.marker = marker;
+            stand.no_gravity = no_gravity;
+            stand.enchantment_fall_distance = 8.0;
+            let contacts = stand_contacts(&stand, &r, |p| {
+                assert!(!marker, "marker needs no query");
+                (p.y == 1).then_some(BlockStateId(0))
+            });
+            scale_stand_fall(&mut stand, &r, &contacts);
+            assert_eq!(stand.enchantment_fall_distance, expected);
+            let absent = stand_contacts(&stand, &r, |_| None);
+            scale_stand_fall(&mut stand, &r, &absent);
+            assert_eq!(stand.enchantment_fall_distance, expected);
+            stand.position.y = f64::NAN;
+            let invalid = stand_contacts(&stand, &r, |_| panic!("invalid query"));
+            scale_stand_fall(&mut stand, &r, &invalid);
+            assert_eq!(stand.enchantment_fall_distance, expected);
         }
     }
     #[test]

@@ -15,7 +15,7 @@ use horizon_world::{
     },
     fluid::{FluidHeightWorld, FluidKind, FluidState},
     fluid_flow::{FluidFlowWorld, flow_at},
-    registered_fluids::resources::RegisteredFluidResources,
+    registered_fluids::{contact::Contact, resources::RegisteredFluidResources},
     registry::BlockStateId,
 };
 type Error = std::convert::Infallible;
@@ -76,7 +76,7 @@ fn update_registered_currents(
     world: &World,
     fluids: &FluidResources,
     resources: &RegisteredFluidResources<'_>,
-) {
+) -> Option<Vec<Contact>> {
     let Ok(contacts) = crate::motion::registered_fluid_contacts_with_flow(
         world,
         resources,
@@ -84,7 +84,7 @@ fn update_registered_currents(
         bounds.deflate(Vec3::new(0.001, 0.001, 0.001)),
         Vec3::new(position.x, eye_y, position.z),
     ) else {
-        return;
+        return None;
     };
     let mut scene = EntityFluidWorld {
         bounds,
@@ -95,6 +95,7 @@ fn update_registered_currents(
         fluids,
     };
     let _ = super::registered_fluids::apply_currents(&mut scene, resources, &contacts);
+    Some(contacts)
 }
 impl ItemEntity {
     /// Native water/lava currents run first. Registered currents are opt-in and
@@ -105,7 +106,7 @@ impl ItemEntity {
         fluids: &FluidResources,
         resources: &RegisteredFluidResources<'_>,
     ) {
-        update_registered_currents(
+        let _ = update_registered_currents(
             self.bounds(),
             self.position,
             self.position.y + f64::from(0.2125f32),
@@ -139,7 +140,7 @@ impl ArmorStand {
         };
         Vec3::new(self.position.x, self.position.y + eye, self.position.z)
     }
-    /// Apply registered-family forces without claiming native water immersion.
+    /// Apply registered forces and fall scaling without native water aliases.
     /// The authoritative owner calls this after native currents, before travel.
     pub fn update_registered_fluids(
         &mut self,
@@ -150,7 +151,7 @@ impl ArmorStand {
         let Some(bounds) = self.registered_fluid_box() else {
             return;
         };
-        update_registered_currents(
+        let contacts = update_registered_currents(
             bounds,
             self.position,
             self.registered_fluid_eyes().y,
@@ -158,7 +159,16 @@ impl ArmorStand {
             world,
             fluids,
             resources,
-        );
+        )
+        .unwrap_or_else(|| {
+            // A flow failure must not suppress a valid body fall policy.
+            // Geometry-only contacts never invent a current force.
+            super::registered_fluids::stand_contacts(self, resources, |p| {
+                (world.loaded(p.x, p.z) && (world.bottom_y()..world.top_y()).contains(&p.y))
+                    .then(|| world.block(p.x, p.y, p.z))
+            })
+        });
+        super::registered_fluids::scale_stand_fall(self, resources, &contacts);
     }
     /// `Entity.updateFluidHeightAndDoFluidPushing`: refreshes water and lava
     /// immersion over the stand's deflated box and pushes its velocity by any

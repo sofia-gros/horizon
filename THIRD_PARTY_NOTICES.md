@@ -348,3 +348,7 @@ that same MIT Tinkers' Construct `TinkerFluids.cool()` canExtinguish policy
 `f4e77d43f39ba1047bf93ae816b7e1beaab514c2`, full MIT license above). This is
 original Rust integration with the existing native-water fire-clearing phase;
 no additional external implementation was read or copied for this wiring.
+
+Armor-stand fall-distance scaling reuses the registered interaction contract and
+original host entity geometry/current adapters above. It adds no external source
+adaptation; the existing TConstruct policy attribution remains unchanged.
