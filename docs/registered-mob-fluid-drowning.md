@@ -45,3 +45,6 @@ remain for the final integration pass.
 Remaining work includes fall-distance policy, swimming/float AI activation,
 automatic ridden custom-fluid buoyancy, passenger boat shielding, species-
 specific fluid behavior and custom mob effects. This does not finish #379.
+
+Mob fall-distance policy is covered by the later
+`registered-mob-fluid-fall.md` slice, with refresh-order limits documented there.

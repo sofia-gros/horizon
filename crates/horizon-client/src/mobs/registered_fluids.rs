@@ -209,6 +209,14 @@ mod tests {
         effect: Option<&str>,
         scales: [f64; 2],
     ) -> RegisteredFluidResources<'r> {
+        resources_with_fall(registry, effect, scales, [1.0, 1.0])
+    }
+    fn resources_with_fall<'r>(
+        registry: &'r BlockRegistry,
+        effect: Option<&str>,
+        scales: [f64; 2],
+        fall_scales: [f64; 2],
+    ) -> RegisteredFluidResources<'r> {
         let effect = effect
             .map(|id| json!({"id":id,"duration_ticks":100,"amplifier":0,"no_curatives":true}));
         let burn = effect.is_none().then(|| json!({"seconds":10,"damage":3.0}));
@@ -219,7 +227,7 @@ mod tests {
             "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
             "interaction":{"travel":{"acceleration":if name == "hot" {0.02} else {0.04},"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
                 "motion_scale":scales[usize::from(name == "other")],"can_swim":false,"can_drown":name == "hot","extinguishes":name == "hot" && effect.is_some(),
-                "fall_distance_scale":1.0,"burn":burn,"effect":effect}
+                "fall_distance_scale":fall_scales[usize::from(name == "other")],"burn":burn,"effect":effect}
         })).collect();
         RegisteredFluidResources::from_reader(
             registry,
@@ -316,6 +324,90 @@ mod tests {
             gravity_scale: 0.0625,
             jump: 0.04,
         }
+    }
+    #[test]
+    fn fall_scale_applies_once_for_source_flowing_cells_and_reduces_landing_damage() {
+        let registry = registry();
+        let resources = resources_with_fall(&registry, None, [0.0, 0.0], [0.5, 1.0]);
+        let mut m = mob();
+        m.position.x = 1.0;
+        m.fall_distance = 8.0;
+        let contacts = sample(&m, &resources, |p| {
+            (p.y == 0).then_some(BlockStateId(if p.x == 0 { 0 } else { 1 }))
+        });
+        assert_eq!(contacts.len(), 1, "source/flowing cells are one family");
+        m.scale_registered_fall(&resources, &contacts);
+        assert_eq!(m.fall_distance, 4.0);
+        m.cause_fall_damage_from(m.fall_distance, 1.0, &mut Vec::new());
+        assert_eq!(
+            m.health, 9.0,
+            "ordinary fall damage sees the reduced distance"
+        );
+        let mut dry = mob();
+        dry.cause_fall_damage_from(8.0, 1.0, &mut Vec::new());
+        assert_eq!(dry.health, 5.0);
+        assert!(!m.fluids.in_water && !m.fluids.in_lava);
+    }
+    #[test]
+    fn current_immunity_and_geometry_only_fallback_do_not_disable_fall_scaling() {
+        let registry = registry();
+        let resources = resources_with_fall(&registry, None, [0.01, 0.0], [0.5, 1.0]);
+        let mut m = mob();
+        Arc::make_mut(&mut m.kind).species = super::super::Species::Frog;
+        m.fall_distance = 8.0;
+        let flowing = current_contact(&resources, 1, Vec3::new(1.0, 0.0, 0.0));
+        m.push_registered_currents(&resources, &[flowing]);
+        m.scale_registered_fall(&resources, &[flowing]);
+        assert_eq!(m.velocity, Vec3::ZERO);
+        assert_eq!(m.fall_distance, 4.0);
+        // Geometry fallback includes zero vectors, never a minimum-drift push.
+        let mut m = mob();
+        m.fall_distance = 8.0;
+        let geometry = sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(1)));
+        m.push_registered_currents(&resources, &geometry);
+        m.scale_registered_fall(&resources, &geometry);
+        assert_eq!(m.velocity, Vec3::ZERO);
+        assert_eq!(m.fall_distance, 4.0);
+    }
+    #[test]
+    fn independent_family_scales_compose_and_zero_and_identity_keep_their_meaning() {
+        let registry = registry();
+        for (scales, expected) in [([0.5, 0.25], 1.0), ([0.0, 1.0], 0.0), ([1.0, 1.0], 8.0)] {
+            let resources = resources_with_fall(&registry, None, [0.0, 0.0], scales);
+            let contacts = [
+                current_contact(&resources, 0, Vec3::ZERO),
+                current_contact(&resources, 16, Vec3::ZERO),
+            ];
+            let mut m = mob();
+            m.fall_distance = 8.0;
+            m.scale_registered_fall(&resources, &contacts);
+            assert_eq!(m.fall_distance, expected);
+        }
+    }
+    #[test]
+    fn only_body_contacts_scale_falls_and_each_refresh_uses_current_distance() {
+        let registry = registry();
+        let resources = resources_with_fall(&registry, None, [0.0, 0.0], [0.5, 1.0]);
+        let mut m = mob();
+        m.fall_distance = 8.0;
+        let mut eye = current_contact(&resources, 1, Vec3::ZERO);
+        eye.height = 0.0;
+        eye.eyes_inside = true;
+        m.scale_registered_fall(&resources, &[eye]);
+        assert_eq!(m.fall_distance, 8.0);
+        m.position.y = 0.2;
+        for contacts in [
+            sample(&m, &resources, |_| None),
+            sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(7))),
+        ] {
+            m.scale_registered_fall(&resources, &contacts);
+            assert_eq!(m.fall_distance, 8.0);
+        }
+        let body = current_contact(&resources, 0, Vec3::ZERO);
+        m.scale_registered_fall(&resources, &[body]);
+        assert_eq!(m.fall_distance, 4.0);
+        m.scale_registered_fall(&resources, &[body]);
+        assert_eq!(m.fall_distance, 2.0);
     }
     #[test]
     fn configured_jump_strength_obeys_body_depth_and_ground_threshold() {
