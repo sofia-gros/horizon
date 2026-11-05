@@ -436,6 +436,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if b.is_air(state) {
             return false;
         }
+        if !self.level.allow_block_removal(pos, state) {
+            return false;
+        }
         let data = b.data(state);
         // DoorBlock also clears the bottom half when the tool would not drop it.
         if ((creative && data.is(Class::DoublePlant))

@@ -384,6 +384,14 @@ pub trait LevelAccess {
     ) -> bool {
         true
     }
+    /// Preflight permission to replace a block, before drops, entity removal or
+    /// storage writes. The default allows. Implementations must be read-only,
+    /// deterministic for unchanged state, and must not depend on unrelated
+    /// writes in the same piston operation. This is not a late rollback hook.
+    /// Direct raw-storage callers must perform their own preflight.
+    fn allow_block_removal(&self, _pos: BlockPos, _state: BlockStateId) -> bool {
+        true
+    }
     /// Observe a committed `Level.setBlock` state change, before its side effects.
     fn observe_block_changed(&self, _pos: BlockPos, _old: BlockStateId, _new: BlockStateId) {}
     /// Observe `BlockState.handleNeighborChanged` before the block handles it.

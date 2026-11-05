@@ -161,3 +161,14 @@ pub fn orb_value(value: u32) -> u32 {
         .find(|&v| value >= v)
         .unwrap_or(1)
 }
+
+/// Read-only whole-operation check. Call before the first write, drop or entity
+/// side effect; a later single-block refusal cannot roll back earlier effects.
+pub(super) fn preflight<L: super::LevelAccess + ?Sized>(
+    level: &L,
+    positions: impl IntoIterator<Item = horizon_core::position::BlockPos>,
+) -> bool {
+    positions
+        .into_iter()
+        .all(|pos| level.allow_block_removal(pos, level.block_state(pos)))
+}

@@ -432,8 +432,22 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         Some((r.to_push, r.to_destroy, r.push_direction))
     }
+    // Retraction previously removed its head before resolving the payload.
+    // Model that absence without writing, so every affected block can be
+    // checked before the first mutation or drop.
+    fn resolver_state(&self, r: &Resolver, pos: BlockPos) -> BlockStateId {
+        let state = self.state(pos);
+        if !r.extending
+            && pos == rel(r.piston_pos, r.piston_direction)
+            && self.b.is_block(state, self.b.named.piston_head)
+        {
+            self.b.air()
+        } else {
+            state
+        }
+    }
     fn add_block_line(&self, r: &mut Resolver, start: BlockPos, direction: Direction) -> bool {
-        let mut next = self.state(start);
+        let mut next = self.resolver_state(r, start);
         if self.b.is_air(next) {
             return true;
         }
@@ -450,7 +464,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         while self.is_slime_or_honey(next) {
             let pos = rel_n(start, r.push_direction.opposite(), count as i32);
             let previous = next;
-            next = self.state(pos);
+            next = self.resolver_state(r, pos);
             if self.b.is_air(next)
                 || !self.can_stick(previous, next)
                 || !self.is_pushable(
@@ -490,7 +504,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
                 return true;
             }
-            next = self.state(pos);
+            next = self.resolver_state(r, pos);
             if self.b.is_air(next) {
                 return true;
             }
@@ -522,11 +536,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         r.to_push.extend(middle);
     }
     fn add_branching_blocks(&self, r: &mut Resolver, from: BlockPos) -> bool {
-        let from_state = self.state(from);
+        let from_state = self.resolver_state(r, from);
         for direction in Direction::ALL {
             if super::query::axis_of(direction) != super::query::axis_of(r.push_direction) {
                 let neighbour = rel(from, direction);
-                let neighbour_state = self.state(neighbour);
+                let neighbour_state = self.resolver_state(r, neighbour);
                 if self.can_stick(neighbour_state, from_state)
                     && !self.add_block_line(r, neighbour, direction)
                 {
@@ -693,6 +707,33 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let p = b.props;
         let direction = b.facing(state);
+        // Check the full write footprint before finalTick, base/head writes,
+        // drops or moving-piston entities. A denied payload must not leave a
+        // half-retracted piston or duplicate a destroyed block's drops.
+        if matches!(a, 0 | 1 | 2) {
+            let mut affected = vec![pos, rel(pos, direction)];
+            if a != 0 {
+                affected.push(rel_n(pos, direction, 2));
+            }
+            if let Some((push, destroy, movement)) = self.piston_resolve(pos, direction, a == 0) {
+                affected.extend(push.iter().flat_map(|at| [*at, rel(*at, movement)]));
+                affected.extend(destroy);
+            }
+            // finalTick can expose a moving block before retraction. Check
+            // that projected state too, not only the moving-piston shell.
+            if a != 0 {
+                for at in [rel(pos, direction), rel_n(pos, direction, 2)] {
+                    if let Some(moving) = self.moving_piston(at) {
+                        if !self.level.allow_block_removal(at, moving.moved_state) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            if !super::removal::preflight(&*self.level, affected) {
+                return false;
+            }
+        }
         let extended_state = b.table.set_bool(state, p.extended, true);
         let sticky = self.is_sticky_piston(state);
         // A pull the level refused isn't sent: clients, who aren't asked,

@@ -333,6 +333,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if current == state {
             return None;
         }
+        if !self.level.allow_block_removal(pos, current) {
+            return None;
+        }
         let old = self.level.set_raw(pos, state)?;
         if old == state {
             return None;
@@ -416,6 +419,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if self.b.is_air(state) {
             return false;
         }
+        // Refusal must precede drops/particles: refusing only set_raw would
+        // leave the old block in place after already awarding its loot.
+        if !self.level.allow_block_removal(pos, state) {
+            return false;
+        }
         // Block.spawnDestroyParticles: fire spawns none, straw beds their own.
         let data = self.b.data(state);
         if data.is(Class::StrawBed) {
@@ -435,6 +443,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         destroyed
     }
     pub fn drop_resources(&mut self, state: BlockStateId, pos: BlockPos) {
+        // Some shape/plant paths request loot before their replacement rather
+        // than calling destroy_block. Refusal must suppress that loot too.
+        if !self.level.allow_block_removal(pos, state) {
+            return;
+        }
         // `MovingPistonBlock.getDrops`: a moving piston's loot is the loot of
         // the block it carries.
         // shortcut: the carried block's `spawnAfterBreak` experience comes with

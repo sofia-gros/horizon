@@ -80,6 +80,9 @@ jobs:
         with:
           shared-key: verify
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Test pre-removal ordering without game resources
+        if: steps.rust.outputs.required != 'false'
+        run: python3 tools/test_removal_preflight.py
       - name: Check formatting and lint
         if: steps.rust.outputs.required != 'false'
         run: |

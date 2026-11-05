@@ -948,6 +948,15 @@ impl Game<'_> {
         if self.res.facts().is_air(state) {
             return Ok(());
         }
+        if !self.with_level(|_, level, _| {
+            horizon_world::level::LevelAccess::allow_block_removal(
+                level,
+                horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
+                state,
+            )
+        }) {
+            return Ok(());
+        }
         let name = self.res.facts().get(state).name.clone();
         let is_tnt = &*name == "minecraft:tnt";
         // CreakingHeartBlock.onExplosionHit: its creaking dies (no

@@ -1110,6 +1110,12 @@ impl GameLevel<'_> {
     }
 }
 impl LevelAccess for GameLevel<'_> {
+    // A shared pre-mutation boundary for mods to override. Unlike the removal
+    // notification, this runs before loot, storage and piston-side effects.
+    fn allow_block_removal(&self, _pos: BlockPos, _state: BlockStateId) -> bool {
+        true
+    }
+
     fn redstone_experiments(&self) -> bool {
         self.redstone_experiments
     }
@@ -5813,6 +5819,11 @@ impl Game<'_> {
         }
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
+        if !self.with_level(|_, level, _| {
+            level.allow_block_removal(BlockPos::new(pos[0], pos[1], pos[2]), state)
+        }) {
+            return Ok(());
+        }
         // Native mods, once the game allowed the break: a canceled one keeps
         // the block, and a guest's acknowledgement puts it back in its world.
         let mut canceled = false;
