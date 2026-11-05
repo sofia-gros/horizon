@@ -166,7 +166,7 @@ BlueMap is licensed under the MIT license:
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 > THE SOFTWARE.
 
-## Tinkers' Construct registered-fluid contact
+## SlimeKnights registered-fluid behavior
 
 `crates/horizon-client/src/motion/registered_fluids.rs` adapts the family-height
 check, ignition and lava-type damage of `BurningLiquidBlock.entityInside`, and
@@ -175,6 +175,13 @@ the matching-family status-effect contact of `MobEffectLiquidBlock.entityInside`
 Changes: explicit resource policies, catalog-scoped identity, and Horizon player
 health/effect dispatch. The source's empty curative-item list is not represented
 yet. No Forge implementation was read or copied for this adapter.
+
+`crates/horizon-world/src/registered_flow.rs` also adapts the upward spread,
+feeding-neighbor, ceiling-hole/slope and source-support semantics of
+[`Mantle InvertedFluid` at 17c287ad52f7b10154e07fa7570dc7bccd74ca2b](https://github.com/SlimeKnights/Mantle/blob/17c287ad52f7b10154e07fa7570dc7bccd74ca2b/src/main/java/slimeknights/mantle/fluid/InvertedFluid.java).
+Changes: one explicit per-family vertical direction inside the existing host
+algorithm, with host guards and scheduling; current vectors and client geometry
+are not included. Mantle carries the same SlimeKnights copyright and MIT notice:
 
 MIT License
 
