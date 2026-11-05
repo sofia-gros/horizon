@@ -3,7 +3,11 @@
 // Changed: explicit family policy, bounded loaded-only sampling, host mob damage.
 //! Registered liquid block contact for authoritative mobs, without native aliases.
 use super::{Damage, DamageKind, Mob, MobEvent, MobWorld};
-use horizon_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
+use horizon_core::{
+    geometry::{Aabb, Vec3},
+    position::BlockPos,
+    random::RandomSource,
+};
 use horizon_world::{
     registered_fluids::{
         contact::Contact, interaction::TravelPolicy, resources::RegisteredFluidResources,
@@ -42,13 +46,13 @@ fn sample(
 /// Native water/lava and species-specific travel take precedence at the caller.
 /// Like the player adapter, the deepest configured family wins; equal heights
 /// retain the last encounter in the bounded sampler's deterministic order.
-pub(super) fn travel(m: &Mob, w: &MobWorld<'_>) -> Option<TravelPolicy> {
+pub(super) fn travel(m: &Mob, w: &MobWorld<'_>) -> Option<(f64, TravelPolicy)> {
     select_travel(w.registered_fluids?, &contacts(m, w))
 }
 fn select_travel(
     resources: &RegisteredFluidResources<'_>,
     contacts: &[Contact],
-) -> Option<TravelPolicy> {
+) -> Option<(f64, TravelPolicy)> {
     contacts
         .iter()
         .filter(|contact| contact.height > 0.0)
@@ -58,7 +62,33 @@ fn select_travel(
                 .map(|p| (contact.height, p.travel))
         })
         .max_by(|a, b| a.0.total_cmp(&b.0))
-        .map(|(_, policy)| policy)
+}
+
+/// A fluid exit must not put the body inside any registered family. Unlike
+/// ordinary contact observations, absent probe cells are not evidence of dry air.
+pub(super) fn dry_exit(w: &MobWorld<'_>, bounds: Aabb) -> bool {
+    let Some(resources) = w.registered_fluids else {
+        return true;
+    };
+    dry_sample(resources, bounds, |p| {
+        (w.world.loaded(p.x, p.z) && (w.world.bottom_y()..w.world.top_y()).contains(&p.y))
+            .then(|| w.world.block(p.x, p.y, p.z))
+    })
+}
+fn dry_sample(
+    resources: &RegisteredFluidResources<'_>,
+    bounds: Aabb,
+    mut block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+) -> bool {
+    let mut missing = false;
+    let result = resources
+        .catalog
+        .contacts(bounds, bounds.min_position(), 8192, |p| {
+            let state = block(p);
+            missing |= state.is_none();
+            state
+        });
+    !missing && result.is_ok_and(|contacts| contacts.iter().all(|c| c.height <= 0.0))
 }
 
 /// Policy-only opt-in to the mob's existing water/rain fire-clearing phase.
@@ -134,7 +164,7 @@ mod tests {
     use std::sync::Arc;
 
     fn registry() -> BlockRegistry {
-        let rows: Vec<_> = ["test:hot", "test:other"]
+        let mut rows: Vec<_> = ["test:hot", "test:other"]
             .into_iter()
             .flat_map(|name| {
                 (0..16).map(move |level| {
@@ -142,8 +172,9 @@ mod tests {
             })
             })
             .collect();
+        rows.push(json!(["minecraft:air", false, false, "", {"id":"minecraft:air"}]));
         BlockRegistry::from_facts_json(
-            json!({"states":rows,"defaults":{"test:hot":0,"test:other":16}})
+            json!({"states":rows,"defaults":{"test:hot":0,"test:other":16,"minecraft:air":32}})
                 .to_string()
                 .as_bytes(),
         )
@@ -234,22 +265,22 @@ mod tests {
         a.height = 0.7;
         b.height = 0.2;
         assert_eq!(
-            select_travel(&resources, &[a, b]).unwrap().acceleration,
+            select_travel(&resources, &[a, b]).unwrap().1.acceleration,
             0.02
         );
         b.height = 0.9;
         assert_eq!(
-            select_travel(&resources, &[a, b]).unwrap().acceleration,
+            select_travel(&resources, &[a, b]).unwrap().1.acceleration,
             0.04
         );
         // Equal depth follows the existing player's last-encounter tie rule.
         b.height = a.height;
         assert_eq!(
-            select_travel(&resources, &[a, b]).unwrap().acceleration,
+            select_travel(&resources, &[a, b]).unwrap().1.acceleration,
             0.04
         );
         assert_eq!(
-            select_travel(&resources, &[b, a]).unwrap().acceleration,
+            select_travel(&resources, &[b, a]).unwrap().1.acceleration,
             0.02
         );
         a.height = 0.0;
@@ -270,6 +301,71 @@ mod tests {
             gravity_scale: 0.0625,
             jump: 0.04,
         }
+    }
+    #[test]
+    fn configured_jump_strength_obeys_body_depth_and_ground_threshold() {
+        let mut policy = travel_policy();
+        policy.jump = 0.12;
+        let mut m = mob();
+        m.velocity = Vec3::new(0.25, -0.1, -0.5);
+        assert!(!m.jump_in_registered_fluid(0.0, policy));
+        m.on_ground = true;
+        assert!(!m.jump_in_registered_fluid(0.4, policy));
+        assert_eq!(m.velocity, Vec3::new(0.25, -0.1, -0.5));
+        m.ai.no_jump_delay = 7;
+        assert!(m.jump_in_registered_fluid(0.8, policy));
+        assert!((m.velocity.y - 0.02).abs() < 1e-12);
+        assert_eq!(m.velocity.x, 0.25);
+        assert_eq!(m.velocity.z, -0.5);
+        assert_eq!(m.ai.no_jump_delay, 7);
+        assert!(!m.fluids.in_water && !m.fluids.in_lava);
+        // An airborne shallow body still uses the fluid jump.
+        m.on_ground = false;
+        assert!(m.jump_in_registered_fluid(0.1, policy));
+        assert!((m.velocity.y - 0.14).abs() < 1e-12);
+    }
+    #[test]
+    fn zero_strength_consumes_deep_jump_and_species_threshold_is_retained() {
+        let mut m = mob();
+        let mut policy = travel_policy();
+        policy.jump = 0.0;
+        m.on_ground = true;
+        assert!(m.jump_in_registered_fluid(0.8, policy));
+        assert_eq!(m.velocity, Vec3::ZERO);
+        Arc::make_mut(&mut m.kind).species = super::super::Species::Breeze;
+        // Breeze uses eye height rather than the ordinary 0.4 threshold.
+        assert!(!m.jump_in_registered_fluid(1.0, policy));
+        assert!(m.jump_in_registered_fluid(1.5, policy));
+    }
+    #[test]
+    fn exit_requires_dry_body_space_for_every_registered_family() {
+        let registry = registry();
+        let resources = resources(&registry);
+        let bounds = Aabb::new(Vec3::new(0.1, 0.2, 0.1), Vec3::new(0.9, 1.6, 0.9));
+        let air = BlockStateId(32);
+        assert!(dry_sample(&resources, bounds, |_| Some(air)));
+        for state in [0, 1, 16, 17] {
+            assert!(!dry_sample(&resources, bounds, |p| {
+                Some(if p.y == 0 { BlockStateId(state) } else { air })
+            }));
+        }
+        // A thin layer below the prospective feet does not block escape.
+        assert!(dry_sample(&resources, bounds, |p| {
+            Some(if p.y == 0 { BlockStateId(7) } else { air })
+        }));
+    }
+    #[test]
+    fn exit_does_not_treat_missing_or_overbudget_samples_as_dry() {
+        let registry = registry();
+        let resources = resources(&registry);
+        let bounds = Aabb::new(Vec3::new(0.1, 0.2, 0.1), Vec3::new(0.9, 1.6, 0.9));
+        assert!(!dry_sample(&resources, bounds, |_| None));
+        assert!(!dry_sample(&resources, bounds, |p| (p.y == 0)
+            .then_some(BlockStateId(32))));
+        let oversized = Aabb::new(Vec3::ZERO, Vec3::new(100.0, 100.0, 100.0));
+        assert!(!dry_sample(&resources, oversized, |_| panic!(
+            "budget must reject before lookup"
+        )));
     }
     #[test]
     fn travel_damps_collision_resolved_velocity_before_scaled_gravity() {

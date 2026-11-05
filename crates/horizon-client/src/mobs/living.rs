@@ -1195,12 +1195,14 @@ impl Mob {
                 self.travel_in_fluid(w, input, events);
                 return;
             }
-            if let Some(policy) = super::registered_fluids::travel(self, w) {
+            if let Some((_, policy)) = super::registered_fluids::travel(self, w) {
+                let old_y = self.position.y;
                 let gravity = self.effective_gravity();
                 let falling = self.velocity.y <= 0.0;
                 self.move_relative(policy.acceleration, input);
                 self.do_move(w, events);
                 self.finish_registered_travel(policy, gravity, falling);
+                self.jump_out_of_fluid(w, old_y);
                 return;
             }
         }
@@ -1415,27 +1417,7 @@ impl Mob {
                 self.velocity.y -= gravity / 4.0;
             }
         }
-        // jumpOutOfFluid: Entity.isFree wants the box dry and clear of the
-        // entities a mob collides with (canBeCollidedWith: living shulkers).
-        let m = self.velocity;
-        let ahead = self.bounds().move_by(Vec3::new(
-            m.x,
-            m.y + f64::from(0.6_f32) - self.position.y + old_y,
-            m.z,
-        ));
-        let wide = ahead.inflate(Vec3::new(1.0e-7, 1.0e-7, 1.0e-7));
-        if self.horizontal_collision
-            && w.no_collision(ahead)
-            && !w.contains_any_liquid(ahead)
-            && !w.others_near(wide).any(|s| {
-                s.id != self.id
-                    && s.alive
-                    && s.species == super::Species::Shulker
-                    && s.bounds.intersects(wide)
-            })
-        {
-            self.velocity.y = f64::from(0.3_f32);
-        }
+        self.jump_out_of_fluid(w, old_y);
         // `LivingEntity.travelInFluid` ends with
         // `floatInLiquidWhileRidden(FluidTags.ENTITY_FLOATABLE)`: a mount with
         // a passenger that is in `minecraft:can_float_while_ridden` and deeper
@@ -1449,9 +1431,41 @@ impl Mob {
             self.velocity.y += f64::from(0.04_f32);
         }
     }
+    /// Shared native/registered exit. Keep the native collision and shulker
+    /// checks, and require the destination to be free of registered liquids too.
+    fn jump_out_of_fluid(&mut self, w: &MobWorld, old_y: f64) {
+        // jumpOutOfFluid: Entity.isFree wants the box dry and clear of the
+        // entities a mob collides with (canBeCollidedWith: living shulkers).
+        let m = self.velocity;
+        let ahead = self.bounds().move_by(Vec3::new(
+            m.x,
+            m.y + f64::from(0.6_f32) - self.position.y + old_y,
+            m.z,
+        ));
+        let wide = ahead.inflate(Vec3::new(1.0e-7, 1.0e-7, 1.0e-7));
+        if self.horizontal_collision
+            && w.no_collision(ahead)
+            && !w.contains_any_liquid(ahead)
+            && super::registered_fluids::dry_exit(w, ahead)
+            && !w.others_near(wide).any(|s| {
+                s.id != self.id
+                    && s.alive
+                    && s.species == super::Species::Shulker
+                    && s.bounds.intersects(wide)
+            })
+        {
+            self.velocity.y = f64::from(0.3_f32);
+        }
+    }
     /// The jump part of LivingEntity.aiStep.
     pub fn handle_jumping(&mut self, w: &MobWorld) {
         if self.ai.jumping && self.affected_by_fluids() {
+            if !self.is_in_liquid()
+                && let Some((depth, policy)) = super::registered_fluids::travel(self, w)
+                && self.jump_in_registered_fluid(depth, policy)
+            {
+                return;
+            }
             let (fluid_height, in_water_with_height) = if self.fluids.in_lava {
                 (self.fluids.lava, false)
             } else {
@@ -1478,6 +1492,19 @@ impl Mob {
         } else {
             self.ai.no_jump_delay = 0;
         }
+    }
+    /// A deep/airborne registered contact consumes the jump, including an
+    /// explicit zero-strength policy. Shallow grounded mobs retain ground jumping.
+    pub(super) fn jump_in_registered_fluid(
+        &mut self,
+        depth: f64,
+        policy: horizon_world::registered_fluids::interaction::TravelPolicy,
+    ) -> bool {
+        if depth <= 0.0 || (self.on_ground && depth <= self.fluid_jump_threshold()) {
+            return false;
+        }
+        self.velocity.y += policy.jump;
+        true
     }
     /// Mob.jumpInLiquid: floaters rise 0.04 per tick, others 0.3; bees 0.01.
     /// A magma cube in lava rises to `0.22 + size * 0.05` instead
