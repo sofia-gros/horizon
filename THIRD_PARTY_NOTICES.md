@@ -335,3 +335,9 @@ MIT Tinkers' Construct `TinkerFluids.cool()` and `hot()` at
 Copyright (c) 2022 SlimeKnights (MIT license above). This is original wiring to
 the host's existing current sampler and non-player current target; no Forge
 implementation was read or copied.
+
+Registered armor-stand currents share the original Rust entity adapter above
+and the same MIT Tinkers' Construct `TinkerFluids.cool()` / `hot()` motion-scale
+policy (Copyright (c) 2022 SlimeKnights, revision
+`f4e77d43f39ba1047bf93ae816b7e1beaab514c2`). No additional external implementation
+was read or copied for the armor-stand wiring.

@@ -66,6 +66,36 @@ pub fn update_entity_fluids(
     );
     (water_height, lava_height)
 }
+/// Shared registered current adapter. Native water/lava observations are owned
+/// by the caller and are never populated by custom-family contacts.
+fn update_registered_currents(
+    bounds: Aabb,
+    position: Vec3,
+    eye_y: f64,
+    velocity: &mut Vec3,
+    world: &World,
+    fluids: &FluidResources,
+    resources: &RegisteredFluidResources<'_>,
+) {
+    let Ok(contacts) = crate::motion::registered_fluid_contacts_with_flow(
+        world,
+        resources,
+        fluids,
+        bounds.deflate(Vec3::new(0.001, 0.001, 0.001)),
+        Vec3::new(position.x, eye_y, position.z),
+    ) else {
+        return;
+    };
+    let mut scene = EntityFluidWorld {
+        bounds,
+        position,
+        eye_y,
+        velocity,
+        world,
+        fluids,
+    };
+    let _ = super::registered_fluids::apply_currents(&mut scene, resources, &contacts);
+}
 impl ItemEntity {
     /// Native water/lava currents run first. Registered currents are opt-in and
     /// run before item movement without changing the native immersion heights.
@@ -75,26 +105,15 @@ impl ItemEntity {
         fluids: &FluidResources,
         resources: &RegisteredFluidResources<'_>,
     ) {
-        let bounds = self.bounds();
-        let eye_y = self.position.y + f64::from(0.2125f32);
-        let Ok(contacts) = crate::motion::registered_fluid_contacts_with_flow(
+        update_registered_currents(
+            self.bounds(),
+            self.position,
+            self.position.y + f64::from(0.2125f32),
+            &mut self.velocity,
             world,
+            fluids,
             resources,
-            fluids,
-            bounds.deflate(Vec3::new(0.001, 0.001, 0.001)),
-            Vec3::new(self.position.x, eye_y, self.position.z),
-        ) else {
-            return;
-        };
-        let mut scene = EntityFluidWorld {
-            bounds,
-            position: self.position,
-            eye_y,
-            velocity: &mut self.velocity,
-            world,
-            fluids,
-        };
-        let _ = super::registered_fluids::apply_currents(&mut scene, resources, &contacts);
+        );
     }
     pub(super) fn update_fluids(&mut self, world: &World, fluids: &FluidResources) -> (f64, f64) {
         update_entity_fluids(
@@ -108,6 +127,36 @@ impl ItemEntity {
     }
 }
 impl ArmorStand {
+    /// Marker stands retain their native exclusion from fluid currents.
+    pub(super) fn registered_fluid_box(&self) -> Option<Aabb> {
+        (!self.marker).then(|| self.bounds())
+    }
+    /// Apply registered-family forces without claiming native water immersion.
+    /// The authoritative owner calls this after native currents, before travel.
+    pub fn update_registered_fluids(
+        &mut self,
+        world: &World,
+        fluids: &FluidResources,
+        resources: &RegisteredFluidResources<'_>,
+    ) {
+        let Some(bounds) = self.registered_fluid_box() else {
+            return;
+        };
+        let eye = if self.small {
+            f64::from(0.9875f32 * 0.9)
+        } else {
+            f64::from(1.7775f32)
+        };
+        update_registered_currents(
+            bounds,
+            self.position,
+            self.position.y + eye,
+            &mut self.velocity,
+            world,
+            fluids,
+            resources,
+        );
+    }
     /// `Entity.updateFluidHeightAndDoFluidPushing`: refreshes water and lava
     /// immersion over the stand's deflated box and pushes its velocity by any
     /// water or lava current. Returns whether the stand is in water (`isInWater`).

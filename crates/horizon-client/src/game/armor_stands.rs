@@ -802,6 +802,11 @@ impl Game<'_> {
         let mut dead = Vec::new();
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
+        let registered = if self.remote.is_none() {
+            self.res.rest().registered_fluids.clone()
+        } else {
+            None
+        };
         for i in 0..self.armor_stands.len() {
             let at = self.armor_stands[i].position;
             if !ticking(at.x.floor() as i32, at.z.floor() as i32) {
@@ -814,6 +819,9 @@ impl Game<'_> {
             a.previous = a.position;
             a.previous_yaw = a.yaw;
             let in_water = a.update_fluids(&self.world, &self.res.motion().fluids);
+            if let Some(resources) = registered.as_deref() {
+                a.update_registered_fluids(&self.world, &self.res.motion().fluids, resources);
+            }
             let (world, registry, facts, collision) = (
                 &self.world,
                 self.pack.assets.registry,

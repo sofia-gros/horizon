@@ -270,6 +270,44 @@ mod tests {
         apply_currents(&mut target, &r, &[eye, zero, canceled]).unwrap();
         assert_eq!(target.0, old);
     }
+    #[test]
+    fn stand_currents_respect_marker_and_small_body_geometry_not_no_gravity() {
+        let registry = registry();
+        let r = resources_with_motion(&registry, false, [0.01, 0.0]);
+        for (small, marker, no_gravity, expected) in [
+            (false, false, false, 0.01),
+            (true, false, false, 0.0),
+            (false, true, false, 0.0),
+            (false, false, true, 0.01),
+        ] {
+            let mut stand = crate::entities::ArmorStand::new(7, Vec3::new(0.5, 0.0, 0.5), 0.0);
+            stand.small = small;
+            stand.marker = marker;
+            stand.no_gravity = no_gravity;
+            let mut target = Velocity(stand.velocity);
+            if let Some(bounds) = stand.registered_fluid_box() {
+                // A fluid in the second vertical cell touches a normal stand
+                // but remains above a small one's body. Markers have no query.
+                let contacts = r
+                    .catalog
+                    .contacts_with_flow(
+                        bounds.deflate(Vec3::new(0.001, 0.001, 0.001)),
+                        stand.position,
+                        8192,
+                        |p| (p.y == 1).then_some(BlockStateId(0)),
+                        |_| Ok(Vec3::new(1.0, 0.0, 0.0)),
+                    )
+                    .unwrap();
+                apply_currents(&mut target, &r, &contacts).unwrap();
+            }
+            assert_eq!(
+                target.0,
+                Vec3::new(expected, 0.0, 0.0),
+                "small={small}, marker={marker}, no_gravity={no_gravity}"
+            );
+            assert_eq!(stand.health, 20.0);
+        }
+    }
     fn cool(p: BlockPos) -> Option<BlockStateId> {
         (p.y == 0).then_some(BlockStateId(16))
     }
