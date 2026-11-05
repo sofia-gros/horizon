@@ -102,7 +102,8 @@ pub fn update_registered_entity_fluids(
 }
 impl ItemEntity {
     /// Native water/lava currents run first. Registered currents are opt-in and
-    /// run before item movement without changing the native immersion heights.
+    /// refresh before movement and again after drag at the current item body,
+    /// without changing the native immersion heights.
     pub(super) fn update_registered_fluids(
         &mut self,
         world: &World,

@@ -396,3 +396,7 @@ original Rust; no additional external implementation was read or copied.
 Minecart registered-fluid fall scaling reuses the original host interaction
 contract and existing cart accumulator. It adds no external source adaptation;
 the Tinkers' Construct policy attribution above remains unchanged.
+
+The post-movement registered item-current refresh is original wiring of the
+existing host refresh phases and adapter. No additional external source was
+read or copied; the Tinkers' Construct motion-scale attribution above remains.

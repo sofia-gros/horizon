@@ -377,6 +377,70 @@ mod tests {
         assert!((target.0.y - 0.208).abs() < 1e-12);
         assert!((target.0.z - 0.28).abs() < 1e-12);
     }
+    fn refresh_item_current(item: &mut ItemEntity, resources: &RegisteredFluidResources<'_>) {
+        let contacts = resources
+            .catalog
+            .contacts_with_flow(
+                item.bounds().deflate(Vec3::new(0.001, 0.001, 0.001)),
+                Vec3::new(
+                    item.position.x,
+                    item.position.y + f64::from(0.2125f32),
+                    item.position.z,
+                ),
+                8192,
+                |p| {
+                    (p.y == 0 && (0..=1).contains(&p.x)).then_some(BlockStateId(if p.x == 0 {
+                        0
+                    } else {
+                        16
+                    }))
+                },
+                |p| Ok(Vec3::new(if p.x == 0 { 1.0 } else { -1.0 }, 0.0, 0.0)),
+            )
+            .unwrap();
+        let mut target = Velocity(item.velocity);
+        apply_currents(&mut target, resources, &contacts).unwrap();
+        item.velocity = target.0;
+    }
+    #[test]
+    fn item_post_move_refresh_selects_new_family_or_no_contact() {
+        let registry = registry();
+        let resources = resources_with_motion(&registry, false, [0.01, 0.02]);
+        for (destination, expected) in [(1.5, -0.0102), (3.5, 0.0098)] {
+            let mut item = item(0.0);
+            refresh_item_current(&mut item, &resources);
+            assert_eq!(item.velocity.x, 0.01);
+            item.velocity.x *= 0.98;
+            item.position.x = destination;
+            refresh_item_current(&mut item, &resources);
+            assert!((item.velocity.x - expected).abs() < 1e-12);
+            assert_eq!(
+                item.position.x, destination,
+                "refresh never moves the item twice"
+            );
+            assert_eq!(item.previous.x, 0.5);
+        }
+    }
+    #[test]
+    fn item_second_refresh_adds_current_after_drag_without_moving_again() {
+        let registry = registry();
+        let resources = resources_with_motion(&registry, false, [0.01, 0.02]);
+        let mut carried = item(0.0);
+        refresh_item_current(&mut carried, &resources);
+        carried.velocity.x *= 0.98;
+        refresh_item_current(&mut carried, &resources);
+        assert!((carried.velocity.x - 0.0198).abs() < 1e-12);
+        let mut idle = item(0.0);
+        idle.on_ground = true;
+        refresh_item_current(&mut idle, &resources);
+        refresh_item_current(&mut idle, &resources);
+        assert!((idle.velocity.x - 0.02).abs() < 1e-12);
+        assert_eq!(idle.position, Vec3::new(0.5, 0.0, 0.5));
+        assert_eq!(
+            (idle.age, idle.pickup_delay, idle.health, idle.stack.count),
+            (0, 0, 5, 1)
+        );
+    }
     #[test]
     fn item_currents_keep_stationary_minimum_drift_and_vertical_direction() {
         let registry = registry();
