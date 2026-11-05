@@ -730,6 +730,7 @@ fn effects_from_blocks(
             events.push(MobEvent::CrackTurtleEgg { pos: [x, y, z] });
         }
     }
+    let registered_contacts = super::registered_fluids::contacts(m, w);
     let mut visited: Vec<[i32; 3]> = Vec::new();
     let travel = m.position.subtract(m.previous);
     let longest = travel.x.abs().max(travel.y.abs()).max(travel.z.abs());
@@ -759,6 +760,18 @@ fn effects_from_blocks(
                         },
                     ));
                     visited.push(p);
+                    if !registered_contacts.is_empty()
+                        && w.world.loaded(x, z)
+                        && (w.world.bottom_y()..w.world.top_y()).contains(&y)
+                    {
+                        super::registered_fluids::inside(
+                            m,
+                            w.registered_fluids,
+                            w.world.block(x, y, z),
+                            &registered_contacts,
+                            level_random,
+                        );
+                    }
                     match w.block_name(x, y, z) {
                         "minecraft:cactus" => {
                             m.damage(1.0, Damage::of(DamageKind::Cactus));

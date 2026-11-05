@@ -266,3 +266,13 @@ the full MIT license immediately above applies. Changes: explicit opt-in
 resource declarations, loaded-only eye sampling, shared atlas metadata and the
 host's HDR world-tint screen pipeline. Only the source's opaque RGB tint case
 is supported; no Forge implementation or game assets were copied.
+
+
+`crates/horizon-client/src/mobs/registered_fluids.rs` adapts
+[Tinkers' Construct BurningLiquidBlock.entityInside](https://github.com/SlimeKnights/TinkersConstruct/blob/f4e77d43f39ba1047bf93ae816b7e1beaab514c2/src/main/java/slimeknights/tconstruct/fluids/block/BurningLiquidBlock.java).
+Copyright (c) 2022 SlimeKnights; MIT, full license above. Changes: optional
+host resources, bounded loaded-only family-height snapshot, host mob ignition
+and lava damage, and categorized local/LAN burn sound dispatch. Fire-immune
+mobs are skipped; sound pitch consumes the level random only on accepted hits,
+including silent entities before their sound suppression. No Forge implementation
+or game assets were read or copied for this adapter.

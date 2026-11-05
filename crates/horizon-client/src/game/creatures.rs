@@ -775,6 +775,7 @@ impl Game<'_> {
             registry: self.pack.assets.registry,
             facts: self.res.facts(),
             fluid_tables: &self.motion.fluids,
+            registered_fluids: self.pack.assets.registered_fluids.as_deref(),
             movement: &self.motion.blocks,
             collision: self.collision,
             data: self.res.mob_data(),
@@ -1854,6 +1855,27 @@ impl Game<'_> {
                         self.item_particle(&horizon_client::items::ItemStack::new(item, 1));
                     self.particles
                         .send_particles(&options, at, spread, speed, count);
+                }
+                MobEvent::RegisteredFluidBurnSound { at, pitch, hostile } => {
+                    let source = if hostile { 5 } else { 6 };
+                    const SOUND: &str = "minecraft:entity.generic.burn";
+                    self.audio
+                        .play_on_unshared(source, SOUND, Some(at), 0.4, pitch);
+                    // Do not let the generic capture infer the category from
+                    // the generic sound ID. Native sound dispatch preserves it.
+                    if self.lan.is_some()
+                        || self.serving.is_some()
+                        || self.options.dedicated.is_some()
+                    {
+                        self.creatures.lan_sounds.push(NativeSound {
+                            dimension: self.dim.id(),
+                            sound: SOUND.to_owned(),
+                            at,
+                            source: source as i32,
+                            volume: 0.4,
+                            pitch,
+                        });
+                    }
                 }
                 MobEvent::Sound(name, at, volume, pitch)
                 | MobEvent::LocalSound(name, at, volume, pitch) => {
@@ -7409,6 +7431,7 @@ mod pearl_tests {
             registry,
             facts: &facts,
             fluid_tables: &motion.fluids,
+            registered_fluids: None,
             movement: &motion.blocks,
             collision: &collision,
             data: &data,

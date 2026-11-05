@@ -1169,6 +1169,7 @@ pub fn main() -> horizon_client::Result<()> {
                     registry,
                     facts: &facts,
                     fluid_tables: &motion.fluids,
+                    registered_fluids: None,
                     movement: &motion.blocks,
                     collision: &collision,
                     data: &data,

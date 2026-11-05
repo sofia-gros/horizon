@@ -461,6 +461,7 @@ pub(crate) fn with_resource_test_world(
         registry,
         facts: &facts,
         fluid_tables: &motion.fluids,
+        registered_fluids: assets.registered_fluids.as_deref(),
         movement: &motion.blocks,
         collision: &collision,
         data: &data,

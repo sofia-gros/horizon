@@ -1,0 +1,222 @@
+// Fluid burn contact adapts Tinkers' Construct, Copyright (c) 2022 SlimeKnights.
+// MIT License. Full notice and source are in THIRD_PARTY_NOTICES.md.
+// Changed: explicit family policy, bounded loaded-only sampling, host mob damage.
+//! Registered liquid block contact for authoritative mobs, without native aliases.
+use super::{Damage, DamageKind, Mob, MobEvent, MobWorld};
+use horizon_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
+use horizon_world::{
+    registered_fluids::{contact::Contact, resources::RegisteredFluidResources},
+    registry::BlockStateId,
+};
+
+pub(super) fn contacts(m: &Mob, w: &MobWorld<'_>) -> Vec<Contact> {
+    let Some(resources) = w.registered_fluids else {
+        return Vec::new();
+    };
+    sample(m, resources, |p| {
+        (w.world.loaded(p.x, p.z) && (w.world.bottom_y()..w.world.top_y()).contains(&p.y))
+            .then(|| w.world.block(p.x, p.y, p.z))
+    })
+}
+
+fn sample(
+    m: &Mob,
+    resources: &RegisteredFluidResources<'_>,
+    block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+) -> Vec<Contact> {
+    if m.kind.flags.fire_immune {
+        return Vec::new();
+    }
+    // This snapshot belongs only to this block-contact pass. Oversized or
+    // invalid bounds fail closed rather than scanning unbounded world space.
+    resources
+        .catalog
+        .contacts(
+            m.bounds().deflate(Vec3::new(0.001, 0.001, 0.001)),
+            Vec3::new(m.position.x, m.eye_y(), m.position.z),
+            8192,
+            block,
+        )
+        .unwrap_or_default()
+}
+
+pub(super) fn inside(
+    m: &mut Mob,
+    resources: Option<&RegisteredFluidResources<'_>>,
+    state: BlockStateId,
+    contacts: &[Contact],
+    level_random: &mut impl RandomSource,
+) {
+    // BurningLiquidBlock.entityInside: immunity is checked before ignition;
+    // a different liquid's height must not trigger this block's burn policy.
+    if m.kind.flags.fire_immune {
+        return;
+    }
+    let Some(burn) = resources
+        .and_then(|r| r.interaction_at_contact(state, contacts))
+        .and_then(|policy| policy.burn)
+    else {
+        return;
+    };
+    m.ignite_for_ticks(i32::from(burn.seconds) * 20);
+    if m.damage(burn.damage, Damage::of(DamageKind::Lava)) {
+        let pitch = 2.0f32 + level_random.next_float() * 0.4f32;
+        // The source draws the pitch before Entity.playSound checks silence.
+        if !m.silent {
+            m.outbox.push(MobEvent::RegisteredFluidBurnSound {
+                at: [m.position.x, m.position.y, m.position.z],
+                pitch,
+                hostile: m.hostile(),
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_core::random::LegacyRandom;
+    use horizon_world::registry::BlockRegistry;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn registry() -> BlockRegistry {
+        let rows: Vec<_> = ["test:hot", "test:other"]
+            .into_iter()
+            .flat_map(|name| {
+                (0..16).map(move |level| {
+                json!([name, false, true, "", {"id":name,"properties":{"level":level.to_string()}}])
+            })
+            })
+            .collect();
+        BlockRegistry::from_facts_json(
+            json!({"states":rows,"defaults":{"test:hot":0,"test:other":16}})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap()
+    }
+    fn resources(registry: &BlockRegistry) -> RegisteredFluidResources<'_> {
+        let fluids: Vec<_> = ["hot", "other"].into_iter().map(|name| json!({
+            "source":format!("test:{name}"),"flowing":format!("test:flowing_{name}"),
+            "block":format!("test:{name}"),"bucket":format!("test:{name}_bucket"),
+            "policy":{"drop_off":1,"slope_distance":4,"tick_delay":5,"source_conversion":false},
+            "visual":{"still":"test:still","flowing":"test:flow","tint":16777215,"emission":0},
+            "interaction":{"travel":{"acceleration":0.02,"horizontal_drag":0.8,"vertical_drag":0.8,"gravity_scale":0.0625,"jump":0.04},
+                "motion_scale":0.0,"can_swim":false,"can_drown":false,"extinguishes":false,
+                "fall_distance_scale":1.0,"burn":{"seconds":10,"damage":3.0},"effect":null}
+        })).collect();
+        RegisteredFluidResources::from_reader(
+            registry,
+            json!({"format":1,"fluids":fluids}).to_string().as_bytes(),
+        )
+        .unwrap()
+    }
+    fn mob() -> Mob {
+        Mob::new(
+            1,
+            super::super::sensor_scan_tests::kind(),
+            Vec3::new(0.5, 0.0, 0.5),
+            0.0,
+        )
+    }
+    fn burns(m: &Mob) -> Vec<([f64; 3], f32, f32)> {
+        m.outbox
+            .iter()
+            .filter_map(|event| match event {
+                MobEvent::RegisteredFluidBurnSound { at, pitch, hostile } => {
+                    assert!(!hostile);
+                    Some((*at, 0.4, *pitch))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+    #[test]
+    fn burn_requires_matching_positive_body_contact_and_obeys_damage_result() {
+        let registry = registry();
+        let resources = resources(&registry);
+        for mode in 0..7 {
+            let mut m = mob();
+            if mode == 1 {
+                m.invulnerable_flag = true;
+            }
+            if mode == 2 {
+                Arc::make_mut(&mut m.kind).flags.fire_immune = true;
+            }
+            if mode == 5 {
+                m.add_effect("minecraft:fire_resistance", 100, 0);
+            }
+            if mode == 6 {
+                m.silent = true;
+            }
+            let contacts = sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(0)));
+            let mut random = LegacyRandom::new(7);
+            let mut expected = random.clone();
+            let state = if mode == 3 {
+                BlockStateId(16)
+            } else {
+                BlockStateId(0)
+            };
+            let live = if mode == 4 { None } else { Some(&resources) };
+            inside(&mut m, live, state, &contacts, &mut random);
+            if mode == 6 {
+                assert_eq!(m.health, 7.0);
+                assert_eq!(m.fire_ticks, 200);
+                assert!(burns(&m).is_empty());
+                let _ = expected.next_float();
+            } else if mode == 0 {
+                assert_eq!(m.health, 7.0);
+                assert_eq!(m.fire_ticks, 200);
+                assert_eq!(
+                    burns(&m),
+                    vec![([0.5, 0.0, 0.5], 0.4, 2.0 + expected.next_float() * 0.4)]
+                );
+                // Repeated blocks of the same fluid refresh ignition, but an
+                // invulnerability-rejected hit has no extra sound/random draw.
+                inside(&mut m, live, BlockStateId(1), &contacts, &mut random);
+                assert_eq!(m.health, 7.0);
+                assert_eq!(burns(&m).len(), 1);
+            } else {
+                assert_eq!(m.health, 10.0);
+                assert!(burns(&m).is_empty());
+                assert_eq!(m.fire_ticks, if matches!(mode, 1 | 5) { 200 } else { 0 });
+            }
+            assert_eq!(random.next_float(), expected.next_float());
+        }
+    }
+    #[test]
+    fn fire_resistance_rejects_lava_and_afterburn_but_not_unrelated_damage() {
+        for kind in [DamageKind::Lava, DamageKind::OnFire] {
+            let mut m = mob();
+            m.add_effect("minecraft:fire_resistance", 100, 0);
+            assert!(!m.damage(3.0, Damage::of(kind)));
+            assert_eq!(m.health, 10.0);
+            assert_eq!(m.invulnerable, 0);
+            assert!(m.outbox.is_empty());
+            assert!(m.damage(2.0, Damage::of(DamageKind::Generic)));
+            assert_eq!(m.health, 8.0);
+        }
+    }
+    #[test]
+    fn shallow_surface_and_unloaded_samples_do_not_ignite() {
+        let registry = registry();
+        let resources = resources(&registry);
+        let mut m = mob();
+        // The level-seven surface is only 1/9 high, below these feet.
+        m.position.y = 0.2;
+        let contacts = sample(&m, &resources, |p| (p.y == 0).then_some(BlockStateId(7)));
+        assert!(contacts.is_empty());
+        let mut random = LegacyRandom::new(8);
+        inside(
+            &mut m,
+            Some(&resources),
+            BlockStateId(7),
+            &contacts,
+            &mut random,
+        );
+        assert_eq!(m.fire_ticks, 0);
+        assert_eq!(m.health, 10.0);
+        assert!(sample(&m, &resources, |_| None).is_empty());
+    }
+}
