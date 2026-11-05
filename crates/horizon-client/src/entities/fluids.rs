@@ -69,8 +69,9 @@ pub fn update_entity_fluids(
     (water_height, lava_height)
 }
 /// Shared registered current adapter. Native water/lava observations are owned
-/// by the caller and are never populated by custom-family contacts.
-fn update_registered_currents(
+/// by the caller and are never populated by custom-family contacts. Callers
+/// must enforce entity-specific push eligibility and tick phase themselves.
+pub fn update_registered_entity_fluids(
     bounds: Aabb,
     position: Vec3,
     eye_y: f64,
@@ -108,7 +109,7 @@ impl ItemEntity {
         fluids: &FluidResources,
         resources: &RegisteredFluidResources<'_>,
     ) {
-        let _ = update_registered_currents(
+        let _ = update_registered_entity_fluids(
             self.bounds(),
             self.position,
             self.position.y + f64::from(0.2125f32),
@@ -141,7 +142,7 @@ impl ExperienceOrb {
         if !crate::entity_rules::EntityRules::is_pushed_by_fluid(self) {
             return;
         }
-        let _ = update_registered_currents(
+        let _ = update_registered_entity_fluids(
             self.bounds(),
             self.position,
             self.position.y + f64::from(0.5f32 * 0.85f32),
@@ -175,7 +176,7 @@ impl ArmorStand {
         resources: &RegisteredFluidResources<'_>,
     ) -> Option<TravelPolicy> {
         let bounds = self.registered_fluid_box()?;
-        let contacts = update_registered_currents(
+        let contacts = update_registered_entity_fluids(
             bounds,
             self.position,
             self.registered_fluid_eyes().y,
