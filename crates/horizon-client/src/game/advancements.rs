@@ -229,6 +229,28 @@ pub(super) fn item_view(s: &ItemStack) -> ItemView {
             .cloned(),
     }
 }
+
+/// The inventory event gate includes metadata visible to native predicates.
+/// Hash borrowed NBT directly: no serialization, projection, or payload clone
+/// is needed on ticks where the inventory has not changed.
+fn inventory_fingerprint<'a>(stacks: impl IntoIterator<Item = &'a Option<ItemStack>>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for stack in stacks {
+        stack
+            .as_ref()
+            .map(|s| {
+                (
+                    &s.item,
+                    s.count,
+                    s.data().and_then(|data| data.other("minecraft:custom_data")),
+                )
+            })
+            .hash(&mut h);
+    }
+    h.finish()
+}
+
 impl Game<'_> {
     fn adv_path(&self) -> Option<std::path::PathBuf> {
         Some(super::stats::player_json(
@@ -577,17 +599,12 @@ impl Game<'_> {
     }
     /// `InventoryChangeTrigger`, checked when the inventory changes.
     pub(super) fn check_inventory_trigger(&mut self) {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        for s in self
-            .inventory
-            .iter()
-            .chain(self.armor.iter())
-            .chain(std::iter::once(&self.offhand))
-        {
-            s.as_ref().map(|s| (&s.item, s.count)).hash(&mut h);
-        }
-        let key = h.finish();
+        let key = inventory_fingerprint(
+            self.inventory
+                .iter()
+                .chain(self.armor.iter())
+                .chain(std::iter::once(&self.offhand)),
+        );
         if key == self.adv.last_inventory {
             return;
         }
@@ -1421,6 +1438,83 @@ pub(super) fn text_of(v: &Value) -> Text {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inventory_fingerprint_notices_custom_data_only_changes() {
+        use horizon_world::nbt::Tag;
+        let mut stack = ItemStack::new("example:tool", 1);
+        let key = |stack: &ItemStack| inventory_fingerprint([Some(stack.clone())].iter());
+        let original = key(&stack);
+        let custom = |amount| {
+            Tag::compound([(
+                "example:upgrades",
+                Tag::compound([("example:speed", Tag::Int(amount))]),
+            )])
+        };
+        stack
+            .data_mut()
+            .set_other("minecraft:custom_data", Some(custom(1)));
+        let upgraded = key(&stack);
+        assert_ne!(upgraded, original);
+        assert_eq!(upgraded, key(&stack.clone()));
+        stack
+            .data_mut()
+            .set_other("minecraft:custom_data", Some(custom(2)));
+        assert_ne!(key(&stack), upgraded);
+        stack.data_mut().set_other("minecraft:custom_data", None);
+        assert_eq!(key(&stack), original);
+        // An unrelated component does not broaden this bounded event change.
+        stack
+            .data_mut()
+            .set_other("example:unrelated", Some(Tag::Int(2)));
+        assert_eq!(key(&stack), original);
+    }
+
+    #[test]
+    fn inventory_fingerprint_keeps_slot_count_and_id_changes() {
+        let tool = ItemStack::new("example:tool", 1);
+        let original = inventory_fingerprint([Some(tool.clone()), None].iter());
+        assert_eq!(
+            original,
+            inventory_fingerprint([Some(tool.clone()), None].iter())
+        );
+        assert_ne!(
+            original,
+            inventory_fingerprint([None, Some(tool.clone())].iter())
+        );
+        assert_ne!(original, inventory_fingerprint([None, None].iter()));
+        assert_ne!(
+            original,
+            inventory_fingerprint([Some(ItemStack::new("example:tool", 2)), None].iter())
+        );
+        assert_ne!(
+            original,
+            inventory_fingerprint([Some(ItemStack::new("example:other", 1)), None].iter())
+        );
+    }
+
+    #[test]
+    fn inventory_fingerprint_includes_armor_and_offhand_metadata() {
+        use horizon_world::nbt::Tag;
+        let inventory = [None];
+        let mut armor = [Some(ItemStack::new("example:helmet", 1))];
+        let mut offhand = Some(ItemStack::new("example:shield", 1));
+        let key = |armor: &[Option<ItemStack>], offhand: &Option<ItemStack>| {
+            inventory_fingerprint(inventory.iter().chain(armor.iter()).chain([offhand]))
+        };
+        let original = key(&armor, &offhand);
+        armor[0].as_mut().unwrap().data_mut().set_other(
+            "minecraft:custom_data",
+            Some(Tag::compound([("example:upgrade", Tag::Int(1))])),
+        );
+        let armor_changed = key(&armor, &offhand);
+        assert_ne!(armor_changed, original);
+        offhand.as_mut().unwrap().data_mut().set_other(
+            "minecraft:custom_data",
+            Some(Tag::compound([("example:upgrade", Tag::Int(1))])),
+        );
+        assert_ne!(key(&armor, &offhand), armor_changed);
+    }
 
     #[test]
     fn item_view_keeps_an_owned_custom_data_snapshot() {
