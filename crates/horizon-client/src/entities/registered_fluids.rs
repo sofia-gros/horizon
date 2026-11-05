@@ -1,7 +1,7 @@
 // Fluid fire policy follows TConstruct, Copyright (c) 2022 SlimeKnights.
 // MIT License; source and license are in THIRD_PARTY_NOTICES.md.
 // Changed: registered family policies and host dropped-item/armor-stand adapters.
-//! Authoritative item and armor-stand fluid forces and fire contact, without native aliases.
+//! Authoritative entity fluid forces and item/armor-stand fire contact, without native aliases.
 use super::{ArmorStand, ItemEntity};
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_world::{
@@ -442,6 +442,85 @@ mod tests {
             );
             assert_eq!(stand.health, 20.0);
         }
+    }
+    fn orb(y: f64) -> crate::entities::ExperienceOrb {
+        let position = Vec3::new(0.5, y, 0.5);
+        crate::entities::ExperienceOrb {
+            id: 8,
+            position,
+            previous: position,
+            velocity: Vec3::ZERO,
+            value: 7,
+            age: 42,
+            on_ground: false,
+            count: 3,
+            ticks: 9,
+            health: 5,
+            no_gravity: false,
+        }
+    }
+    #[test]
+    fn orb_current_sampling_uses_its_half_block_body_without_changing_rewards() {
+        let registry = registry();
+        let r = resources_with_motion(&registry, false, [0.01, 0.0]);
+        let mut orb = orb(0.75);
+        // A 0.5-high orb reaches the next cell; a 0.25-high dropped item does not.
+        let sample = |bounds: horizon_core::geometry::Aabb| {
+            r.catalog
+                .contacts_with_flow(
+                    bounds.deflate(Vec3::new(0.001, 0.001, 0.001)),
+                    orb.position,
+                    8192,
+                    |p| (p.y == 1).then_some(BlockStateId(0)),
+                    |_| Ok(Vec3::new(3.0, 0.0, 4.0)),
+                )
+                .unwrap()
+        };
+        let contacts = sample(orb.bounds());
+        let item_contacts = sample(item(0.75).bounds());
+        let mut target = Velocity(orb.velocity);
+        apply_currents(&mut target, &r, &contacts).unwrap();
+        orb.velocity = target.0;
+        assert_eq!(orb.velocity, Vec3::new(0.006, 0.0, 0.008));
+        let mut item_target = Velocity(Vec3::ZERO);
+        apply_currents(&mut item_target, &r, &item_contacts).unwrap();
+        assert_eq!(item_target.0, Vec3::ZERO);
+        assert_eq!(
+            (orb.value, orb.count, orb.age, orb.ticks, orb.health),
+            (7, 3, 42, 9, 5)
+        );
+    }
+    #[test]
+    fn orb_currents_preserve_no_gravity_mobility_and_missing_surface_opt_out() {
+        let registry = registry();
+        let r = resources_with_motion(&registry, false, [0.01, 0.0]);
+        let mut orb = orb(0.0);
+        orb.no_gravity = true;
+        assert!(crate::entity_rules::EntityRules::is_pushed_by_fluid(&orb));
+        let sample = |y, state| {
+            let at = Vec3::new(0.5, y, 0.5);
+            r.catalog
+                .contacts_with_flow(
+                    crate::entities::ExperienceOrb::box_at(at)
+                        .deflate(Vec3::new(0.001, 0.001, 0.001)),
+                    at,
+                    8192,
+                    |p| if p.y == 0 { state } else { None },
+                    |_| Ok(Vec3::new(0.0, 1.0, 0.0)),
+                )
+                .unwrap()
+        };
+        for (y, state, expected) in [
+            (0.0, Some(BlockStateId(7)), 0.01),
+            (0.2, Some(BlockStateId(7)), 0.0),
+            (0.0, Some(BlockStateId(16)), 0.0),
+            (0.0, None, 0.0),
+        ] {
+            let mut target = Velocity(Vec3::ZERO);
+            apply_currents(&mut target, &r, &sample(y, state)).unwrap();
+            assert_eq!(target.0, Vec3::new(0.0, expected, 0.0));
+        }
+        assert_eq!((orb.value, orb.count), (7, 3));
     }
     #[test]
     fn stand_burning_contact_ignites_without_direct_lava_damage_or_other_changes() {

@@ -371,3 +371,8 @@ and its TinkerTags.EntityTypes.SLIMES / generated forge:slimes tag at revision
 `f4e77d43f39ba1047bf93ae816b7e1beaab514c2`, Copyright (c) 2022 SlimeKnights, MIT
 (full license above). Changes: explicit optional declaration and the host's
 loaded entity-type tags/common-air adapter. No Forge implementation was read.
+
+Experience-orb registered currents reuse the original host current adapter and
+MIT Tinkers' Construct motion-scale policy above (Copyright (c) 2022 SlimeKnights,
+revision `f4e77d43f39ba1047bf93ae816b7e1beaab514c2`). The orb wiring is original
+Rust; no additional external implementation was read or copied.

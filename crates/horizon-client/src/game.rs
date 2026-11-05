@@ -13407,6 +13407,11 @@ impl Game<'_> {
             )
         });
         let mut orbs = std::mem::take(&mut self.orbs);
+        let registered = if self.remote.is_none() {
+            self.res.rest().registered_fluids.clone()
+        } else {
+            None
+        };
         // An orb has no random of its own here: lava draws from one made on
         // first use, apart from the level stream.
         let mut lava_random = None;
@@ -13426,6 +13431,9 @@ impl Game<'_> {
                 .filter(|(feet, _)| distance(feet) < 64.0)
                 .min_by(|a, b| distance(&a.0).total_cmp(&distance(&b.0)))
                 .map(|(_, target)| *target);
+            if let Some(resources) = registered.as_deref() {
+                o.update_registered_fluids(&self.world, &self.res.motion().fluids, resources);
+            }
             o.tick(
                 &self.world,
                 self.res.facts(),
