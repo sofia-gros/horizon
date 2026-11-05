@@ -168,6 +168,15 @@ BlueMap is licensed under the MIT license:
 
 ## SlimeKnights registered-fluid behavior
 
+`crates/horizon-client-render/src/fog.rs` adapts the color multiplication and
+minimum start/end overrides of Mantle `ClientTextureFluidType` at
+`17c287ad52f7b10154e07fa7570dc7bccd74ca2b` (MIT, copyright below).
+`registered_fluids/resources.rs` adds opt-in fog declarations and original
+loaded-only camera sampling. Changes: the existing host spherical environmental
+channel, sky/cloud caps, and native callbacks last. Sprite-derived automatic
+color calculation and camera overlays are not adapted in this slice. The source
+`FluidTexture` data model and TConstruct `FluidTextureProvider` were also read.
+
 `crates/horizon-client/src/game/dispenser.rs` follows the registered bucket
 behavior in `TinkerFluids.commonSetup` at the TConstruct revision below: target
 the facing cell, return an empty bucket after placement, and use the nested

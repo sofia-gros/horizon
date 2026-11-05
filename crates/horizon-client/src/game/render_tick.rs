@@ -154,6 +154,21 @@ impl Game<'_> {
             horizon_client::fog::clear_distance_fog(&mut fog, &input);
         }
         if self.title.is_none() {
+            if let Some(policy) = self
+                .res
+                .rest()
+                .registered_fluids
+                .as_ref()
+                .and_then(|resources| {
+                    resources.fog_at(at, |pos| {
+                        (self.world.loaded(pos.x, pos.z)
+                            && (self.world.shape.min_y..self.world.shape.max_y()).contains(&pos.y))
+                        .then(|| self.world.block(pos.x, pos.y, pos.z))
+                    })
+                })
+            {
+                horizon_client::fog::apply_registered_fog(&mut fog, policy);
+            }
             fog.color =
                 self.native_fog_color_now(self.clock.fraction() as f32, at, fog_type, fog.color);
             fog = self.native_fog_now(self.clock.fraction() as f32, at, fog_type, fog);

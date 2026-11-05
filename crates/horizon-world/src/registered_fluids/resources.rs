@@ -1,4 +1,4 @@
-// Upward texture selection follows Mantle, Copyright (c) 2022 SlimeKnights.
+// Upward texture selection and fog data follow Mantle, Copyright (c) 2022 SlimeKnights.
 // MIT License. Full source and notice are in THIRD_PARTY_NOTICES.md.
 //! Validated resource declarations shared by simulation, bucket and rendering
 //! adapters. Absence leaves vanilla unchanged; malformed declarations fail load.
@@ -9,10 +9,36 @@ use crate::{
     registered_flow::{FlowPolicy, RegisteredFlow, VerticalFlow},
     registry::{BlockRegistry, BlockStateId},
 };
+use horizon_core::position::BlockPos;
 use serde::Deserialize;
 use std::{collections::HashMap, fs::File, io, path::Path, sync::Arc};
 
 pub const RESOURCE_PATH: &str = "horizon/registered_fluids.json";
+/// Optional spherical camera fog. Color is an RGB multiplier, not a replacement.
+/// A missing color leaves the host color intact (it does not infer sprite color).
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FluidFog {
+    pub start: f32,
+    pub end: f32,
+    #[serde(default)]
+    pub color: Option<u32>,
+}
+impl FluidFog {
+    fn validate(self) -> io::Result<()> {
+        if !self.start.is_finite()
+            || !self.end.is_finite()
+            || self.end <= self.start
+            || self.end <= 0.0
+            || self.start < -65536.0
+            || self.end > 65536.0
+            || self.color.is_some_and(|color| color > 0x00ff_ffff)
+        {
+            return Err(invalid("invalid registered-fluid camera fog"));
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FluidVisual {
@@ -20,6 +46,8 @@ pub struct FluidVisual {
     pub flowing: String,
     pub tint: u32,
     pub emission: u8,
+    #[serde(default)]
+    pub fog: Option<FluidFog>,
 }
 impl FluidVisual {
     /// Mantle ClientInvertedFluidType uses an inverted world flowing sprite;
@@ -148,6 +176,9 @@ impl<'r> RegisteredFluidResources<'r> {
             {
                 return Err(invalid("invalid registered-fluid bucket or visual"));
             }
+            if let Some(fog) = definition.visual.fog {
+                fog.validate()?;
+            }
             let id = catalog
                 .id(&definition.source)
                 .ok_or_else(|| invalid("missing registered source"))?;
@@ -226,6 +257,39 @@ impl<'r> RegisteredFluidResources<'r> {
             .then(|| self.interaction(source))
             .flatten()
     }
+    /// Camera-point immersion, independent of the player's position. At most
+    /// two loaded-only reads; upward fluids retain the same bottom surface.
+    pub fn fog_at(
+        &self,
+        camera: [f64; 3],
+        mut block: impl FnMut(BlockPos) -> Option<BlockStateId>,
+    ) -> Option<FluidFog> {
+        if camera
+            .iter()
+            .any(|&v| !v.is_finite() || v < f64::from(i32::MIN) || v >= f64::from(i32::MAX))
+        {
+            return None;
+        }
+        let pos = BlockPos::new(
+            camera[0].floor() as i32,
+            camera[1].floor() as i32,
+            camera[2].floor() as i32,
+        );
+        let (visual, fluid) = self.visual(block(pos)?)?;
+        let fog = visual.fog?;
+        let above = block(BlockPos::new(pos.x, pos.y + 1, pos.z))
+            .and_then(|state| self.catalog.from_block(state));
+        let height = if above.is_some_and(|above| {
+            self.catalog
+                .same_family(fluid.id(), above.id())
+                .unwrap_or(false)
+        }) {
+            1.0
+        } else {
+            f64::from(fluid.own_height())
+        };
+        (camera[1] < f64::from(pos.y) + height).then_some(fog)
+    }
     pub fn visual(&self, state: BlockStateId) -> Option<(&FluidVisual, RegisteredFluidState)> {
         let fluid = self.catalog.from_block(state)?;
         Some((
@@ -250,6 +314,55 @@ mod tests {
     }
     fn document() -> serde_json::Value {
         json!({"format":1,"fluids":[{"source":"test:liquid","flowing":"test:flowing_liquid","block":"test:liquid","bucket":"test:liquid_bucket","policy":{"drop_off":3,"slope_distance":3,"tick_delay":30,"source_conversion":false},"visual":{"still":"test:block/liquid_still","flowing":"test:block/liquid_flow","tint":16777215,"emission":12}}]})
+    }
+    #[test]
+    fn camera_fog_is_optional_validated_and_samples_only_immersed_camera() {
+        let registry = registry();
+        let mut value = document();
+        let old =
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).unwrap();
+        assert_eq!(old.fog_at([0.5, 0.5, 0.5], |_| Some(BlockStateId(0))), None);
+        value["fluids"][0]["visual"]["fog"] = json!({"start":-8,"end":24,"color":0x478a33});
+        let resources =
+            RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes()).unwrap();
+        let expected = Some(FluidFog {
+            start: -8.0,
+            end: 24.0,
+            color: Some(0x478a33),
+        });
+        let source = |p: BlockPos| (p.y == 0).then_some(BlockStateId(0));
+        assert_eq!(resources.fog_at([0.5, 0.5, 0.5], source), expected);
+        assert_eq!(
+            resources.fog_at([0.5, f64::from(8.0f32 / 9.0), 0.5], source),
+            None
+        );
+        assert_eq!(
+            resources.fog_at([0.5, 0.95, 0.5], |_| Some(BlockStateId(0))),
+            expected
+        );
+        assert_eq!(
+            resources.fog_at([0.5, 0.8, 0.5], |p| (p.y == 0).then_some(BlockStateId(1))),
+            None
+        );
+        assert_eq!(resources.fog_at([0.5, 0.5, 0.5], |_| None), None);
+        assert_eq!(
+            resources.fog_at([f64::NAN, 0.0, 0.0], |_| panic!(
+                "invalid query must not read"
+            )),
+            None
+        );
+        for fog in [
+            json!({"start":2,"end":2}),
+            json!({"start":0,"end":-1}),
+            json!({"start":0,"end":2,"color":0x1000000}),
+            json!({"start":0,"end":2,"shape":"cylinder"}),
+        ] {
+            value["fluids"][0]["visual"]["fog"] = fog;
+            assert!(
+                RegisteredFluidResources::from_reader(&registry, value.to_string().as_bytes())
+                    .is_err()
+            );
+        }
     }
     #[test]
     fn interaction_policy_binds_flowing_identity_and_rejects_bad_numbers() {

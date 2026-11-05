@@ -1,3 +1,6 @@
+// Registered fog limits/tints follow Mantle, Copyright (c) 2022 SlimeKnights.
+// MIT License; full notice in THIRD_PARTY_NOTICES.md.
+// Changed: opt-in declarations applied to Horizon's separate spherical fog channel.
 //! `FogRenderer` and its fog environments (atmospheric with rain fog, water
 //! with water vision, lava, powder snow, blindness), the camera fog type
 //! (`Camera.getFluidInCamera`) and the fog colour (`computeFogColor`: sunrise
@@ -390,6 +393,24 @@ pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> Fog
     }
     fog
 }
+/// Mantle ClientTextureFluidType: multiply the existing color and only lower
+/// existing fog start/end. Environmental fog is spherical in Horizon's shaders.
+/// Run after the distance-fog option, before native mod overrides.
+pub fn apply_registered_fog(
+    fog: &mut FogData,
+    policy: horizon_world::registered_fluids::resources::FluidFog,
+) {
+    if let Some(color) = policy.color {
+        for (channel, factor) in fog.color[..3].iter_mut().zip(rgb(color)) {
+            *channel *= factor;
+        }
+    }
+    fog.environmental_start = fog.environmental_start.min(policy.start);
+    fog.environmental_end = fog.environmental_end.min(policy.end);
+    fog.sky_end = fog.sky_end.min(policy.end);
+    fog.cloud_end = fog.cloud_end.min(policy.end);
+}
+
 /// Horizon's Fog option turned off (`horizon-graphics.txt` `fog:false`):
 /// no distance fog, in any dimension: the dimension's and biome's own fog
 /// (`visual/fog_start_distance`, `fog_end_distance`: the Nether's ends at 96
@@ -429,6 +450,56 @@ fn rgb(c: u32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn registered_fog_multiplies_color_and_never_widens_existing_limits() {
+        use horizon_world::registered_fluids::resources::FluidFog;
+        let mut fog = FogData {
+            color: [0.5, 0.25, 1.0, 0.75],
+            environmental_start: 100.0,
+            environmental_end: 200.0,
+            render_distance_start: 160.0,
+            render_distance_end: 192.0,
+            sky_end: 192.0,
+            cloud_end: 2048.0,
+        };
+        apply_registered_fog(
+            &mut fog,
+            FluidFog {
+                start: -8.0,
+                end: 24.0,
+                color: Some(0xff0080),
+            },
+        );
+        assert_eq!(fog.color, [0.5, 0.0, 128.0 / 255.0, 0.75]);
+        assert_eq!(
+            (
+                fog.environmental_start,
+                fog.environmental_end,
+                fog.sky_end,
+                fog.cloud_end
+            ),
+            (-8.0, 24.0, 24.0, 24.0)
+        );
+        assert_eq!(
+            (fog.render_distance_start, fog.render_distance_end),
+            (160.0, 192.0)
+        );
+        fog.environmental_end = 1.0;
+        fog.sky_end = 0.8;
+        apply_registered_fog(
+            &mut fog,
+            FluidFog {
+                start: 0.25,
+                end: 2.0,
+                color: None,
+            },
+        );
+        assert_eq!(
+            (fog.environmental_start, fog.environmental_end, fog.sky_end),
+            (-8.0, 1.0, 0.8)
+        );
+        assert_eq!(fog.color, [0.5, 0.0, 128.0 / 255.0, 0.75]);
+    }
     fn inputs(sky: &Sky) -> FogInputs<'_> {
         FogInputs {
             fog_type: FogType::Atmospheric,
